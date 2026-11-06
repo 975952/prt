@@ -121,7 +121,7 @@ export function roundRequirementBlock({ object = '', page = null, pageRole = '',
   }
   if (scope) parts.push(`范围=${scope}`);
   parts.push('当前页只是背景信息，与问题相关才用，不相关可以完全不讲');
-  parts.push('只回答这一件事，不要另起话题');
+  parts.push('完整回答问题中的所有要求和题目，不要遗漏，也不要另起无关话题');
   return `【本轮要求】${parts.join('；')}。`;
 }
 

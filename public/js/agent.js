@@ -15,7 +15,7 @@
  * 本模块零依赖、纯逻辑，Node 可直接 import 做单测。
  */
 
-export const AGENT_MAX_ROUNDS = 5;
+export const AGENT_MAX_ROUNDS = 12;
 export const AGENT_MAX_CALLS_PER_ROUND = 4;
 export const AGENT_TOTAL_TIMEOUT_MS = 45000;
 export const AGENT_CALL_TIMEOUT_MS = 15000;
@@ -170,6 +170,7 @@ export const AGENT_SYSTEM_NOTE = [
   '先用 list_papers 找到目标文件（返回顺序 = 左侧文件树顺序；用户说「第 N 篇」时按这个序号数），',
   '再用 read_other_paper({name, page}) 读指定页、用 read_other_paper({name, query}) 在整篇里检索；扫描件/无文本层时用 read_other_paper_image 取页图。',
   '**在多个论文 / 整个文件夹里找某个例子、定义或句子**时，先用 search_papers({query, scope})：scope=folder 搜当前打开的论文所在文件夹（默认），scope=all 搜 papers 里全部论文；它会返回每篇的命中页，再对目标论文用 read_other_paper 读那一页。',
+  '用户要求找知识点的具体位置时，逐个知识点用同义词检索，核对命中页；文本层不可用时按目录或相关页图继续查。页图在最终回答时才可见，加入页图不等于已经看过，不得假称逐页核对。每条已核实的位置用可点击页码，写清文件、PDF 页码及具体标题或内容；未找到的单独说明检索范围，不推测页码，也不要让用户再次要求你查。',
   '用户问「某篇论文的第 N 句话 / 第几段」时：先把那一页正文读出来，再按句号/问号/感叹号/分号等完整句子边界**准确数出第 N 句**，原样引用，并说明出自哪篇论文第几页；不要凭印象改写。',
   '**不要说「我拿不到 papers 文件夹」「看不到其它论文」**——你有 list_papers / read_other_paper 工具，先查再读。',
   '引用**其它论文**的原文/页码时用专用格式：〔《文件名》p.N‖原文片段〕（没有原文片段就 〔《文件名》p.N〕）；程序会把它渲染成可点标签，点击自动打开那篇论文、跳到第 N 页并高亮原文。不要只写 p.N（那会跳到当前打开的论文）。',

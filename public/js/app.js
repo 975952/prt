@@ -5351,7 +5351,7 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
 function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', sources, meta, status = 'complete', basis = '', restore = false } = {}) {
   const rec = entry.root.__sessionRecord;
   if (rec && !restore) {
-    rec.text = String(fullText || '').slice(0, 12000);
+    rec.text = String(fullText || '').slice(0, 48000);
     rec.page = page || rec.page;
     rec.sources = (sources || []).slice(0, 8);
     rec.meta = meta || '';
@@ -5747,7 +5747,7 @@ function buildSessionPayload() {
     id: String(x.id || '').slice(0, 80),
     block: String(x.block || 'chat'), tag: String(x.tag || '').slice(0, 120), page: x.page || null,
     quote: String(x.quote || '').slice(0, 3000), kind: x.kind === 'user' ? 'user' : 'assistant',
-    text: String(x.text || '').slice(0, 12000), screenshot: !!x.screenshot,
+    text: String(x.text || '').slice(0, 48000), screenshot: !!x.screenshot,
     // P3：消息带来源文档标注（全局会话里能看出这条是哪篇论文下问的）
     docId: String(x.docId || '').slice(0, 240), docTitle: String(x.docTitle || '').slice(0, 300),
     // 截图附件单独存：这里只留 id 引用（几十字节），恢复会话时按 id 取回原图
@@ -6482,7 +6482,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
           shotsLost = true;   // 老会话：只存了「有过截图」的标记，没有图片本体
         }
       }
-      const text = `${String(row.text || '').slice(0, 12000)}${shotsLost ? '\n\n【截图附件未保存，请重新添加截图】' : ''}`;
+      const text = `${String(row.text || '').slice(0, 48000)}${shotsLost ? '\n\n【截图附件未保存，请重新添加截图】' : ''}`;
       const entry = addEntry({ ...row, text, thumbs, restore: true });
       entry.root.__sessionRecord = row;
       // 截图翻译条目：恢复后也要让失败/停止时的「重试截图翻译」按钮可见
@@ -9001,13 +9001,13 @@ async function runAgentReadPath({ pending, reading, context, references, sources
   const limits = window.__agentTestLimits && typeof window.__agentTestLimits === 'object' ? window.__agentTestLimits : {};
   // 跨论文读取要临时打开别的 PDF，比只看当前文档慢，总预算放宽
   // 用户口径（2026-11-02）：工具轮次要够——模型发现读错页／页不够时应该能继续调用，而不是停在最后一轮。
-  const totalTimeoutMs = Math.max(1000, Number(limits.totalTimeoutMs) || 75000);
+  const totalTimeoutMs = Math.max(1000, Number(limits.totalTimeoutMs) || 240000);
   const callTimeoutMs = Math.max(500, Number(limits.callTimeoutMs) || 20000);
   try {
     const base = askMessages({ ...baseMaterials, availablePages: baseMaterials.availablePages || [], scopeLabel: 'AI 自行读取', objectLabel: objectLabelFor(pending, reading) });
     const system = String(base[0]?.content || '');
     const folderLine = `【当前文件夹】${currentFolderPath() || 'papers/'}。默认只读**当前论文 / 当前文件夹**的材料；` +
-      '只有用户明确点名了其它论文（文件名 / 「第 N 篇」/ 别的文件夹 / 「其它论文」）时才用 list_papers / read_other_paper 跨文件夹读取，否则不要主动跨文件夹。';
+      '用户要求在本文件夹的 PDF 中查找时，应检索并读取当前文件夹里的其他 PDF；用户指定全部论文或其他文件夹时才扩大范围。';
     base[0] = { role: 'system', content: `${system}\n\n${AGENT_SYSTEM_NOTE}\n${folderLine}` };
     const runtime = createAgentRuntime(pending, { scannedDoc });
     const run = await runAgentLoop({
@@ -9071,7 +9071,11 @@ function pageTextFromScanDigest(digest, page) {
 
 /** 本次材料的「对象 / 范围」一句话（给近因指令用） */
 function objectLabelFor(pending, reading) {
-  const text = String(reading?.selection || reading?.focus?.text || pending?.question || '')
+  const question = String(pending?.question || '');
+  if ([...question.matchAll(/(?:^|\n)\s*(?:\(\s*\d+\s*\)|（\s*\d+\s*）|\d+[.、])\s*/g)].length > 1) {
+    return '用户输入的全部题目';
+  }
+  const text = String(reading?.selection || reading?.focus?.text || question)
     .replace(/\s+/g, ' ').trim();
   if (!text) return '读者当前的问题';
   if (reading?.inherited) return `上一轮话题：${text.slice(0, 24)}`;
@@ -9239,7 +9243,21 @@ function decorateOtherPaperRefs(html) {
 
 function renderAnswerHTML(text) {
   const split = splitPrtBlock(String(text || ''));
-  return decorateOtherPaperRefs(decoratePageRefs(renderMarkdown(split.text || '')));
+  const source = split.text || '';
+  const render = (s) => decorateOtherPaperRefs(decoratePageRefs(renderMarkdown(s)));
+  // Only the explicit multi-question heading contract activates cards; ordinary sections stay intact.
+  const matches = [...source.matchAll(/^#{2,4}\s+(?:第\s*(\d+)\s*题|[（(]\s*(\d+)\s*[）)])(?:[：: \t].*)?\s*$/gm)];
+  if (matches.length < 2 || matches.some((m, i) => Number(m[1] || m[2]) !== i + 1)) return render(source);
+  const intro = source.slice(0, matches[0].index);
+  const cards = matches.map((m, i) => {
+    const body = source.slice(m.index, matches[i + 1]?.index ?? source.length);
+    return `<section class="answer-card"${i ? ' hidden' : ''}>${render(body)}</section>`;
+  }).join('');
+  return `${render(intro)}<div class="answer-cards" data-mode="cards" data-index="0">${cards}`
+    + `<div class="answer-card-controls"><button type="button" data-card-action="prev" disabled>上一题</button>`
+    + `<span class="answer-card-count" aria-live="polite">1 / ${matches.length}</span>`
+    + `<button type="button" data-card-action="next">下一题</button>`
+    + `<button type="button" data-card-action="toggle">切换为连续模式</button></div></div>`;
 }
 
 /** 引用高亮的当前状态（点正文 / Esc / 再点同一引用 / 翻页 / 切文档时清空） */
@@ -9304,6 +9322,27 @@ async function openOtherPaperRef(name, page, fragment) {
 /** 页码按钮：按住委托，流式重绘也不用重绑 */
 function initPageRefs() {
   document.addEventListener('click', (e) => {
+    const cardButton = e.target.closest('[data-card-action]');
+    if (cardButton) {
+      const box = cardButton.closest('.answer-cards');
+      const cards = [...box.querySelectorAll(':scope > .answer-card')];
+      let index = Number(box.dataset.index) || 0;
+      const action = cardButton.dataset.cardAction;
+      if (action === 'toggle') box.dataset.mode = box.dataset.mode === 'cards' ? 'continuous' : 'cards';
+      if (action === 'prev') index = Math.max(0, index - 1);
+      if (action === 'next') index = Math.min(cards.length - 1, index + 1);
+      box.dataset.index = String(index);
+      const continuous = box.dataset.mode === 'continuous';
+      cards.forEach((card, i) => { card.hidden = !continuous && i !== index; });
+      box.querySelector('[data-card-action="prev"]').hidden = continuous;
+      box.querySelector('[data-card-action="next"]').hidden = continuous;
+      box.querySelector('[data-card-action="prev"]').disabled = index === 0;
+      box.querySelector('[data-card-action="next"]').disabled = index === cards.length - 1;
+      box.querySelector('.answer-card-count').hidden = continuous;
+      box.querySelector('.answer-card-count').textContent = `${index + 1} / ${cards.length}`;
+      box.querySelector('[data-card-action="toggle"]').textContent = continuous ? '切换为卡片模式' : '切换为连续模式';
+      return;
+    }
     const btn = e.target.closest('.page-ref');
     if (!btn) {
       // 点正文/界面上任意处（右栏里点字不算）取消引用高亮；右栏里点其他引用按钮照常处理

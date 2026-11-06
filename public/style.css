@@ -1551,6 +1551,11 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .entry-meta.stopped { color: var(--accent); }
 /* P1.5：回答上方的「本次依据」只读小字（不可点、不参与交互，用户一眼看出用了哪份材料） */
 .entry-basis { font-size: var(--ui-fs-2xs); color: var(--fg-faint); margin-bottom: 5px; letter-spacing: .2px; user-select: text; }
+.answer-card[hidden], .answer-card-controls [hidden] { display: none !important; }
+.answer-card-controls { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 12px; color: var(--fg-faint); font-size: var(--ui-fs-2xs); }
+.answer-card-controls button { border: 1px solid var(--border); border-radius: 6px; padding: 4px 8px; background: var(--bg-sunken); color: var(--fg); cursor: pointer; }
+.answer-card-controls button:disabled { opacity: .4; cursor: default; }
+.answer-card-controls button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* P1.5：页码对但原文片段核对不上的引用，降级成纯页码按钮（只跳页、不画假高亮） */
 .page-ref-unverified { opacity: .78; }
 .page-ref-unverified::after { content: '?'; font-size: 9px; margin-left: 2px; vertical-align: super; opacity: .7; }
