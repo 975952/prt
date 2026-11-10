@@ -2,6 +2,13 @@
 const MAX_FOCUS = 6000;
 const pageNumber = (p) => Number.isInteger(Number(p)) && Number(p) > 0 ? Number(p) : null;
 
+/** 日常解释直接使用现有材料；明确查证、跨页/跨文档及整篇任务才进入检索。 */
+export function needsDocumentLookup(pending = {}) {
+  if (pending.forceFull || pending.useFullText || pending.useWeb) return true;
+  const q = String(pending.inputValue ?? pending.question ?? '').trim();
+  return /(查|搜|检索|联网|网上|最新|核对|核实|验证|原文|出处|参考文献|引用来源|页码|哪[一几]?[页篇]|第\s*(?:\d+|[一二三四五六七八九十百]+)\s*(?:页|篇)|\bp\.?\s*\d+|翻(?:到|页|一下|翻)|重新(?:读|生成)|读一遍|整篇|全文|全部论文|所有论文|其他论文|其它论文|(?:前面几|前几|几个)\s*(?:篇|个|PDF)|文件夹|papers\b|有没有提到|哪里提到|(?:这篇|本文|论文).{0,16}(?:总结|概括|摘要|核心|主要|贡献|方法|结构|结论|实验|结果|比较)|(?:总结|概括|通读|读完).{0,16}(?:论文|全文)|(?:不对|错了|确定吗|你确定|真的(?:吗|么)|是不是这样)|\b(?:search|look\s*up|verify|source|citation|references?|whole\s+paper|full\s+text|page\s*\d+)\b)/i.test(q);
+}
+
 export function stripPageLabels(text) {
   return String(text || '').replace(/\[(?:第\s*\d+\s*页|p\.\s*\d+)\]\s*/gi, '').trim();
 }

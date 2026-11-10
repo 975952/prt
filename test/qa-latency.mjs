@@ -1,0 +1,255 @@
+/** Isolated browser checks for response latency, citations, batching and cancellation. */
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+import http from 'node:http';
+import { spawn } from 'node:child_process';
+import puppeteer from 'puppeteer-core';
+import { ROOT, SANDBOX, assertIsolatedDataDir, resolveDataDir } from './_env.mjs';
+import { stageExe, spawnReader, stopChild, waitForBase, READER_PORTS } from './_exe.mjs';
+
+const scratch = fs.mkdtempSync(path.join(SANDBOX, 'qa-latency-'));
+const DATA = assertIsolatedDataDir(path.join(scratch, 'data'));
+const PAPERS = path.join(scratch, 'papers');
+fs.mkdirSync(DATA);
+fs.mkdirSync(PAPERS);
+fs.copyFileSync(path.join(ROOT, 'test/fixtures/multipage-sample.pdf'), path.join(PAPERS, 'latency.pdf'));
+const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+let mode = 'direct';
+let logs = [];
+let active = 0;
+let peak = 0;
+let completed = [];
+let finalEnded = false;
+const chunk = (res, delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\n`);
+const hasImages = (body) => body.messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url'));
+const reply = async (res, text, delay = 900) => {
+  res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  chunk(res, { content: text });
+  await wait(delay);
+  if (!res.destroyed) { chunk(res, { content: '（完成）' }, 'stop'); res.end('data: [DONE]\n\n'); }
+  finalEnded = true;
+};
+const upstream = http.createServer(async (req, res) => {
+  const chunks = [];
+  for await (const c of req) chunks.push(c);
+  const body = JSON.parse(Buffer.concat(chunks));
+  const sys = String(body.messages[0]?.content || '');
+  if (/后台学习记忆提取器|滚动摘要|会话标题/.test(sys)) {
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ choices: [{ message: { content: '[]' } }] }));
+    return;
+  }
+  logs.push(body);
+  const last = body.messages.at(-1)?.content;
+  const one = typeof last === 'string' && last.startsWith('本次只解答下面这一道题') ? Number(last.match(/PERF_Q(\d)/)?.[1]) : 0;
+  if (one) {
+    active++;
+    peak = Math.max(peak, active);
+    try {
+      if (mode === 'batch-fail' && one === 3) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: { message: 'mock question failure' } }));
+      } else {
+        await reply(res, `ANSWER_${one}`, mode === 'batch-stop' ? 3000 : [0, 1100, 250, 650, 300, 300, 300][one]);
+        completed.push(one);
+      }
+    } finally { active--; }
+    return;
+  }
+  if (mode === 'unsupported' && body.tools) {
+    res.writeHead(400, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: { message: 'tools unsupported' } }));
+    return;
+  }
+  if ((mode.startsWith('batch') || mode === 'tools' || mode === 'ready' || mode === 'scan' || mode === 'escalate') && body.tools) {
+    if (!body.messages.some((m) => m.role === 'tool')) {
+      const tool = mode === 'scan' ? 'read_page_image' : 'read_page';
+      res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+      chunk(res, { tool_calls: [
+        { index: 0, id: 'page3', function: { name: tool, arguments: '{"page":3}' } },
+        { index: 1, id: 'page5', function: { name: tool, arguments: mode === 'scan' ? '{"page":3}' : '{"page":5}' } },
+      ] });
+      chunk(res, {}, 'tool_calls');
+      res.end('data: [DONE]\n\n');
+    } else if (mode.startsWith('batch') || mode === 'ready') {
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ choices: [{ message: { content: '材料已读够。' } }] }));
+    } else await reply(res, '读取后的短答案。〔p.3〕 未读页〔p.8〕');
+    return;
+  }
+  if (hasImages(body)) { await reply(res, '第3页的识读文本。', 150); return; }
+  if (mode === 'escalate' && !body.tools) {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    chunk(res, { content: '[[PRT_NEEDS_' });
+    await wait(250);
+    chunk(res, { content: 'MATERIALS]]' }, 'stop');
+    res.end('data: [DONE]\n\n');
+    return;
+  }
+  if (mode === 'keepalive' && body.tools) {
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    for (let i = 0; i < 5; i++) {
+      chunk(res, { content: `持续输出${i}。` });
+      await wait(350);
+    }
+    res.end('data: [DONE]\n\n');
+    return;
+  }
+  await reply(res, mode === 'direct' ? '短答案。' : '回退后的最终答案。');
+});
+
+let reader;
+let browser;
+const watchdog = setTimeout(() => { console.error('qa-latency timed out'); process.exit(3); }, 120000);
+watchdog.unref();
+try {
+  await new Promise((resolve) => upstream.listen(0, '127.0.0.1', resolve));
+  const probe = http.createServer();
+  await new Promise((resolve) => probe.listen(0, '127.0.0.1', resolve));
+  const readerPort = probe.address().port;
+  await new Promise((resolve) => probe.close(resolve));
+  const desktop = process.argv.includes('--desktop');
+  if (desktop) reader = spawnReader(stageExe('qa-latency').exe, { env: {
+    PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS, PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1',
+  } });
+  else reader = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+    env: { ...process.env, PORT: String(readerPort), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS, NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1' }, stdio: 'ignore',
+  });
+  const BASE = desktop ? await waitForBase({ ports: READER_PORTS, papersDir: PAPERS }) : `http://127.0.0.1:${readerPort}`;
+  assert.ok(BASE, 'isolated reader must start');
+  for (let i = 0; i < 100; i++) {
+    try { if ((await fetch(`${BASE}/api/health`)).ok) break; } catch { /* starting */ }
+    await wait(100);
+  }
+  // An external test base must also use disposable fixture data.
+  const listing = await (await fetch(`${BASE}/api/papers`)).json();
+  assertIsolatedDataDir(resolveDataDir(listing.dir));
+  assert.ok(listing.papers.some((p) => p.name === 'latency.pdf'), 'test fixture base required');
+  assert.ok((await fetch(`${BASE}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseURL: `http://127.0.0.1:${upstream.address().port}/v1`, model: 'latency-mock', apiKey: 'fake-test-key' }) })).ok);
+  browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', headless: 'shell', args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1450, height: 950 } });
+  const page = await browser.newPage();
+  const errors = [];
+  page.on('pageerror', (err) => errors.push(String(err)));
+  await page.goto(`${BASE}/?open=latency.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__state?.doc && window.__viewer?.numPages > 0 && window.__state.viewerDocId === window.__state.doc.docId);
+  await page.evaluate(() => { window.__ctx.setPanelVisible('chat', true); window.__ctx.setScopeRange('current'); window.__ctx.setAgentRead(true); });
+  const start = async (text = '请核对这篇论文的核心方法。') => {
+    logs = []; completed = []; peak = 0; finalEnded = false;
+    await page.evaluate((text) => {
+      const input = document.querySelector('#chatInput');
+      input.value = text; input.dispatchEvent(new Event('input', { bubbles: true }));
+    }, text);
+    await page.click('#sendBtn');
+  };
+  const finish = () => page.waitForFunction(() => !window.__state.busy, { timeout: 30000 });
+  const lastText = () => page.evaluate(() => [...document.querySelectorAll('#aiArea .msg.assistant .text')].at(-1)?.textContent || '');
+
+  await page.evaluate(() => {
+    window.__latencyOldProfile = { profile: window.__state.docProfile, doc: window.__state.docProfileDoc, promise: window.__state.docProfilePromise };
+    window.__state.docProfile = null; window.__state.docProfileDoc = null;
+    window.__state.docProfilePromise = new Promise(() => {});
+  });
+  const quickStarted = Date.now();
+  await start('什么是自注意力？');
+  await page.waitForFunction(() => window.__state.busy && [...document.querySelectorAll('#aiArea .msg.assistant .text')].at(-1)?.textContent.includes('短答案。'));
+  assert.equal(finalEnded, false, 'answer must be visible before the model finishes');
+  const firstTextMs = Date.now() - quickStarted;
+  assert.ok(firstTextMs < 2500, `local first text should arrive within seconds: ${firstTextMs}`);
+  await finish();
+  assert.equal(logs.length, 1, 'short direct answer must not be generated twice');
+  assert.equal(logs[0].stream, true);
+  assert.equal(Boolean(logs[0].tools), false, 'ordinary questions must bypass tool planning');
+  assert.match(await lastText(), /短答案。/);
+  await page.evaluate(() => {
+    const old = window.__latencyOldProfile;
+    window.__state.docProfile = old.profile; window.__state.docProfileDoc = old.doc; window.__state.docProfilePromise = old.promise;
+  });
+  console.log(`PASS: ordinary answer bypasses whole-document scanning/tools and streams in ${firstTextMs} ms`);
+
+  mode = 'tools';
+  await start(); await finish();
+  assert.equal(logs.length, 2, 'one tool round plus one answer, without extra generation');
+  assert.deepEqual(logs[1].messages.filter((m) => m.role === 'tool').map((m) => m.tool_call_id), ['page3', 'page5']);
+  const pages = await page.evaluate(() => [...[...document.querySelectorAll('#aiArea .msg.assistant')].at(-1).querySelectorAll('.page-ref')].map((n) => n.dataset.page));
+  assert.ok(pages.includes('3'));
+  assert.ok(!pages.includes('8'));
+  console.log('PASS: tool streams preserve result order, reuse short answers and enforce citation pages');
+
+  mode = 'escalate';
+  const beforeEscalate = await page.evaluate(() => document.querySelectorAll('#aiArea .msg.assistant').length);
+  await start('解释一下这个概念。'); await finish();
+  // The follow-on material read starts immediately after the first request unwinds.
+  await page.waitForFunction(() => !window.__state.busy && [...document.querySelectorAll('#aiArea .msg.assistant .text')].at(-1)?.textContent.includes('读取后的短答案'));
+  assert.equal(logs.length, 3);
+  assert.ok(!Boolean(logs[0].tools) && Boolean(logs[1].tools));
+  assert.doesNotMatch(await lastText(), /PRT_NEEDS/);
+  assert.equal(await page.evaluate(() => document.querySelectorAll('#aiArea .msg.assistant').length), beforeEscalate + 1);
+  console.log('PASS: insufficient current material automatically escalates within the same answer');
+
+  mode = 'scan';
+  await start(); await finish();
+  assert.equal(logs.filter(hasImages).length, 1, 'same-page calls must share one vision request');
+  assert.equal(logs.length, 3, 'page OCR must not trigger another final image upload');
+  console.log('PASS: concurrent reads of one image share OCR and avoid repeat image generation');
+
+  mode = 'ready';
+  await start(); await finish();
+  assert.match(await lastText(), /回退后的最终答案/);
+  assert.equal(logs.length, 3, 'readiness marker is not a user answer');
+  mode = 'unsupported';
+  await start(); await finish();
+  assert.equal(logs.length, 2);
+  assert.equal(Boolean(logs.at(-1).tools), false);
+  assert.match(await lastText(), /回退后的最终答案/);
+  console.log('PASS: readiness-only and unsupported-tool responses still generate final answers');
+
+  mode = 'keepalive';
+  await page.evaluate(() => { window.__agentTestLimits = { callTimeoutMs: 1000 }; });
+  await start(); await finish();
+  assert.equal(logs.length, 1, 'healthy streams longer than timeout must not restart');
+  assert.match(await lastText(), /持续输出4/);
+  await page.evaluate(() => { delete window.__agentTestLimits; });
+  console.log('PASS: active streaming refreshes idle timeout instead of aborting a healthy answer');
+
+  const six = '请查原文后逐题回答。\n' + Array.from({ length: 6 }, (_, i) => `${i + 1}. PERF_Q${i + 1} 请完整作答。`).join('\n');
+  mode = 'batch';
+  const began = Date.now();
+  await start(six); await finish();
+  const elapsed = Date.now() - began;
+  assert.equal(peak, 3);
+  assert.equal(logs.filter((b) => b.tools).length, 2, 'batch shares one material-gathering loop');
+  assert.equal(logs.filter((b) => !b.tools).length, 6);
+  assert.equal(completed[0], 2, 'finish order should differ from question order');
+  const text = await lastText();
+  for (let i = 1; i <= 6; i++) {
+    assert.match(text, new RegExp(`ANSWER_${i}`));
+    if (i > 1) assert.ok(text.indexOf(`ANSWER_${i - 1}`) < text.indexOf(`ANSWER_${i}`));
+  }
+  assert.equal(await page.evaluate(() => [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1).querySelectorAll('.answer-card').length), 6);
+  console.log(`PASS: six questions run with concurrency 3, retain order/cards, and share materials (${elapsed} ms)`);
+
+  mode = 'batch-fail';
+  await start(six); await finish();
+  const partial = await lastText();
+  assert.match(partial, /mock question failure/);
+  assert.match(partial, /ANSWER_6/);
+  console.log('PASS: a failed question does not prevent the other questions from completing');
+
+  mode = 'batch-stop';
+  await start(six);
+  await page.waitForFunction(() => [...document.querySelectorAll('#aiArea .msg.assistant .text')].at(-1)?.textContent.includes('ANSWER_1'));
+  await page.evaluate(() => window.__state.abort.abort());
+  await finish();
+  await wait(300);
+  assert.ok(logs.filter((b) => !b.tools).length <= 3, 'stop must not start queued questions');
+  assert.match(await lastText(), /ANSWER_1/);
+  assert.deepEqual(errors, []);
+  console.log('PASS: stop cancels active questions, preserves partial text and leaves queued questions unstarted');
+} finally {
+  clearTimeout(watchdog);
+  await browser?.close();
+  await stopChild(reader);
+  upstream.closeAllConnections();
+  await new Promise((resolve) => upstream.close(resolve));
+}

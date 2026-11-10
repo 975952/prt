@@ -200,7 +200,7 @@ const sumFail = summarizeToolResult({ name: 'read_page', args: { page: 9 } }, { 
 check('失败摘要说明原因', /失败：page 超出总页数/.test(sumFail), sumFail);
 
 {
-  // onStep 事件顺序：round → tools → tool_start → tool_done ×2 → round → ready
+  // 工具并发启动；每个调用的 start 在 done 前，下一轮等所有工具完成。
   const script = [
     { choices: [{ message: { content: '', tool_calls: [
       { id: 'c1', function: { name: 'get_reading_state', arguments: '{}' } },
@@ -215,14 +215,14 @@ check('失败摘要说明原因', /失败：page 超出总页数/.test(sumFail),
     onStep: (ev) => events.push(ev),
   });
   check('onStep 收到过程事件', events.length >= 7, `${events.length} 个事件`);
-  check('事件顺序 round→tools→tool_start/done→round→ready',
+  check('同轮工具先并发启动，完成后才进入下一轮',
     events[0]?.type === 'round' && events[1]?.type === 'tools'
-    && events[2]?.type === 'tool_start' && events[3]?.type === 'tool_done'
-    && events[4]?.type === 'tool_start' && events[5]?.type === 'tool_done'
+    && events[2]?.type === 'tool_start' && events[3]?.type === 'tool_start'
+    && events[4]?.type === 'tool_done' && events[5]?.type === 'tool_done'
     && events[6]?.type === 'round' && events[7]?.type === 'ready',
     events.map((e) => e.type).join(','));
-  check('tool_done 带可读摘要', events[3]?.summary === '阅读状态：共 9 页，当前第 2 页' && /读取第 2 页/.test(events[5]?.summary || ''),
-    `${events[3]?.summary} / ${events[5]?.summary}`);
+  check('tool_done 带可读摘要', events[4]?.summary === '阅读状态：共 9 页，当前第 2 页' && /读取第 2 页/.test(events[5]?.summary || ''),
+    `${events[4]?.summary} / ${events[5]?.summary}`);
   check('循环结果不受 onStep 影响', run.ok && run.rounds === 2);
 }
 

@@ -106,6 +106,8 @@ export async function streamChat(opts) {
     stream = Settings.data.stream,
     idleMs = 60000,
     onTick,
+    tools,
+    rawResponse = false,
   } = opts;
 
   // 自己的 controller：既能被调用方 abort，也能被看门狗 abort
@@ -156,6 +158,7 @@ export async function streamChat(opts) {
         temperature,
         stream,
         useVision: hasImage,
+        ...(tools?.length ? { tools, tool_choice: 'auto' } : {}),
         baseURL: Settings.data.baseURL,
         apiKey: Settings.data.apiKey || undefined,
       }),
@@ -195,8 +198,11 @@ export async function streamChat(opts) {
       let text = '';
       try {
         const j = JSON.parse(raw);
+        if (j?.error) throw new Error(j.error.message || '上游返回错误');
+        if (rawResponse) return j;
         text = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.text ?? j?.content ?? '';
-      } catch {
+      } catch (e) {
+        if (rawResponse || !(e instanceof SyntaxError)) throw e;
         text = raw;
       }
       if (!text) {
@@ -209,7 +215,7 @@ export async function streamChat(opts) {
       return text;
     }
 
-    if (!stream) {
+    if (!stream && !rawResponse) {
       const raw = await res.text();
       let text = '';
       for (const line of raw.split('\n')) {
@@ -232,6 +238,38 @@ export async function streamChat(opts) {
     let buffer = '';
     let full = '';
     let reasoning = '';
+    const toolCalls = [];
+    let finishReason = '';
+    const consume = (raw) => {
+      const line = raw.trim();
+      if (!line.startsWith('data:')) return;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') return;
+      let json;
+      try { json = JSON.parse(payload); } catch { return; }
+      if (json.error) throw new Error(json.error.message || '上游返回错误');
+      const choice = json.choices?.[0];
+      if (choice?.finish_reason) finishReason = choice.finish_reason;
+      const delta = choice?.delta;
+      if (!delta) return;
+      for (const part of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
+        const index = Number.isInteger(part.index) ? part.index : 0;
+        if (index < 0 || index >= 32) throw new Error('上游工具调用序号超出范围');
+        const call = toolCalls[index] ||= { id: '', type: 'function', function: { name: '', arguments: '' } };
+        if (part.id) call.id = part.id;
+        if (part.function?.name) call.function.name += part.function.name;
+        if (part.function?.arguments) call.function.arguments += part.function.arguments;
+      }
+      if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
+        reasoning += delta.reasoning_content;
+        onReasoning?.(delta.reasoning_content, reasoning);
+      }
+      const piece = typeof delta.content === 'string' ? delta.content : '';
+      if (piece) {
+        full += piece;
+        if (!toolCalls.length) onDelta?.(piece, full);
+      }
+    };
 
     while (true) {
       const { value, done } = await reader.read();
@@ -240,32 +278,14 @@ export async function streamChat(opts) {
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split('\n');
       buffer = lines.pop() ?? '';
-      for (const raw of lines) {
-        const line = raw.trim();
-        if (!line || line.startsWith(':')) continue;
-        if (!line.startsWith('data:')) continue;
-        const payload = line.slice(5).trim();
-        if (payload === '[DONE]') continue;
-        let json;
-        try { json = JSON.parse(payload); } catch { continue; }
-        if (json.error) throw new Error(json.error.message || '上游返回错误');
-        const delta = json.choices?.[0]?.delta;
-        if (!delta) continue;
-        if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
-          reasoning += delta.reasoning_content;
-          onReasoning?.(delta.reasoning_content, reasoning);
-        }
-        const piece = typeof delta.content === 'string' ? delta.content : '';
-        if (piece) {
-          full += piece;
-          onDelta?.(piece, full);
-        }
-      }
+      for (const raw of lines) consume(raw);
     }
+    consume(buffer + decoder.decode());
 
-    if (!full && !reasoning) {
+    if (!full && !reasoning && !toolCalls.length) {
       throw new Error('模型没有返回任何内容。可能是模型名不对、额度用尽，或被网关拦截了。');
     }
+    if (rawResponse) return { choices: [{ message: { content: full, tool_calls: toolCalls.filter(Boolean) }, finish_reason: finishReason }] };
     return full;
   } catch (e) {
     const s = stale();

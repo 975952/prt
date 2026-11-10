@@ -510,15 +510,22 @@ export async function runAgentLoop({
         function: { name: c.name, arguments: JSON.stringify(c.args ?? {}) },
       })),
     });
-    for (const call of batch) {
+    // 同轮参数已经确定，所有工具都是只读：并行读取，回传仍保持模型原来的顺序。
+    const results = await Promise.all(batch.map(async (call) => {
+      if (signal?.aborted) return { ok: false, error: '已停止' };
       emit({ type: 'tool_start', round: rounds, call: { name: call.name, args: call.args } });
       const result = await executeToolCall(call, runtime);
-      calls.push({ name: call.name, args: call.args, ok: result.ok, error: result.error || '' });
       emit({
         type: 'tool_done', round: rounds,
         call: { name: call.name, args: call.args },
         ok: !!result.ok, error: result.error || '', summary: summarizeToolResult(call, result),
       });
+      return result;
+    }));
+    for (let i = 0; i < batch.length; i++) {
+      const call = batch[i];
+      const result = results[i];
+      calls.push({ name: call.name, args: call.args, ok: result.ok, error: result.error || '' });
       if (result.ok) {
         const v = result.value || {};
         // 只把「当前打开论文」的页码收进依据白名单：其它论文的页码当普通文字，不做跳页按钮
@@ -529,7 +536,8 @@ export async function runAgentLoop({
             if (Number.isInteger(row?.page)) pages.add(row.page);
           }
         }
-        if (call.name === 'read_page_image' && Number.isInteger(v.page)) imagePages.add(v.page);
+        // runtime 已识读并返回文本时不再重复渲染、上传同一页。
+        if (call.name === 'read_page_image' && !v.text && Number.isInteger(v.page)) imagePages.add(v.page);
         /* 注意：read_scan_page 的页图由 runtime 直接收进 extraImages（最终请求会附上），
            这里不能再收进 imagePages，否则同一页会被渲染两次、重复附给模型。 */
       }
