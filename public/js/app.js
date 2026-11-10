@@ -18,7 +18,7 @@ import {
   scanPageMessages, sessionSummaryMessages, sessionTitleMessages,
 } from './ai.js';
 import { resolveReadingRequest, resolvePageRole, snapshotReadingRequest, snapshotHistory, readingTurn,
-  restoreReadingHistory, citedSources, stripPageLabels, needsDocumentLookup } from './reading-context.js';
+  restoreReadingHistory, citedSources, stripPageLabels } from './reading-context.js';
 import { validateCitations, collectAvailablePages, planFor, pagesFromText, formatPageList } from './citation-validator.js';
 import { runAgentLoop, agentStats, AGENT_TOOL_SPECS, AGENT_SYSTEM_NOTE, toolStepLabel, stripAgentMarkup } from './agent.js';
 import { lastPromptDebug as __promptDebug } from './prompts/index.js';
@@ -8649,61 +8649,43 @@ function quoteFragmentParts(html) {
 
 /** 默认开启（2026-11-01 P2.5 真实 API 验收通过后开启；仍可用 reader.agentRead=0 关掉，失败自动回退） */
 const AGENT_READ_DEFAULT = true;
-const NEEDS_MATERIALS = '[[PRT_NEEDS_MATERIALS]]';
 function agentReadEnabled() {
   return readFlag('reader.agentRead', AGENT_READ_DEFAULT);
 }
 
-/* ------------------------------------------------------------ 追问直答（2026-11-04 用户要求） */
-/* 用户反馈：明显上下连贯的追问没必要每次都重新翻页、看页图、跑多轮工具思考，应该直接接着说。
-   做法：同一段会话里已经有问答、问题很短、没加选区/截图、也没点名要看新的页/整篇时，
-   跳过 Agent 工具轮次、全文与页图材料，直接把对话历史和当前页上下文交给模型流式回答。
-   设置 →「交互与发送」里的「连贯追问直接回答」可关掉（reader.followUpDirect=0）。 */
+/* 连贯追问的讲法偏好；不再控制模型能否调用工具。 */
 const FOLLOW_UP_DIRECT_DEFAULT = true;
 function followUpDirectEnabled() {
   return readFlag('reader.followUpDirect', FOLLOW_UP_DIRECT_DEFAULT);
 }
-/** 问题点明了要看新的材料 / 要核对 / 要搜索：别走直答，照旧完整阅读流程。
-    2026-11-04 二次修复：用户实测「前几个 PDF 有没有提到 X」「去查啊」「？」都被当成闲聊追问，
-    工具被关掉后模型反过来让用户自己贴页。凡是带核对/翻页/搜索/页码/文档词的问题一律走完整流程。 */
-const FOLLOW_UP_READ_RE = /(第\s*\d+\s*页|p\.?\s*\d+|页码|整篇|全文|全文索引|翻到|翻页|翻一下|翻翻|重新读|从头读|再读|读一遍|找一下|找找|查|搜|核实|验证|确认|看看|看一下|前面几|前几|哪一页|哪页|其他页|别的页|另一页|原文|pdf|论文里|文档里|讲义|课件|到底|真的|是不是|没找到|找不到|重新生成)/i;
-/** 明显在质疑上一轮 / 要求重查的短回应：即使很短也切完整流程（用户实测「去查啊」） */
-const FOLLOW_UP_CHALLENGE_RE = /(去查|查啊|查查|核实|确认|验证|翻一下|翻翻|看看自己|自己看|到底|真的|确定吗|不对|错了|没找到|找不到|重新查|再查)/;
-/** 纯标点/语气词的追问（例如「？」）：只有在上一轮是轻量直答时才切完整流程 */
-const FOLLOW_UP_PURE_PUNCT_RE = /^[？?！!。，,、…\s]+$/;
-/** 上一轮回答是否走了轻量直答（「？」「去查啊」这类回应据此升级为完整阅读流程） */
-let lastChatAnswerDirect = false;
-/** 扫描件里提到图/表/公式/位置：保留页图，别把影像材料也省掉 */
-const FOLLOW_UP_VISUAL_RE = /(图|表|公式|截图|这块|这里|这页|上面|下面|左边|右边|圈|标出|显示|画出|坐标|曲线)/;
-/**
- * 「明显承接上文」的追问判定：返回 { direct, keepVisual }。
- * direct=true 时调用方跳过 Agent 工具轮次、整篇全文与页图材料，只带对话历史 + 当前页上下文直答。
- * 但以下情况一律不走直答：点名查页/核对/搜索/文档、带选区截图、上一轮直答后用户只回「？」或质疑、
- * 「重新生成」（forceFull）——这些都需要真实读材料，否则模型会反过来让用户自己去翻页。
- */
-function planFollowUpDirect(pending, { images = [], scannedDoc = false } = {}) {
-  if (!followUpDirectEnabled()) return { direct: false, keepVisual: false };
-  if (!pending || !pending.docId) return { direct: false, keepVisual: false };
-  if (pending.forceFull) return { direct: false, keepVisual: false };
-  if (needsDocumentLookup(pending)) return { direct: false, keepVisual: false };
-  const q = String(pending.inputValue || '').trim();
-  if (!q || q.length > 60) return { direct: false, keepVisual: false };
-  if (images?.length) return { direct: false, keepVisual: false };
-  const atts = Array.isArray(pending.attachments) ? pending.attachments : [];
-  if (atts.some((a) => a && (a.kind === 'text' || a.kind === 'image'))) return { direct: false, keepVisual: false };
-  if (pending.quoteText) return { direct: false, keepVisual: false };
-  if (!Array.isArray(pending.history) || pending.history.length === 0) return { direct: false, keepVisual: false };
-  if (FOLLOW_UP_READ_RE.test(q)) return { direct: false, keepVisual: false };
-  if (FOLLOW_UP_CHALLENGE_RE.test(q)) return { direct: false, keepVisual: false };
-  // 上一轮是轻量直答、用户只回「？」：说明答案没对上，别再顺口糊，直接去查
-  if (lastChatAnswerDirect && FOLLOW_UP_PURE_PUNCT_RE.test(q)) return { direct: false, keepVisual: false };
-  const keepVisual = !!scannedDoc && FOLLOW_UP_VISUAL_RE.test(q);
-  return { direct: true, keepVisual };
-}
-
 /** 工具决策也流式接收：正文可以立即显示，工具参数等接收完整后再执行。 */
 async function agentModelCall({ messages, tools, timeoutMs = 60000, signal = null, onDelta }) {
-  return streamChat({ messages, tools, signal, onDelta, stream: true, rawResponse: true, idleMs: timeoutMs });
+  return streamChat({ messages, tools, signal, onDelta, stream: true, rawResponse: true, idleMs: timeoutMs,
+    onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`) });
+}
+
+/** 把图片直接放进首次用户消息，让模型自行决定回答还是查阅。 */
+function attachAnswerImages(messages, images = [], pageImages = []) {
+  if (!images.length && !pageImages.length) return;
+  const last = messages[messages.length - 1];
+  // 多图必须显式建立「标签 → 紧随其后的图片」一一对应。旧做法先把所有标签
+  // 合并成一段、再把图片连着追加，导致多张图时来源错配（例如把 Stable 当成单摆）。
+  const parts = [{
+    type: 'text',
+    text: `${last.content}\n\n【多图对应规则】本条消息里的每张图片都是独立材料。按下面编号逐张查看，只能把紧邻编号对应的图作为该项证据；不要把一张图中的文字、物体、页码或结论套用到另一张图。用户截图与论文页图是不同来源，回答时分开说明。\n\n【强制逐图核对】回答前在内部逐张核对图像内容与紧邻标签，先判断图 1 的内容，再判断图 2，以此类推；如果用户问两图差异，只能比较对应序号下实际看到的内容。若某张图不可读取，明确指出具体序号，不要拿另一张图代替。不要输出核对过程，只给结论。`,
+  }];
+  images.forEach((im, i) => {
+    const pageLabel = im.page ? `；截取自第 ${im.page} 页` : '';
+    const label = String(im.label || '用户添加的截图').replace(/[\r\n]/g, ' ').slice(0, 100);
+    parts.push({ type: 'text', text: `【用户截图 ${i + 1}/${images.length}${pageLabel}${label ? `；${label}` : ''}】下一张图片是此截图。` });
+    parts.push({ type: 'image_url', image_url: { url: im.dataUrl } });
+  });
+  pageImages.forEach((im, i) => {
+    const label = String(im.label || (im.page ? `第 ${im.page} 页` : `论文页图 ${i + 1}`)).replace(/[\r\n]/g, ' ').slice(0, 120);
+    parts.push({ type: 'text', text: `【论文上下文页图 ${i + 1}/${pageImages.length}；${label}】下一张图片是论文页面上下文，不是用户截图。` });
+    parts.push({ type: 'image_url', image_url: { url: im.dataUrl } });
+  });
+  last.content = parts;
 }
 
 /** 整篇文本按页切（Agent 的 search_paper / read_page 用；按需抽取一次并缓存） */
@@ -8902,8 +8884,8 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
     },
     async readPage(page) {
       /* 扫描件没有文本层：不先报错再让模型重试 —— 直接自动改取页图（少一轮往返、过程列表也少一条失败）。 */
-      if (scannedDoc) return attachCurrentPageImage(page);
       const text = await viewer.getPageText(page);
+      if (String(text || "").trim().length < 40) return attachCurrentPageImage(page);
       return { page, chars: String(text || '').length, text: String(text || '').slice(0, 6000) };
     },
     async searchPaper(query) {
@@ -8913,7 +8895,6 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
       return { query, pages: rows, note: rows.length ? '' : '没有命中，可以换个词或直接 read_page' };
     },
     async readScanPage(page) {
-      if (!scannedDoc) return { page, error: '这不是扫描件，请用 read_page' };
       return attachCurrentPageImage(page);
     },
     async readPageImage(page) {
@@ -8959,7 +8940,8 @@ function createAgentProgress(entry) {
   return {
     onStep(ev) {
       if (!ev) return;
-      if (ev.type === 'round' || ev.type === 'tool_start') show('正在查阅论文材料…');
+      if (ev.type === 'round') show('思考中…');
+      else if (ev.type === 'tool_start') show('正在查阅论文材料…');
       else if (ev.type === 'ready') { current?.remove(); current = null; }
       // tool_done / tools：不更新、不逐条列动作；失败也不在过程里刷细节
     },
@@ -8967,6 +8949,7 @@ function createAgentProgress(entry) {
       current = null;
       box.remove();
     },
+    answerStarted() { current?.remove(); current = null; },
     remove() { box.remove(); },
   };
 }
@@ -8988,6 +8971,10 @@ async function runAgentReadPath({ pending, reading, context, references, sources
     const folderLine = `【当前文件夹】${currentFolderPath() || 'papers/'}。默认只读**当前论文 / 当前文件夹**的材料；` +
       '用户要求在本文件夹的 PDF 中查找时，应检索并读取当前文件夹里的其他 PDF；用户指定全部论文或其他文件夹时才扩大范围。';
     base[0] = { role: 'system', content: `${system}\n\n${AGENT_SYSTEM_NOTE}\n${folderLine}` };
+    base[0].content += `\n【当前阅读】PDF 共 ${viewer?.numPages || '?'} 页，所在 PDF 页码 ${pending.firstPage || '?'}；所在页材料为空时可自行决定是否读取页图。`;
+    if (followUpDirectEnabled()) base[0].content += '\n连贯追问优先沿用上文，是否需要重新查证仍由你判断，不要因为输入只有问号就自动检查论文。';
+    if (pending.forceFull) base[0].content += '\n读者要求重新生成，请重新审视前一回答；需要核实时自行调用工具。';
+    attachAnswerImages(base, images);
     // 多题只共享一次材料读取，解题交给后面的并发请求，避免先完整解一遍又逐题重做。
     const gatherIndex = base.length;
     if (deferAnswer) base.push({ role: 'user', content: '本轮只为上述全部题目收集必要材料，不解题。材料足够时只回复「材料已备齐」，随后程序会逐题发起解答。' });
@@ -8995,7 +8982,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
     const run = await runAgentLoop({
       messages: base,
       runtime,
-      callModel: (req) => agentModelCall({ ...req, onDelta: !deferAnswer && !scannedDoc && !images.length ? onDelta : null }),
+      callModel: (req) => agentModelCall({ ...req, onDelta: deferAnswer ? null : onDelta }),
       signal,
       onStep,
       totalTimeoutMs,
@@ -9006,7 +8993,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
     const content = String(stripAgentMarkup(run.directContent || '')).trim();
     const readyOnly = /^(?:[（(]?)(?:材料|资料)(?:已|已经)?(?:备齐|读够|齐全|收集完毕|准备好|足够)[了。.!！）)\s]*$/.test(content);
     const directContent = deferAnswer || readyOnly ? '' : content;
-    if (!run.ok || (stats.calls === 0 && (deferAnswer || scannedDoc || images.length || !directContent))) return null;
+    if (!run.ok || (stats.calls === 0 && (deferAnswer || !directContent))) return null;
     const messages = run.messages.slice();
     if (deferAnswer) messages.splice(gatherIndex, 1);
     /* 用户口径（2026-11-02）：模型抱怨「本轮材料已经定下、不能再调用」是轮次用完导致的。
@@ -9025,7 +9012,8 @@ async function runAgentReadPath({ pending, reading, context, references, sources
       /* 跨论文读取时加入的其它论文页图（已渲染好 dataURL，交给 send() 附到最终请求） */
       extraImages: runtime.extraImages || [],
       hasPageReadings: runtime.hasPageReadings,
-      basis: `本次依据：AI 自行读取 ${basisPages.length ? `p.${basisPages.join('、')}` : '（未读页）'}（${run.rounds} 轮 / ${stats.calls} 次工具）`,
+      imagesProvided: true,
+      basis: stats.calls ? `本次依据：AI 自行读取 ${basisPages.length ? `p.${basisPages.join('、')}` : '（未读页）'}（${run.rounds} 轮 / ${stats.calls} 次工具）` : '本次依据：现有材料与对话',
       stats,
     };
   } catch {
@@ -10692,7 +10680,7 @@ async function send(retryPending = null) {
     return;
   }
   let pending = retryPending;
-  // 手动「重新生成」= 这次按完整阅读流程重查，不再用轻量直答（否则会把上一轮的猜测又念一遍）
+  // 手动重新生成会提示模型重新审视回答；是否查证仍由模型决定。
   if (pending) pending.forceFull = true;
   if (!pending && state.doc && state.viewerDocId !== state.doc.docId) {
     flashHint('论文正在打开，请稍候');
@@ -10838,7 +10826,6 @@ async function send(retryPending = null) {
   let meta = '';
   let docCtx = null;
   let citationMat = null;
-  let retryWithMaterials = false;
   try {
     /**
      * 截图附件单独存：等上传完再发请求（本机 HTTP，几毫秒），把返回的 id 写进这条用户消息
@@ -10862,42 +10849,31 @@ async function send(retryPending = null) {
     // 重试时也复用第一次发送时定下的「所在页」与话题页，不受之后滚动影响
     if (pending.firstPage) reading.page = pending.firstPage;
     pending.reading = reading;
-    // 日常问答不等整篇页型扫描（最多会读 60 页的文本/绘图指令）；只读本次所在页。
-    const quickAnswer = !needsDocumentLookup(pending);
-    const quickPageText = quickAnswer && pending.docId && pending.firstPage
+    // 只准备现有所在页，不等待整篇扫描；是否继续读页由模型选择工具。
+    const currentPageText = pending.docId && pending.firstPage
       ? await viewer.getPageText(pending.firstPage).catch(() => '') : '';
-    const scanProfile = !quickAnswer && pending.docId ? await startDocProfileScan(pending.docId).catch(() => null) : null;
     if (!readingRequestCurrent(pending)) return;
-    const scannedDoc = quickAnswer
-      ? !!pending.docId && (String(quickPageText).trim().length < 40 || /\(cid:\d+\)|[\uE000-\uF8FF\uFFFD]/.test(quickPageText))
-      : !!scanProfile?.scanned;
-    pending.quickAnswer = quickAnswer;
+    const scannedDoc = !!pending.docId && (String(currentPageText).trim().length < 40 || /\(cid:\d+\)|[\uE000-\uF8FF\uFFFD]/.test(currentPageText));
     pending.scanned = scannedDoc;
-    // 追问直答：明显接着上一轮的短问题，不再重新翻页/看页图/跑多轮工具（判定见 planFollowUpDirect）
-    const followPlan = planFollowUpDirect(pending, { images, scannedDoc });
-    const followDirect = followPlan.direct;
-    pending.followUpDirect = followDirect;
-    lastChatAnswerDirect = followDirect;
-    if (followDirect) setHint('接着上一段直接回答…');
     // 没有选区时也带所在页上下文：
     // · 追问 → 上一轮话题所在页（让模型顺着上下说，而不是被屏幕滚到的页带跑）；
     // · 明说「第 N 页」→ 那一页；· 其它/「这一页/这里」→ 当前屏幕页。扫描件没有文本层，改成带页图。
     const quotes = pending.attachments.filter((a) => a.kind === 'text');
     const anchor = contextAnchorFor(pending.pageRole, reading);
-    const contextParts = scannedDoc ? [] : ((pending.useFullText && !shotOnly && !followDirect) ? [] : (quotes.length ? await Promise.all(quotes.slice(0, 6).map(async (a) => {
+    const contextParts = scannedDoc ? [] : (quotes.length ? await Promise.all(quotes.slice(0, 6).map(async (a) => {
       // 右栏划来的文字不是 PDF 原文，定位不到「原文附近」；给所在页整页当语境
       const nearby = await viewer.getContextAround(a.page || pending.firstPage,
         a.from === 'right' ? '' : a.text);
       return nearby ? `[第${a.page || pending.firstPage}页]\n${nearby}` : '';
     })) : [pending.firstPage && pending.docId
-      ? await viewer.getContextAround(pending.firstPage, anchor) : '']));
+      ? await viewer.getContextAround(pending.firstPage, anchor) : '']);
     const context = [...new Set(contextParts.filter(Boolean))].join('\n\n');
-    const references = quickAnswer ? [] : await readingReferences(reading.selection);
+    const references = []; // 文献查阅由模型按需选择，发送前不扫描参考文献。
     if (!readingRequestCurrent(pending)) return;
     if (ctl.signal.aborted) throw new DOMException('已停止', 'AbortError');
     pending.scope = sendScopeText({
       attachments: pending.attachments, history: pending.history,
-      useFullText: pending.useFullText && !shotOnly && !followDirect, useWeb: pending.useWeb,
+      useFullText: pending.useFullText && !shotOnly, useWeb: pending.useWeb,
       query: pending.inputValue, docId: pending.docId, contextIncluded: !!context, scanned: scannedDoc,
       contextHint: scopeContextHintFor(pending),
     });
@@ -10906,7 +10882,7 @@ async function send(retryPending = null) {
 
     // 联网是允许查找材料；短追问先确定对象，纠正消息和纯问号不会拿去检索。
     // 追问直答这类短问题也不联网（省一次搜索往返；需要查资料的问题一般会点名要查/最新/出处）。
-    if (pending.useWeb && !followDirect && (!images.length || pending.inputValue.trim() || reading.selection)
+    if (pending.useWeb && (!images.length || pending.inputValue.trim() || reading.selection)
       && webQueryFor(pending.question, reading.selection, { reading })) {
       setHint('正在联网搜索…');
       try {
@@ -10924,12 +10900,12 @@ async function send(retryPending = null) {
     // 用户口径（2026-11-02）：带截图提问时也要能自己继续查页（截图是附加材料，不是禁止工具的理由）；
     // 只有「只发截图没写问题」（shotOnly）才不启用，避免模型把截图当成唯一依据乱翻。
     const batch = splitNumberedQuestions(pending.inputValue);
-    const agentAllowed = agentReadEnabled() && !quickAnswer && !shotOnly && !followDirect
+    const agentAllowed = agentReadEnabled() && !shotOnly
       && !!pending.docId && !!state.doc && !!viewer?.pdf;
     let agentRun = null;
     let agentProgress = null;
     if (agentAllowed) {
-      setHint('AI 正在自己找材料…');
+      setHint('正在思考…');
       // 过程列表：把「正在思考 / 检索 / 读第 N 页 / 命中」一条条列在回答上方（用户要求像 agent 工具一样可见）
       agentProgress = createAgentProgress(pending.entry);
       agentRun = await runAgentReadPath({
@@ -10939,6 +10915,8 @@ async function send(retryPending = null) {
         deferAnswer: !!batch,
         onDelta: (_piece, all) => {
           if (!readingRequestCurrent(pending)) return;
+          agentProgress?.answerStarted();
+          setHint('');
           received = all;
           target.push(all);
         },
@@ -10953,7 +10931,8 @@ async function send(retryPending = null) {
           question: pending.question, selection: reading.selection,
           selectionSource: pending.selectionSource || (reading.focus?.source === 'right' ? 'right' : ''),
           context, page: pending.firstPage, pageRole: pending.pageRole, docTitle: pending.docTitle,
-          history: pending.history, reading, references, pageImages: [], screenshotCount: images.length,
+          history: pending.history, reading, references, webResults: sources,
+          availablePages: context && pending.firstPage ? [pending.firstPage] : [], pageImages: [], screenshotCount: images.length,
           profileBlock: askProfileBlock(state.docText || context || '', pending.question, { docId: pending.docId }),
           teachingBlock: teachingProgressBlock(),
         },
@@ -10969,24 +10948,17 @@ async function send(retryPending = null) {
     }
     // ② 上下文。扫描件：页面图片（+ 整篇类问题的采样页）；普通论文：整篇全文 / 索引 + 相关段落。
     // 只发截图（没写问题）时不吃「整篇」范围：截图本身就是材料，塞整篇只会让模型顺势扩写整个讲义。
-    // Agent 成功时不再预装文本材料（它自己读过的页就是材料）；但扫描件仍带上页图：
-    // 页型是扫描件时 Agent 工具可能只读到空文本，保留 P1.5 的页图材料才不至于退步（跨论文读取也照样可用）。
-    // 追问直答：扫描件如果不涉及图表，也跳过页图材料；普通论文不再预装整篇全文/索引。
-    const wantScanImages = !(followDirect && !followPlan.keepVisual);
-    if (scannedDoc && wantScanImages && !agentRun?.hasPageReadings) {
+    // 成功时直接采用模型选择；仅在工具不支持/失败时准备兼容材料。
+    if (!agentRun && scannedDoc) {
       try {
-        docCtx = quickAnswer ? {
-          text: '', mode: 'scan', pageImages: shotOnly ? [] : await renderScanPages([pending.firstPage || reading.page || 1]),
-        } : await buildDocContext(pending.question, reading.selection || reading.focus.text, {
-          page: pending.firstPage || reading.page,
-          whole: pending.useFullText && !shotOnly,
-        });
+        docCtx = pending.useFullText && !shotOnly
+          ? await buildDocContext(pending.question, reading.selection || reading.focus.text, { page: pending.firstPage || reading.page, whole: true })
+          : { text: '', mode: 'scan', pageImages: shotOnly ? [] : await renderScanPages([pending.firstPage || reading.page || 1]) };
       } catch (e) {
         if (isAbort(e)) throw e;
-        docCtx = null;
-        setHint('读取扫描页失败，这次只带问题本身');
+        setHint('读取扫描页失败，这次只带已有材料');
       }
-    } else if (!agentRun && !followDirect && pending.useFullText && !shotOnly && pending.docId) {
+    } else if (!agentRun && pending.useFullText && !shotOnly && pending.docId) {
       try {
         docCtx = await buildDocContext(pending.question, reading.selection || reading.focus.text);
       } catch (e) {
@@ -10998,13 +10970,13 @@ async function send(retryPending = null) {
     pending.scope = sendScopeText({
       attachments: pending.attachments,
       history: pending.history,
-      useFullText: pending.useFullText && !shotOnly && !followDirect,
+      useFullText: pending.useFullText && !shotOnly,
       useWeb: pending.useWeb,
       query: pending.inputValue,
       docId: pending.docId,
-      scanned: scannedDoc && wantScanImages,
+      scanned: scannedDoc,
       scanPageCount: docCtx?.pageImages?.length || 0,
-      fullMode: (pending.useFullText && !shotOnly && !followDirect)
+      fullMode: (pending.useFullText && !shotOnly)
         ? (scannedDoc ? (docCtx?.mode || 'scan') : (docCtx?.mode || 'unavailable'))
         : null,
       contextIncluded: !!context,
@@ -11053,27 +11025,6 @@ async function send(retryPending = null) {
       // 明显「只要翻译」→ 只给译文 + 最多一句说明（见 prompts/capabilities/qa.js）
       translateIntent: translateOnlyAsk(pending.question),
     });
-    if (quickAnswer && messages[0]?.role === 'system') {
-      messages[0].content += '\n\n【日常问答】直接回答当前问题，先给有用的解释，再按需要展开。优先使用选中文本、当前页和对话记录；通用概念可以用已有知识解释。不要先写任务规划或操作过程。涉及论文特有事实时，只引用本次提供的材料，材料不足的部分不要猜。';
-    }
-    const canEscalate = quickAnswer && !batch && agentReadEnabled() && !!pending.docId;
-    if (canEscalate) messages[0].content += `\n若当前材料不足、必须读取其它页或查论文才能回答，只返回 ${NEEDS_MATERIALS}，程序会自动继续查阅，不必让读者再确认。`;
-    // 追问直答：给模型一条近因指令，明确「这是接着上文说」，并说明这次没有重新翻页。
-    if (followDirect) {
-      citationMat.basis = '本次依据：接着上一段对话（没有重新翻页读论文）';
-      const sys = messages[0];
-      if (sys && sys.role === 'system') {
-        sys.content += '\n\n【追问直答】这是接着上一轮回答的追问：优先沿用对话里已经讲过的内容继续说，篇幅可以短一些。'
-          + '注意：这一轮没有重新翻页、没有联网；但绝对不要说「我没有联网通道」「我读不了页图」「没有这个功能」——'
-          + '完整阅读模式下你可以自己翻页、读其它页/其它论文、联网检索、看页图。'
-          + '如果读者要求核对原文、翻到别的页、查资料，或者你发现当前上下文不足以确认，就直接说明：'
-          + '「这轮我只依据上文回答；需要我翻页/联网核对的话说一句『查一下』或点『重新生成』，我会用完整阅读流程去查。」'
-          + '不要编造页码或原文，也不要反过来让读者自己去贴材料。'
-          + (followPlan.keepVisual
-            ? '这次只附了相关页图；需要核对哪张图时用页面上的图。'
-            : '较真核对、找原文一律交给完整阅读流程（读者说「查一下」即触发）。');
-      }
-    }
     // 图片有两种：用户自己加的截图 + 扫描件的页面上下文；同一条 user 消息里一起发。
     // P2.5：Agent 用 read_page_image 要求的页也要附上（视觉模型才看得到）。
     let pageImages = docCtx?.pageImages || [];
@@ -11094,27 +11045,7 @@ async function send(retryPending = null) {
         if (extraPages.length) pageImages = [...pageImages, ...await renderScanPages(extraPages.slice(0, 5))];
       } catch { /* 取页图失败不影响回答 */ }
     }
-    if (images.length || pageImages.length) {
-      const last = messages[messages.length - 1];
-      // 多图必须显式建立「标签 → 紧随其后的图片」一一对应。旧做法先把所有标签
-      // 合并成一段、再把图片连着追加，导致多张图时来源错配（例如把 Stable 当成单摆）。
-      const parts = [{
-        type: 'text',
-        text: `${last.content}\n\n【多图对应规则】本条消息里的每张图片都是独立材料。按下面编号逐张查看，只能把紧邻编号对应的图作为该项证据；不要把一张图中的文字、物体、页码或结论套用到另一张图。用户截图与论文页图是不同来源，回答时分开说明。\n\n【强制逐图核对】回答前在内部逐张核对图像内容与紧邻标签，先判断图 1 的内容，再判断图 2，以此类推；如果用户问两图差异，只能比较对应序号下实际看到的内容。若某张图不可读取，明确指出具体序号，不要拿另一张图代替。不要输出核对过程，只给结论。`,
-      }];
-      images.forEach((im, i) => {
-        const pageLabel = im.page ? `；截取自第 ${im.page} 页` : '';
-        const label = String(im.label || '用户添加的截图').replace(/[\r\n]/g, ' ').slice(0, 100);
-        parts.push({ type: 'text', text: `【用户截图 ${i + 1}/${images.length}${pageLabel}${label ? `；${label}` : ''}】下一张图片是此截图。` });
-        parts.push({ type: 'image_url', image_url: { url: im.dataUrl } });
-      });
-      pageImages.forEach((im, i) => {
-        const label = String(im.label || (im.page ? `第 ${im.page} 页` : `论文页图 ${i + 1}`)).replace(/[\r\n]/g, ' ').slice(0, 120);
-        parts.push({ type: 'text', text: `【论文上下文页图 ${i + 1}/${pageImages.length}；${label}】下一张图片是论文页面上下文，不是用户截图。` });
-        parts.push({ type: 'image_url', image_url: { url: im.dataUrl } });
-      });
-      last.content = parts;
-    }
+    if (!agentRun?.imagesProvided) attachAnswerImages(messages, images, pageImages);
     // 右栏只呈现回答正文与来源，不显示全文字数、联网条数等内部统计。
     meta = '';
     warnIfNoVisionModel(images.length > 0 || pageImages.length > 0);
@@ -11124,7 +11055,7 @@ async function send(retryPending = null) {
     // 但如果这次有**页图材料**（扫描件页图 / Agent 读的页图 / 跨论文页图），图片只能附在下一个请求里发出去，
     // 直接采用 directContent 会让模型根本没看到图 —— 这种情况必须再走一次最终流式请求。
     const directAnswer = String(agentRun?.directContent || '');
-    const mustStreamForImages = !!directAnswer && (pageImages.length > 0 || images.length > 0);
+    const mustStreamForImages = !!directAnswer && !agentRun?.imagesProvided && (pageImages.length > 0 || images.length > 0);
     let rawFull;
     if (batch) {
       const answers = batch.questions.map(() => ({ text: '', started: false, done: false }));
@@ -11161,20 +11092,11 @@ async function send(retryPending = null) {
         messages,
         stream: true,
         signal: ctl.signal,
-        onDelta: (piece, all) => {
-          // 等内部的「需要查阅」标记收齐再升级，流式半截也不露到正文里。
-          if (canEscalate && NEEDS_MATERIALS.startsWith(all.trim())) return;
-          received = all;
-          target.push(all);
-        },
+        onDelta: (_piece, all) => { received = all; target.push(all); },
         onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
       });
     const full = stripAgentMarkup(rawFull);
     if (!readingRequestCurrent(pending)) return;
-    if (canEscalate && full.trim() === NEEDS_MATERIALS) {
-      retryWithMaterials = true;
-      throw new Error('需要补充论文材料');
-    }
     // 引用核验必须在最终渲染之前完成：不合格的片段降级成纯页码，编造的页码直接不渲染。
     await auditAnswerCitations(full, { availablePages: citationMat.availablePages, scanned: scannedDoc });
     if (!readingRequestCurrent(pending)) return;
@@ -11193,9 +11115,7 @@ async function send(retryPending = null) {
     scheduleSessionSave();
   } catch (e) {
     if (!readingRequestCurrent(pending)) return;
-    if (retryWithMaterials) {
-      target.done('');
-    } else if (isAbort(e)) {
+    if (isAbort(e)) {
       // 保留已经收到的回答；状态放在回答下方，绝不覆盖回答正文。
       const kept = stripAgentMarkup(received);
       target.done(kept);
@@ -11218,7 +11138,6 @@ async function send(retryPending = null) {
       renderScopeMenu();
     }
   }
-  if (retryWithMaterials && !ctl.signal.aborted && readingRequestCurrent(pending)) return send(pending);
 }
 
 /* 拖框选区域；把鼠标拖出正文区上下边缘会自动滚动，于是可以一路框到下一页 ——

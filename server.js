@@ -897,6 +897,9 @@ async function handleChat(req, res) {
     stream: payload.stream !== false,
     temperature: temp.value,
   };
+  // GPT-6 Luna 的 Chat Completions 工具调用要求 none；同时避免默认 medium 思考拖慢交互。
+  // 模型选择仍只来自本机配置，消息内容不参与分流。
+  if (/^gpt-6-luna(?:-\d{4}-\d{2}-\d{2})?$/.test(String(model).split('/').at(-1))) body.reasoning_effort = 'none';
   if (mt.value !== null) body.max_tokens = mt.value;
   if (tools.value) {
     body.tools = tools.value;

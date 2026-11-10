@@ -139,6 +139,14 @@ pub fn handle(rq: Request, body: &[u8], _ctx: &Ctx) {
         "stream": stream,
         "temperature": temperature,
     });
+    // GPT-6 Luna Chat Completions function calling requires none (same as server.js).
+    // The authoritative model comes from local configuration, never from question text.
+    let chat_model = model.rsplit('/').next().unwrap_or(&model);
+    if chat_model == "gpt-6-luna" || (chat_model.starts_with("gpt-6-luna-")
+        && chat_model[11..].len() == 10
+        && chat_model[11..].bytes().enumerate().all(|(i, c)| if i == 4 || i == 7 { c == b'-' } else { c.is_ascii_digit() })) {
+        upstream_body["reasoning_effort"] = json!("none");
+    }
     if let Some(n) = max_tokens {
         if let Value::Object(m) = &mut upstream_body {
             m.insert("max_tokens".into(), json!(n));

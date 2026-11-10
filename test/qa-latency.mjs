@@ -35,7 +35,7 @@ const upstream = http.createServer(async (req, res) => {
   for await (const c of req) chunks.push(c);
   const body = JSON.parse(Buffer.concat(chunks));
   const sys = String(body.messages[0]?.content || '');
-  if (/后台学习记忆提取器|滚动摘要|会话标题/.test(sys)) {
+  if (/后台学习记忆提取器|滚动摘要|会话标题|问答会话起标题/.test(sys)) {
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ choices: [{ message: { content: '[]' } }] }));
     return;
@@ -78,15 +78,7 @@ const upstream = http.createServer(async (req, res) => {
     } else await reply(res, '读取后的短答案。〔p.3〕 未读页〔p.8〕');
     return;
   }
-  if (hasImages(body)) { await reply(res, '第3页的识读文本。', 150); return; }
-  if (mode === 'escalate' && !body.tools) {
-    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
-    chunk(res, { content: '[[PRT_NEEDS_' });
-    await wait(250);
-    chunk(res, { content: 'MATERIALS]]' }, 'stop');
-    res.end('data: [DONE]\n\n');
-    return;
-  }
+  if (hasImages(body)) { await reply(res, mode === 'image' ? '截图内容的模型回答。' : '第3页的识读文本。', 150); return; }
   if (mode === 'keepalive' && body.tools) {
     res.writeHead(200, { 'Content-Type': 'text/event-stream' });
     for (let i = 0; i < 5; i++) {
@@ -126,7 +118,7 @@ try {
   const listing = await (await fetch(`${BASE}/api/papers`)).json();
   assertIsolatedDataDir(resolveDataDir(listing.dir));
   assert.ok(listing.papers.some((p) => p.name === 'latency.pdf'), 'test fixture base required');
-  assert.ok((await fetch(`${BASE}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseURL: `http://127.0.0.1:${upstream.address().port}/v1`, model: 'latency-mock', apiKey: 'fake-test-key' }) })).ok);
+  assert.ok((await fetch(`${BASE}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseURL: `http://127.0.0.1:${upstream.address().port}/v1`, model: 'openai/gpt-6-luna', apiKey: 'fake-test-key' }) })).ok);
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', headless: 'shell', args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1450, height: 950 } });
   const page = await browser.newPage();
   const errors = [];
@@ -144,6 +136,8 @@ try {
   };
   const finish = () => page.waitForFunction(() => !window.__state.busy, { timeout: 30000 });
   const lastText = () => page.evaluate(() => [...document.querySelectorAll('#aiArea .msg.assistant .text')].at(-1)?.textContent || '');
+  const attachImage = () => page.evaluate(() => window.__state.attachments.push({ id: crypto.randomUUID(), kind: 'image', label: 'test screenshot', w: 1, h: 1,
+    dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' }));
 
   await page.evaluate(() => {
     window.__latencyOldProfile = { profile: window.__state.docProfile, doc: window.__state.docProfileDoc, promise: window.__state.docProfilePromise };
@@ -159,16 +153,31 @@ try {
   await finish();
   assert.equal(logs.length, 1, 'short direct answer must not be generated twice');
   assert.equal(logs[0].stream, true);
-  assert.equal(Boolean(logs[0].tools), false, 'ordinary questions must bypass tool planning');
+  assert.equal(logs[0].reasoning_effort, 'none', 'configured Luna uses its Chat Completions tool-compatible reasoning mode');
+  assert.equal(Boolean(logs[0].tools), true, 'the model must have tools even when it chooses a direct answer');
   assert.match(await lastText(), /短答案。/);
   await page.evaluate(() => {
     const old = window.__latencyOldProfile;
     window.__state.docProfile = old.profile; window.__state.docProfileDoc = old.doc; window.__state.docProfilePromise = old.promise;
   });
-  console.log(`PASS: ordinary answer bypasses whole-document scanning/tools and streams in ${firstTextMs} ms`);
+  console.log(`PASS: ordinary answer bypasses whole-document scanning; model chooses direct answer in one streamed request (${firstTextMs} ms)`);
+
+  await start('？'); await finish();
+  assert.equal(logs.length, 1, 'a question mark must not cause a forced material-gathering request: ' + JSON.stringify(logs.map((b) => ({ tools: !!b.tools, system: String(b.messages[0]?.content).slice(0, 180) }))));
+  assert.ok(logs[0].tools?.length > 0, 'a question mark must not disable model-selected tools either');
+  assert.match(await lastText(), /短答案/);
+  assert.doesNotMatch(logs[0].messages[0].content, /PRT_NEEDS_MATERIALS|查一下.*重新生成/);
+  console.log('PASS: question-mark reply is model generated, with tools available and no forced re-read');
+
+  mode = 'image';
+  await attachImage(); await start('解释这张图片'); await finish();
+  assert.equal(logs.length, 1, 'initial screenshot must not need a second generation');
+  assert.ok(hasImages(logs[0]) && logs[0].tools?.length > 0);
+  assert.match(await lastText(), /截图内容的模型回答/);
+  console.log('PASS: screenshots accompany the first model decision and the answer is reused');
 
   mode = 'tools';
-  await start(); await finish();
+  await start('？'); await finish();
   assert.equal(logs.length, 2, 'one tool round plus one answer, without extra generation');
   assert.deepEqual(logs[1].messages.filter((m) => m.role === 'tool').map((m) => m.tool_call_id), ['page3', 'page5']);
   const pages = await page.evaluate(() => [...[...document.querySelectorAll('#aiArea .msg.assistant')].at(-1).querySelectorAll('.page-ref')].map((n) => n.dataset.page));
@@ -181,11 +190,10 @@ try {
   await start('解释一下这个概念。'); await finish();
   // The follow-on material read starts immediately after the first request unwinds.
   await page.waitForFunction(() => !window.__state.busy && [...document.querySelectorAll('#aiArea .msg.assistant .text')].at(-1)?.textContent.includes('读取后的短答案'));
-  assert.equal(logs.length, 3);
-  assert.ok(!Boolean(logs[0].tools) && Boolean(logs[1].tools));
-  assert.doesNotMatch(await lastText(), /PRT_NEEDS/);
+  assert.equal(logs.length, 2);
+  assert.ok(Boolean(logs[0].tools) && Boolean(logs[1].tools));
   assert.equal(await page.evaluate(() => document.querySelectorAll('#aiArea .msg.assistant').length), beforeEscalate + 1);
-  console.log('PASS: insufficient current material automatically escalates within the same answer');
+  console.log('PASS: ordinary wording also permits model-selected tool calls without an extra routing request');
 
   mode = 'scan';
   await start(); await finish();
@@ -214,12 +222,14 @@ try {
 
   const six = '请查原文后逐题回答。\n' + Array.from({ length: 6 }, (_, i) => `${i + 1}. PERF_Q${i + 1} 请完整作答。`).join('\n');
   mode = 'batch';
+  await attachImage();
   const began = Date.now();
   await start(six); await finish();
   const elapsed = Date.now() - began;
   assert.equal(peak, 3);
   assert.equal(logs.filter((b) => b.tools).length, 2, 'batch shares one material-gathering loop');
   assert.equal(logs.filter((b) => !b.tools).length, 6);
+  assert.ok(logs.filter((b) => !b.tools).every(hasImages), 'all question requests retain the original screenshot after material gathering');
   assert.equal(completed[0], 2, 'finish order should differ from question order');
   const text = await lastText();
   for (let i = 1; i <= 6; i++) {
