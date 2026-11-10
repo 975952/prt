@@ -8665,7 +8665,7 @@ async function agentModelCall({ messages, tools, timeoutMs = 60000, signal = nul
 }
 
 /** 把图片直接放进首次用户消息，让模型自行决定回答还是查阅。 */
-function attachAnswerImages(messages, images = [], pageImages = []) {
+function attachAnswerImages(messages, images = [], pageImages = [], question = '') {
   if (!images.length && !pageImages.length) return;
   const last = messages[messages.length - 1];
   // 多图必须显式建立「标签 → 紧随其后的图片」一一对应。旧做法先把所有标签
@@ -8685,6 +8685,7 @@ function attachAnswerImages(messages, images = [], pageImages = []) {
     parts.push({ type: 'text', text: `【论文上下文页图 ${i + 1}/${pageImages.length}；${label}】下一张图片是论文页面上下文，不是用户截图。` });
     parts.push({ type: 'image_url', image_url: { url: im.dataUrl } });
   });
+  if (question) parts.push({ type: 'text', text: `【读者此刻的问题】${String(question).slice(0, 6000)}${images.length ? '\n请结合本轮新截图与上文讨论对象理解这句追问；先回应图片与本轮问题的对应关系，不要先重讲上一轮概念，也不要脱离上文另起话题。不能默认两张图就是同一问题的两个备选方案。' : ''}` });
   last.content = parts;
 }
 
@@ -8974,7 +8975,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
     base[0].content += `\n【当前阅读】PDF 共 ${viewer?.numPages || '?'} 页，所在 PDF 页码 ${pending.firstPage || '?'}；所在页材料为空时可自行决定是否读取页图。`;
     if (followUpDirectEnabled()) base[0].content += '\n连贯追问优先沿用上文，是否需要重新查证仍由你判断，不要因为输入只有问号就自动检查论文。';
     if (pending.forceFull) base[0].content += '\n读者要求重新生成，请重新审视前一回答；需要核实时自行调用工具。';
-    attachAnswerImages(base, images);
+    attachAnswerImages(base, images, [], pending.question);
     // 多题只共享一次材料读取，解题交给后面的并发请求，避免先完整解一遍又逐题重做。
     const gatherIndex = base.length;
     if (deferAnswer) base.push({ role: 'user', content: '本轮只为上述全部题目收集必要材料，不解题。材料足够时只回复「材料已备齐」，随后程序会逐题发起解答。' });
@@ -9013,7 +9014,8 @@ async function runAgentReadPath({ pending, reading, context, references, sources
       extraImages: runtime.extraImages || [],
       hasPageReadings: runtime.hasPageReadings,
       imagesProvided: true,
-      basis: stats.calls ? `本次依据：AI 自行读取 ${basisPages.length ? `p.${basisPages.join('、')}` : '（未读页）'}（${run.rounds} 轮 / ${stats.calls} 次工具）` : '本次依据：现有材料与对话',
+      basis: stats.calls ? `本次依据：AI 自行读取 ${basisPages.length ? `p.${basisPages.join('、')}` : '（未读页）'}（${run.rounds} 轮 / ${stats.calls} 次工具）`
+        : images.length ? `本次依据：本轮 ${images.length} 张截图与对话` : '本次依据：现有材料与对话',
       stats,
     };
   } catch {
@@ -9044,6 +9046,8 @@ function pageTextFromScanDigest(digest, page) {
 
 /** 本次材料的「对象 / 范围」一句话（给近因指令用） */
 function objectLabelFor(pending, reading) {
+  const screenshots = (pending?.attachments || []).filter((a) => a.kind === 'image').length;
+  if (screenshots) return `本轮新发的 ${screenshots} 张截图与当前问题`;
   const question = String(pending?.question || '');
   if ([...question.matchAll(/(?:^|\n)\s*(?:\(\s*\d+\s*\)|（\s*\d+\s*）|\d+[.、])\s*/g)].length > 1) {
     return '用户输入的全部题目';
@@ -10723,7 +10727,7 @@ async function send(retryPending = null) {
       : '请解释我加进来的这段内容。');
     const history = snapshotHistory(state.history);
     const selectionSource = selectionFromRight ? 'right' : '';
-    const reading = resolveReadingRequest({ question, selection: quoteText, selectionSource,
+    const reading = resolveReadingRequest({ question, selection: quoteText, selectionSource, screenshotCount: images.length,
       page: quotes.length ? (selectionFromRight ? null : attachmentPage) : screenPage, history });
     // 这次「所在页」：附件选区页 > 问题里明说的页码 > 追问沿用话题页 > 当前屏幕页。
     // 追问不再被屏幕页顶掉，否则模型会把读者刚滚到的那页当成新话题（上下文跟着屏幕跑）。
@@ -10844,8 +10848,10 @@ async function send(retryPending = null) {
       }
       scheduleSessionSave();     // 让 shots 引用跟着会话一起落盘
     }
-    const reading = pending.reading || resolveReadingRequest({ question: pending.question,
-      selection: pending.quoteText, page: pending.firstPage, history: pending.history });
+    const reading = pending.reading && (!images.length || pending.reading.screenshotCount === images.length)
+      ? pending.reading : resolveReadingRequest({ question: pending.question,
+        selection: pending.quoteText, page: pending.firstPage, history: pending.history,
+        selectionSource: pending.selectionSource || '', screenshotCount: images.length });
     // 重试时也复用第一次发送时定下的「所在页」与话题页，不受之后滚动影响
     if (pending.firstPage) reading.page = pending.firstPage;
     pending.reading = reading;
@@ -11045,7 +11051,7 @@ async function send(retryPending = null) {
         if (extraPages.length) pageImages = [...pageImages, ...await renderScanPages(extraPages.slice(0, 5))];
       } catch { /* 取页图失败不影响回答 */ }
     }
-    if (!agentRun?.imagesProvided) attachAnswerImages(messages, images, pageImages);
+    if (!agentRun?.imagesProvided) attachAnswerImages(messages, images, pageImages, pending.question);
     // 右栏只呈现回答正文与来源，不显示全文字数、联网条数等内部统计。
     meta = '';
     warnIfNoVisionModel(images.length > 0 || pageImages.length > 0);

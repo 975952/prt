@@ -119,7 +119,7 @@ try {
   assertIsolatedDataDir(resolveDataDir(listing.dir));
   assert.ok(listing.papers.some((p) => p.name === 'latency.pdf'), 'test fixture base required');
   assert.ok((await fetch(`${BASE}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ baseURL: `http://127.0.0.1:${upstream.address().port}/v1`, model: 'openai/gpt-6-luna', apiKey: 'fake-test-key' }) })).ok);
-  browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', headless: 'shell', args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1450, height: 950 } });
+  browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe', headless: 'shell', userDataDir: path.join(scratch, 'chrome-profile'), args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1450, height: 950 } });
   const page = await browser.newPage();
   const errors = [];
   page.on('pageerror', (err) => errors.push(String(err)));
@@ -170,11 +170,22 @@ try {
   console.log('PASS: question-mark reply is model generated, with tools available and no forced re-read');
 
   mode = 'image';
-  await attachImage(); await start('解释这张图片'); await finish();
+  await page.evaluate(() => { window.__state.history = [
+    { role: 'user', content: '1×1卷积再简单讲一下', focus: { text: '旧选区：FPN通道变换', page: 2, kind: 'selection', source: '' } },
+    { role: 'assistant', content: '1×1卷积会在每个位置重新组合通道。' },
+  ]; });
+  await attachImage(); await attachImage(); await start('所以到底是第一种还是第二种'); await finish();
   assert.equal(logs.length, 1, 'initial screenshot must not need a second generation');
   assert.ok(hasImages(logs[0]) && logs[0].tools?.length > 0);
+  const visualParts = logs[0].messages.at(-1).content;
+  assert.equal(visualParts.filter((p) => p.type === 'image_url').length, 2);
+  assert.match(visualParts[0].text, /本轮新附件|本轮新发的 2 张截图/);
+  assert.doesNotMatch(visualParts[0].text, /【选中文本 · 本次追问沿用/);
+  assert.match(visualParts.at(-1).text, /【读者此刻的问题】所以到底是第一种还是第二种/);
+  assert.ok(logs[0].messages.some((m) => m.role === 'assistant' && String(m.content).includes('重新组合通道')));
   assert.match(await lastText(), /截图内容的模型回答/);
-  console.log('PASS: screenshots accompany the first model decision and the answer is reused');
+  assert.match(await page.evaluate(() => [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1)?.querySelector('.entry-basis')?.textContent || ''), /本轮 2 张截图/);
+  console.log('PASS: two fresh screenshots and the question take precedence while prior conversation stays available');
 
   mode = 'tools';
   await start('？'); await finish();

@@ -78,7 +78,7 @@ const appSrc = fs.readFileSync(path.join(ROOT, 'public', 'js', 'app.js'), 'utf8'
 for (const [label, pattern] of [
   ['教学缓存键', '@${PROMPT_SYSTEM_VERSION}:p'],
   ['翻译缓存键', 'translate.selection@${PROMPT_SYSTEM_VERSION}'],
-  ['扫描页型缓存', 'DOC_PROFILE_VERSION = PROMPT_SYSTEM_VERSION'],
+  ['扫描页型缓存', 'DOC_PROFILE_VERSION = `${PROMPT_SYSTEM_VERSION}'],
   ['阅读索引缓存', 'SCAN_DIGEST_VERSION = PROMPT_SYSTEM_VERSION'],
   ['会话摘要版本', 'summaryPrompt: PROMPT_SYSTEM_VERSION'],
 ]) {

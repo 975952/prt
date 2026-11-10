@@ -52,7 +52,7 @@ export function prepareAsk(input = {}) {
     fullText, webResults, history = [], reading, references = [], profileBlock = null,
     teachingBlock = '', pageImages = [], screenshotCount = 0,
   } = input;
-  const request = reading || resolveReadingRequest({ question, selection, page, history, selectionSource });
+  const request = reading || resolveReadingRequest({ question, selection, page, history, selectionSource, screenshotCount });
   const role = ['selection', 'explicit', 'topic', 'screen'].includes(pageRole)
     ? pageRole : (selection ? 'selection' : 'screen');
   // 选中文本来自右栏（上一轮的问答/译文）而不是 PDF 正文：不能冒充「第 N 页原文」
@@ -101,6 +101,10 @@ export function qaUserContent(ctx) {
   const contextBlock = [];
   const pageHead = pageHeadFor(role, ctx.page);
   if (docTitle) contextBlock.push(`【论文】${docTitle}${pageHead}`);
+  if (ctx.screenshotCount > 0) {
+    contextBlock.push(`【本轮新附件】读者这次新发了 ${ctx.screenshotCount} 张截图，见紧随编号的图片。上文用于确定追问对象，新图用于核对和比较；既不能只复述旧解释，也不能只看图另起话题。所在页文字只是背景，不能替代截图内容。`);
+    if (request.previousFocus?.text) contextBlock.push(`【上文讨论对象 · 追问线索，不是本轮新选区】\n${request.previousFocus.text}\n请结合这条线索和新图理解当前问题；此前回答可能需要根据新图纠正。`);
+  }
   if (request.selection) {
     contextBlock.push(selectionBlock({
       selection: request.selection,
@@ -133,7 +137,7 @@ export function qaUserContent(ctx) {
 
 const QA_BASE = {
   kind: 'qa',
-  version: '2.0.0',
+  version: '2.1.0',
   identity: QA_IDENTITY,
   system: qaSystemBlocks(),
   systemJoin: '\n',

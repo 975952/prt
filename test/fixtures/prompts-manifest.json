@@ -1,14 +1,15 @@
 {
-  "systemVersion": "2026.11.3",
+  "systemVersion": "2026.11.4",
   "prompts": {
     "bg.digest": "1.0.0",
     "bg.memory.extract": "1.0.0",
     "bg.scan.transcribe": "1.0.0",
     "bg.sessionSummary": "1.0.0",
+    "bg.sessionTitle": "1.0.0",
     "op.evidence": "2.0.0",
     "op.limits": "2.0.0",
-    "qa.chat": "2.0.0",
-    "qa.explain": "2.0.0",
+    "qa.chat": "2.1.0",
+    "qa.explain": "2.1.0",
     "qa.screenshot": "1.0.0",
     "teach.condense": "1.0.0",
     "teach.intro": "2.0.0",
@@ -18,6 +19,7 @@
     "teach.walk": "2.0.0",
     "teach.walk.continue": "2.0.0",
     "teach.walk.reteach": "2.0.0",
+    "translate.screenshot": "1.0.0",
     "translate.selection": "2.0.0"
   }
 }

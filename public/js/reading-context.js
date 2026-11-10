@@ -70,7 +70,7 @@ export function resolvePageRole({ question, reading = null, screenPage = null, a
   return { page: pageNumber(screenPage) || pageNumber(reading?.page) || null, role: 'screen' };
 }
 
-export function resolveReadingRequest({ question, selection = '', page, history = [], screenRef = false, selectionSource = '' } = {}) {
+export function resolveReadingRequest({ question, selection = '', page, history = [], screenRef = false, selectionSource = '', screenshotCount = 0 } = {}) {
   const q = String(question || '请解释我加进来的这段内容。').trim();
   const intent = readingIntent(q, selection);
   const previous = [...history].reverse().find((m) => m?.role === 'user');
@@ -81,7 +81,9 @@ export function resolveReadingRequest({ question, selection = '', page, history 
   }
   // 「这一页讲了什么 / 这里怎么理解」是在问眼前的页面，不继承上一轮的选区对象。
   const screenQuestion = !selection && (screenRef || screenPageRequested(q));
-  const dependent = intent !== 'question' && !screenQuestion;
+  const newScreenshots = Math.max(0, Math.floor(Number(screenshotCount) || 0));
+  // 新附件属于本轮材料。历史仍参与理解追问，但不能被标成这轮用户新选中的对象。
+  const dependent = intent !== 'question' && !screenQuestion && !newScreenshots;
   // 右栏选区不挂 PDF 页码：它是对话里的文字，挂上页码就会被模型当成「第 N 页原文」
   const fromRight = selectionSource === 'right';
   const focus = selection ? { text: String(selection).slice(0, MAX_FOCUS),
@@ -92,7 +94,8 @@ export function resolveReadingRequest({ question, selection = '', page, history 
   const guidance = intent === 'guidance' ? q.slice(0, 400) : String(oldGuidance).slice(0, 400);
   return { question: q, selection: selection ? String(selection) : focus.kind === 'selection' ? focus.text : '',
     page: focus.page || (fromRight ? null : pageNumber(page)), focus, guidance, intent,
-    inherited: !selection && dependent && !!priorFocus };
+    inherited: !selection && dependent && !!priorFocus,
+    ...(newScreenshots ? { screenshotCount: newScreenshots, ...(priorFocus ? { previousFocus: priorFocus } : {}) } : {}) };
 }
 
 export function readingTurn(request, answer) {
@@ -107,7 +110,9 @@ export function snapshotReadingRequest(request) {
     selection: String(request.selection || '').slice(0, MAX_FOCUS), page: pageNumber(request.page),
     focus: cleanFocus(request.focus), guidance: String(request.guidance || '').slice(0, 400),
     intent: ['explain', 'followup', 'feedback', 'guidance', 'question'].includes(request.intent) ? request.intent : 'question',
-    inherited: !!request.inherited };
+    inherited: !!request.inherited,
+    ...(request.screenshotCount > 0 ? { screenshotCount: Math.floor(request.screenshotCount),
+      ...(cleanFocus(request.previousFocus) ? { previousFocus: cleanFocus(request.previousFocus) } : {}) } : {}) };
 }
 
 /** 老存档的界面条目比 history 更完整：补回「释」及丢掉的原文引用。 */
