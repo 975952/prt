@@ -1824,7 +1824,7 @@ function initViewer() {
     // 「读懂论文」：四项教学能力 + 学习档案（自动化直接点这些入口，不必去点菜单）
     TEACHING_OPS, teachingOpById, runTeaching, continueWalk, runPrereqItem, runVisual,
     openVisualPicker, detectPageObjects, pageTextOf, collectDocObjects, parsePrereqItems,
-    splitPrtBlock, hideStreamTail, renderAnswerHTML, renderTeachingExtras, teachingEntryFor,
+    splitPrtBlock, hideStreamTail, renderAnswerHTML, splitNumberedQuestions, renderTeachingExtras, teachingEntryFor,
     get teaching() { return state.teaching; },
     get profile() { return profileStore.data; },
     get profileEnabled() { return profileStore.enabled; },
@@ -8795,11 +8795,25 @@ function agentSearchPages(text, query, k = 4) {
 }
 
 /** Agent 工具运行时（全部只读；不写任何状态，除了「读过哪些页」的记录） */
-function createAgentRuntime(pending, { scannedDoc = false } = {}) {
+function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {}) {
   const numPages = Number(viewer?.numPages) || 0;
   const reading = pending.reading || null;
   /* 跨论文读取：papers 文件夹里所有已导入论文（懒加载一次；图片材料收集起来随最终回答一起发） */
   const other = { papers: null, images: [] };
+  const pageReadings = new Map();
+  const readImage = async (key, label, capture) => {
+    if (pageReadings.has(key)) return pageReadings.get(key);
+    const shot = await capture();
+    const text = await streamChat({
+      messages: [{ role: 'user', content: [
+        { type: 'text', text: `请读取${label}，忠实转写可见标题、正文、公式和页码，尤其关注用户问题：${String(pending.question || '').slice(0, 3000)}。看不清的内容明确标注，不要猜测。` },
+        { type: 'image_url', image_url: { url: shot.dataUrl } },
+      ] }], stream: false, temperature: 0, signal, idleMs: 60000,
+    });
+    const result = { text: String(text || '').slice(0, 8000), note: '视觉模型对该页的识读，可能有误，无法辨认处未核实' };
+    pageReadings.set(key, result);
+    return result;
+  };
   const loadPapers = async () => {
     if (other.papers) return other.papers;
     const r = await fetch('/api/papers');
@@ -8824,13 +8838,8 @@ function createAgentRuntime(pending, { scannedDoc = false } = {}) {
   const attachCurrentPageImage = async (page) => {
     const n = Number(page) || 1;
     if (n < 1 || (numPages && n > numPages)) return { page: n, error: `页码超出范围（1–${numPages || '?'}）` };
-    const already = other.images.some((im) => im.page === n && !String(im.label || '').includes('《'));
-    if (already) return { page: n, imageAttached: true, duplicate: true, chars: 0, text: '', note: '这一页原图已经在材料里了' };
-    if (other.images.length >= 4) return { page: n, error: '本次已加入 4 张页图，先用它们回答' };
     try {
-      const shot = await viewer.capturePageImage(n, { maxDim: 1400 });
-      other.images.push({ ...shot, page: n, label: `第 ${n} 页` });
-      return { page: n, imageAttached: true, chars: 0, text: '', note: '已把这一页的原图加入回答材料（直接读图，不做转写）' };
+      return { page: n, ...await readImage(`current:${n}`, `当前 PDF 第 ${n} 页`, () => viewer.capturePageImage(n, { maxDim: 1400 })) };
     } catch (e) {
       return { page: n, error: `取第 ${n} 页页图失败：${e?.message || e}` };
     }
@@ -8905,10 +8914,7 @@ function createAgentRuntime(pending, { scannedDoc = false } = {}) {
       const paper = findPaper(args.name);
       if (!paper) return { error: `没有找到论文「${String(args.name || '').slice(0, 60)}」，请先用 list_papers` };
       const page = Number(args.page) || 1;
-      if (other.images.length >= 4) return { error: '本次已加入 4 张页图，先用它们回答' };
-      const shot = await renderPdfPageImage(paper.url, page);
-      other.images.push({ ...shot, label: `《${paper.name}》第 ${page} 页` });
-      return { name: paper.name, page, attached: true, count: other.images.length, note: '已加入页图材料，最终回答会附上这张图' };
+      return { name: paper.name, page, ...await readImage(`${paper.path}:${page}`, `《${paper.name}》第 ${page} 页`, () => renderPdfPageImage(paper.url, page)) };
     },
     async getReadingState() {
       return {
@@ -8939,7 +8945,7 @@ function createAgentRuntime(pending, { scannedDoc = false } = {}) {
     },
     async readPageImage(page) {
       if (!Number.isInteger(page)) return { error: 'page 必须是整数' };
-      return { page, note: '已加入页图材料，最终回答会附上这张页图' };
+      return attachCurrentPageImage(page);
     },
     async readMemory(topic) {
       const items = selectProfileItems(profileStore.data, String(topic), '', 6, { docId: pending.docId || '' });
@@ -9001,7 +9007,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
   const limits = window.__agentTestLimits && typeof window.__agentTestLimits === 'object' ? window.__agentTestLimits : {};
   // 跨论文读取要临时打开别的 PDF，比只看当前文档慢，总预算放宽
   // 用户口径（2026-11-02）：工具轮次要够——模型发现读错页／页不够时应该能继续调用，而不是停在最后一轮。
-  const totalTimeoutMs = Math.max(1000, Number(limits.totalTimeoutMs) || 240000);
+  const totalTimeoutMs = Math.max(1000, Number(limits.totalTimeoutMs) || 1800000);
   const callTimeoutMs = Math.max(500, Number(limits.callTimeoutMs) || 20000);
   try {
     const base = askMessages({ ...baseMaterials, availablePages: baseMaterials.availablePages || [], scopeLabel: 'AI 自行读取', objectLabel: objectLabelFor(pending, reading) });
@@ -9009,7 +9015,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
     const folderLine = `【当前文件夹】${currentFolderPath() || 'papers/'}。默认只读**当前论文 / 当前文件夹**的材料；` +
       '用户要求在本文件夹的 PDF 中查找时，应检索并读取当前文件夹里的其他 PDF；用户指定全部论文或其他文件夹时才扩大范围。';
     base[0] = { role: 'system', content: `${system}\n\n${AGENT_SYSTEM_NOTE}\n${folderLine}` };
-    const runtime = createAgentRuntime(pending, { scannedDoc });
+    const runtime = createAgentRuntime(pending, { scannedDoc, signal });
     const run = await runAgentLoop({
       messages: base,
       runtime,
@@ -9081,6 +9087,14 @@ function objectLabelFor(pending, reading) {
   if (reading?.inherited) return `上一轮话题：${text.slice(0, 24)}`;
   if (reading?.selection) return `选中文本：${text.slice(0, 24)}`;
   return text.slice(0, 40);
+}
+
+/** Detect numbered independent questions without treating a single numbered list item as a batch. */
+function splitNumberedQuestions(input) {
+  const text = String(input || '');
+  const marks = [...text.matchAll(/(?:^|\n)[ \t]*(?:\(\s*(\d+)\s*\)|（\s*(\d+)\s*）|(\d+)[.、])[ \t]*/g)];
+  if (marks.length < 2 || marks.some((m, i) => Number(m[1] || m[2] || m[3]) !== i + 1)) return null;
+  return { intro: text.slice(0, marks[0].index).trim(), questions: marks.map((m, i) => text.slice(m.index + m[0].length, marks[i + 1]?.index ?? text.length).trim()) };
 }
 
 /** 本次发送范围（整篇 / 当前页 / 联网 / 截图） */
@@ -11101,7 +11115,29 @@ async function send(retryPending = null) {
     // 直接采用 directContent 会让模型根本没看到图 —— 这种情况必须再走一次最终流式请求。
     const directAnswer = String(agentRun?.directContent || '');
     const mustStreamForImages = !!directAnswer && (pageImages.length > 0 || images.length > 0);
-    const rawFull = directAnswer && !mustStreamForImages
+    const batch = splitNumberedQuestions(pending.inputValue);
+    let rawFull;
+    if (batch) {
+      const answers = [];
+      for (let i = 0; i < batch.questions.length; i++) {
+        const heading = `## 第${i + 1}题`;
+        const prefix = [...answers, heading].join('\n\n');
+        target.push(prefix + '\n\n正在解答…');
+        try {
+          const oneMessages = [...messages, { role: 'user', content: `本次只解答下面这一道题，完整作答，不要代答其他题。${batch.intro ? `共同要求：${batch.intro}\n` : ''}\n${batch.questions[i]}` }];
+          const answer = await chat({ messages: oneMessages, signal: ctl.signal,
+            onDelta: (_piece, all) => { received = `${prefix}\n\n${all}`; target.push(received); },
+            onTick: (ms) => setBusy(true, `第 ${i + 1}/${batch.questions.length} 题 · ${(ms / 1000).toFixed(0)}s`) });
+          answers.push(`${heading}\n\n${stripAgentMarkup(answer).trim() || '这一题未得到回答，请重新生成。'}`);
+        } catch (e) {
+          if (isAbort(e)) throw e;
+          answers.push(`${heading}\n\n这一题生成失败：${errText(e)}。请重新生成。`);
+        }
+        received = answers.join('\n\n');
+        target.push(received);
+      }
+      rawFull = answers.join('\n\n');
+    } else rawFull = directAnswer && !mustStreamForImages
       ? directAnswer
       : await chat({
         messages,
