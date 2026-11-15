@@ -22,13 +22,12 @@ const SNAPSHOT = path.join(import.meta.dirname, 'fixtures', 'prompts-manifest.js
 const DESIGN = path.join(ROOT, 'docs', '提示词工程-设计.md');
 const update = process.argv.includes('--update');
 
-const result = [];
+const failures = [];
 const check = (name, ok, detail = '') => {
-  result.push({ name, ok });
+  if (!ok) failures.push({ name, detail });
   console.log(`${ok ? '✅' : '❌'} ${name}${detail ? `  — ${detail}` : ''}`);
 };
-const failures = [];
-const fail = (name, detail) => { failures.push({ name, detail }); console.log(`❌ ${name}${detail ? `  — ${detail}` : ''}`); };
+const fail = (name, detail) => check(name, false, detail);
 
 const manifest = prompts.getManifest();
 const design = fs.readFileSync(DESIGN, 'utf8');
