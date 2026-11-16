@@ -1546,6 +1546,11 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .translation-batch > button:hover { color: var(--accent); border-color: var(--accent); }
 .translation-batch > button:disabled { opacity: .45; cursor: default; }
 .translation-batch > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.draft-storage { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; color: var(--fg-dim); font-size: var(--ui-fs-2xs); }
+.draft-storage[data-status="error"] { color: var(--err); }
+.draft-storage > span { flex: 1; overflow-wrap: anywhere; }
+.draft-storage > button { flex: none; padding: 2px 6px; border: 1px solid var(--border); border-radius: 4px; background: transparent; color: var(--fg); font: inherit; cursor: pointer; }
+.draft-storage > button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 /* 回答下方的来源列表 */
 .src-list { margin: 6px 0 0; padding: 0; list-style: none; display: flex; flex-direction: column; gap: 3px; }
 .src-list li { font-size: var(--ui-fs-xs); line-height: 1.45; color: var(--fg-dim); display: flex; gap: 5px; }

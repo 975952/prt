@@ -255,6 +255,7 @@ try {
     if (page.url().startsWith(base)) {
       await page.waitForFunction(() => document.readyState === 'complete', { timeout: 10000 });
       await page.evaluate(() => window.__ctx?.memoryIdle?.());
+      await page.evaluate(() => window.__ctx.flushComposerDrafts());
     }
     navigating = true;
     navigationGeneration++;
@@ -378,6 +379,8 @@ try {
   await page.evaluate(() => { const row = [...document.querySelectorAll('.msg.assistant')].find((r) => r.__sessionRecord?.status === 'failed'); row.querySelector('.acts button').click(); });
   await page.waitForFunction(() => !window.__state.busy && !window.__state.sessionEntries.some((r) => r.status === 'failed'), { timeout: 20000 });
   check('跨重启重试使用原对象及原历史', bodies.length === beforeRetry + 1 && lastText().includes(AUTHOR) && !lastText().includes('SqueezeNet'));
+  const consumedDraft = await page.evaluate(() => ({ text: document.querySelector('#chatInput').value, attachments: window.__state.attachments }));
+  check('跨刷新重试成功后原草稿附件移除且相同问题文字清空', consumedDraft.text === '' && consumedDraft.attachments.length === 0);
   await page.evaluate(() => window.__ctx.saveSessionNow());
   await page.click('#sessBtn');
   await page.waitForSelector('#sessionMenu:not(.hidden) .sess-new');
@@ -389,6 +392,64 @@ try {
   await open('other-paper.pdf');
   await send('他是谁', '', 1, 'current');
   check('换论文不会继承旧论文对象', !lastText().includes(AUTHOR) && !lastText().includes('SqueezeNet'));
+
+  // Keep this second draft scenario after the existing session/document isolation
+  // checks: its intentionally unsent next question must not alter their inputs.
+  const olderQuestion = '解释这段需要重试的旧材料';
+  const olderSelection = 'Old saved draft selection for retry.';
+  const newerQuestion = '下一条草稿，先保留不要发送';
+  const newerSelection = 'A separate newer selection for the next question.';
+  failAnswer = true;
+  await send(olderQuestion, olderSelection, 1, 'current');
+  failAnswer = false;
+  const newerRetryId = await page.evaluate(() => window.__state.sessionEntries.filter((row) => row.status === 'failed').at(-1)?.id);
+  assert.ok(newerRetryId, 'the second scenario has a failed request to restore');
+  await page.evaluate(() => window.__ctx.saveSessionNow());
+  await open('other-paper.pdf');
+  await page.waitForFunction((source) => window.__state.attachments.some((attachment) => attachment.text === source), {}, olderSelection);
+  const newerDraftBefore = await page.evaluate((question, source) => {
+    const input = document.querySelector('#chatInput'); input.value = question;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    window.__ctx.addToChat({ text: source, source: 'right' });
+    return { text: input.value, attachments: window.__state.attachments.filter((attachment) => attachment.text === source) };
+  }, newerQuestion, newerSelection);
+  assert.equal(newerDraftBefore.attachments.length, 1, 'exactly one newer attachment is added');
+  assert.equal(newerDraftBefore.attachments[0].from, 'right', 'the newer attachment retains its source');
+  const beforeNewerRetry = bodies.length;
+  await page.evaluate((id) => {
+    const row = [...document.querySelectorAll('.msg.assistant')].find((node) => node.__sessionRecord?.id === id);
+    row.querySelector('.acts button').click();
+  }, newerRetryId);
+  await page.waitForFunction((id) => !window.__state.busy && window.__state.sessionEntries.some((row) => row.id === id && row.status === 'complete'), { timeout: 20000 }, newerRetryId);
+  check('已有新草稿时重试仍只发送原失败请求', bodies.length === beforeNewerRetry + 1
+    && lastText().includes(olderQuestion) && lastText().includes(olderSelection)
+    && !lastText().includes(newerQuestion) && !lastText().includes(newerSelection));
+  const newerDraftAfter = await page.evaluate(() => ({ text: document.querySelector('#chatInput').value, attachments: window.__state.attachments }));
+  assert.deepEqual(newerDraftAfter, newerDraftBefore, 'retry consumes only the old attachment and preserves all newer draft metadata');
+  check('重试移除旧附件且完整保留新草稿文字和附件', true);
+  await page.evaluate(async () => { await window.__ctx.saveSessionNow(); await window.__ctx.flushComposerDrafts(); });
+  await open('other-paper.pdf');
+  await page.waitForFunction((question) => document.querySelector('#chatInput').value === question, {}, newerQuestion);
+  const newerDraftReloaded = await page.evaluate(() => ({ text: document.querySelector('#chatInput').value, attachments: window.__state.attachments }));
+  assert.deepEqual(newerDraftReloaded, newerDraftBefore, 'a refresh retains the next draft without reviving the consumed attachment');
+  check('再次刷新保留新草稿且已消费的旧附件不复活', true);
+
+  const regeneratedDraftBefore = await page.evaluate((question, source) => {
+    const input = document.querySelector('#chatInput'); input.value = question;
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    window.__ctx.addToChat({ text: source, page: 1 });
+    return { text: input.value, attachments: window.__state.attachments };
+  }, olderQuestion, olderSelection);
+  const beforeRegenerate = bodies.length;
+  await page.evaluate((id) => {
+    const row = [...document.querySelectorAll('.msg.assistant')].find((node) => node.__sessionRecord?.id === id);
+    [...row.querySelectorAll('.acts button')].find((button) => button.textContent === '重新生成').click();
+  }, newerRetryId);
+  await page.waitForFunction((id) => !window.__state.busy && window.__state.sessionEntries.some((row) => row.id === id && row.status === 'complete'), { timeout: 20000 }, newerRetryId);
+  assert.equal(bodies.length, beforeRegenerate + 1, 'regenerate sent the completed request again');
+  const regeneratedDraftAfter = await page.evaluate(() => ({ text: document.querySelector('#chatInput').value, attachments: window.__state.attachments }));
+  assert.deepEqual(regeneratedDraftAfter, regeneratedDraftBefore, 'regenerating a completed answer must not consume an identical new draft');
+  check('已完成回答重新生成不消费同文新草稿或新加的相同选区', true);
   check('操作期间没有页面错误', pageErrors.length === 0);
   if (requestFailures.length) {
     console.log('REQUEST_FAILURES', requestFailureContexts);
@@ -397,7 +458,9 @@ try {
   }
   check('操作期间没有意外请求失败', requestFailures.length === 0);
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ backend, pid: reader.pid, base, count,
-    requests: bodies, searches, refLookups, pageErrors, requestFailures, navigationCancellations, requestFailureContexts }, null, 2), 'utf8');
+    requests: bodies, searches, refLookups, pageErrors, requestFailures, navigationCancellations, requestFailureContexts,
+    draftRetry: { consumedDraft, newerDraftBefore, newerDraftAfter, newerDraftReloaded,
+      regeneratedDraftBefore, regeneratedDraftAfter } }, null, 2), 'utf8');
   console.log(`QA ${backend}: ${count}/${count} passed; evidence: ${scratch}`);
 } finally {
   if (browser) { if (backend === 'exe') browser.disconnect(); else await browser.close(); }

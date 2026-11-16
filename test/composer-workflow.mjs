@@ -335,6 +335,7 @@ try {
   // Hold that real API request while the user changes panels and drafts.
   await page.evaluate(async () => {
     await window.__ctx.saveSessionNow();
+    await window.__ctx.flushComposerDrafts();
     const sessions = await import('/js/sessions.js'); sessions.sessionsSetEnterMode('choose');
   });
   await page.reload({ waitUntil: 'domcontentloaded' });

@@ -3,6 +3,7 @@ import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, es
 import { iconEl, iconHTML, hasIcon } from './icons.js';
 import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
 import { createComposerDraftStore } from './composer-drafts.js';
+import { createDraftPersistence } from './draft-persistence.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage } from './pdfview.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
@@ -669,6 +670,8 @@ const uiFontSizePx = (v) => clamp(Number(v) || DEFAULT_UI_STYLE.uiFontSize, 12, 
 const ctlScaleOf = (v) => clamp(Number(v) || DEFAULT_UI_STYLE.controlSize, 80, 130) / 100;
 
 const composerDrafts = createComposerDraftStore();
+const draftPersistence = createDraftPersistence({ windowId });
+const composerDraftStates = new Map();
 let composerOwner = null;
 let composerRevision = 0;
 const translationBatches = new Map();
@@ -821,6 +824,8 @@ let serverState = {};
       await saveSessionNow();
       await saveProgressNow({ silent: true });
       tabsPersist();
+      try { await flushComposerDrafts(); }
+      catch { throw new Error('草稿尚未保存，请稍后重试关闭窗口。'); }
     },
   });
   initWindowChrome();     // 应用内标题栏：窗口按钮 / 拖动 / 八向缩放（无 IPC 时整块隐藏）
@@ -1887,7 +1892,7 @@ function initViewer() {
     updateSendScope, runSearch, stepHit, searchLibrary, searchLibraryPages, searchScopeLabel,
     get searchScope() { return currentSearchScope(); },
     setSearchScope(scope) { const v = writeSearchScope(scope); try { $('#searchScope')?.querySelectorAll('[data-scope]').forEach((btn) => btn.setAttribute('aria-pressed', btn.dataset.scope === v ? 'true' : 'false')); } catch { /* ignore */ } return v; },
-    addToChat, addImageToChat, removeAttach,
+    addToChat, addImageToChat, removeAttach, flushComposerDrafts,
     // 截图框选（自动化直接验证长截图/双页/缩放；真实入口还是鼠标拖框）
     captureRegionShot,
     renderAttachments, refreshReturnButton,
@@ -5114,9 +5119,130 @@ function composerMode() { return rightPanelInCol(1) === 'translate' ? 'translate
 
 function sameComposerOwner(a, b) { return !!a && !!b && a.docId === b.docId && a.mode === b.mode; }
 function currentComposerOwner(mode = composerMode()) { return { docId: state.doc?.docId || '', mode }; }
-function saveComposerDraft() {
+function composerDraftState(owner) {
+  const key = JSON.stringify([owner.docId || '', owner.mode]);
+  if (!composerDraftStates.has(key)) composerDraftStates.set(key, {
+    owner: { ...owner }, revision: 0, loaded: false, dirty: false, loading: null, saving: null, timer: null, error: '',
+  });
+  return composerDraftStates.get(key);
+}
+function sameComposerDraft(a, b) {
+  return a.text === b.text && a.attachments.length === b.attachments.length
+    && a.attachments.every((item, i) => {
+      const other = b.attachments[i];
+      const keys = new Set([...Object.keys(item), ...Object.keys(other)]);
+      return [...keys].every((key) => item[key] === other[key]);
+    });
+}
+function renderDraftStorage() {
+  const row = $('#draftStorage');
+  if (!row || !composerOwner) return;
+  const info = composerDraftState(composerOwner);
+  const status = info.error ? 'error' : info.loading ? 'loading' : info.dirty || info.saving ? 'saving' : 'saved';
+  row.dataset.status = status;
+  row.classList.toggle('hidden', status === 'saved');
+  $('#draftStorageText').textContent = info.error === 'load' ? '上次草稿未能读取，当前输入已保留'
+    : info.error ? '草稿尚未保存，关闭前请重试' : status === 'loading' ? '正在恢复草稿…' : '正在保存草稿…';
+  const retry = $('#draftStorageRetry');
+  retry.classList.toggle('hidden', !info.error);
+  retry.onclick = () => {
+    info.error = '';
+    const work = info.loaded ? persistComposerDraft(info) : loadComposerDraft(info.owner);
+    work.catch(() => {});
+    renderDraftStorage();
+  };
+}
+function queueComposerDraftSave(info) {
+  if (info.timer) clearTimeout(info.timer);
+  if (!info.loaded || info.error) return;
+  info.timer = setTimeout(() => { info.timer = null; persistComposerDraft(info).catch(() => {}); }, 180);
+}
+function writeComposerDraft(owner, draft, { edited = false } = {}) {
+  const previous = composerDrafts.read(owner);
+  const next = composerDrafts.write(owner, draft);
+  if (!edited && sameComposerDraft(previous, next)) return next;
+  const info = composerDraftState(owner);
+  info.revision += 1;
+  info.dirty = true;
+  if (info.loaded) queueComposerDraftSave(info);
+  else if (!info.loading && !info.error) loadComposerDraft(owner).catch(() => {});
+  renderDraftStorage();
+  return next;
+}
+async function loadComposerDraft(owner) {
+  const info = composerDraftState(owner);
+  if (info.loaded) return;
+  if (info.loading) return info.loading;
+  const revision = info.revision;
+  info.loading = (async () => {
+    try {
+      const saved = await draftPersistence.load(owner);
+      // 显式输入/删除优先于迟到的存档；初次显示空框本身不算编辑。
+      if (!info.dirty && info.revision === revision) {
+        if (sameComposerOwner(owner, composerOwner)) saveComposerDraft();
+        if (!info.dirty && info.revision === revision) {
+          composerDrafts.write(owner, saved);
+          if (sameComposerOwner(owner, composerOwner)) {
+            $('#chatInput').value = saved.text;
+            state.attachments = saved.attachments;
+            composerRevision += 1;
+            resizeComposer();
+            renderAttachments();
+          }
+        }
+      }
+      info.loaded = true;
+      info.error = '';
+    } catch (error) {
+      info.error = 'load';
+      throw error;
+    } finally {
+      info.loading = null;
+      if (info.loaded && info.dirty) queueComposerDraftSave(info);
+      renderDraftStorage();
+    }
+  })();
+  renderDraftStorage();
+  return info.loading;
+}
+async function persistComposerDraft(info) {
+  if (info.timer) { clearTimeout(info.timer); info.timer = null; }
+  if (!info.loaded) await loadComposerDraft(info.owner);
+  if (info.saving) return info.saving;
+  if (!info.dirty) return;
+  const revision = info.revision;
+  const snapshot = composerDrafts.read(info.owner);
+  info.saving = (async () => {
+    try {
+      await draftPersistence.save(info.owner, snapshot);
+      if (revision === info.revision) info.dirty = false;
+      info.error = '';
+    } catch (error) {
+      info.error = 'save';
+      throw error;
+    } finally {
+      info.saving = null;
+      if (info.dirty && !info.error) queueComposerDraftSave(info);
+      renderDraftStorage();
+    }
+  })();
+  renderDraftStorage();
+  return info.saving;
+}
+async function flushComposerDrafts() {
+  saveComposerDraft();
+  while ([...composerDraftStates.values()].some((info) => info.dirty || info.saving)) {
+    await Promise.all([...composerDraftStates.values()].filter((info) => info.dirty || info.saving)
+      .map((info) => persistComposerDraft(info)));
+  }
+  await draftPersistence.flush();
+}
+function hasUnsavedComposerDrafts() {
+  return [...composerDraftStates.values()].some((info) => info.dirty || info.saving);
+}
+function saveComposerDraft({ edited = false } = {}) {
   if (!composerOwner) return;
-  composerDrafts.write(composerOwner, { text: $('#chatInput')?.value || '', attachments: state.attachments });
+  writeComposerDraft(composerOwner, { text: $('#chatInput')?.value || '', attachments: state.attachments }, { edited });
 }
 function resizeComposer() {
   const input = $('#chatInput');
@@ -5136,12 +5262,14 @@ function activateComposerDraft(mode) {
   if (input) input.value = draft.text;
   resizeComposer();
   renderAttachments();
+  loadComposerDraft(owner).catch(() => {});
+  renderDraftStorage();
 }
 function changeDraftAttachments(owner, change) {
   if (sameComposerOwner(owner, composerOwner)) saveComposerDraft();
   const draft = composerDrafts.read(owner);
   draft.attachments = change(draft.attachments);
-  composerDrafts.write(owner, draft);
+  writeComposerDraft(owner, draft);
   if (sameComposerOwner(owner, composerOwner)) {
     state.attachments = draft.attachments;
     renderAttachments();
@@ -5486,21 +5614,25 @@ function serialiseRetryPayload(raw) {
       kind, docId: String(raw.docId || '').slice(0, 240), docTitle: String(raw.docTitle || '').slice(0, 240),
       inputValue: String(raw.inputValue || '').slice(0, 6000), question: String(raw.question || '').slice(0, 6000),
       quoteText: String(raw.quoteText || '').slice(0, 6000), firstPage: raw.firstPage || null,
+      selectionSource: raw.selectionSource === 'right' ? 'right' : '',
       useFullText: !!raw.useFullText, useWeb: !!raw.useWeb,
       scopeRange: String(raw.scopeRange || Object.values(SCOPE_RANGES).find((r) => r.full === !!raw.useFullText && r.web === !!raw.useWeb)?.key || ''),
       reading: snapshotReadingRequest(raw.reading),
       history: snapshotHistory(raw.history || []).slice(-6).map((m) => ({ ...m, content: m.content.slice(0, 6000) })),
       attachments: (Array.isArray(raw.attachments) ? raw.attachments : []).slice(0, 12).map((a) => {
-        const kind0 = a?.kind === 'image' ? 'image' : 'text';
+        const kind0 = a?.kind === 'image' || a?.screenshot ? 'image' : 'text';
+        // 草稿中的 ID 与图片文件 ID 是两种身份，重试后只消费同一份草稿附件。
+        const draftId = String(a?.draftId || (a?.screenshot ? '' : a?.id) || '').slice(0, 80);
         return kind0 === 'image'
           ? {
-            kind: 'image', page: a?.page || null, label: String(a?.label || '截图').slice(0, 120),
+            kind: 'image', draftId, page: a?.page || null, label: String(a?.label || '截图').slice(0, 120),
             w: Number(a?.w) || 0, h: Number(a?.h) || 0,
             // 图片单独存：只记 id（32 位十六进制）；取不到 id 的旧附件保留 screenshot 标记走旧提示
-            id: validAttachmentId(a?.ref) ? a.ref : '',
+            id: validAttachmentId(a?.ref) ? a.ref : (a?.screenshot && validAttachmentId(a?.id) ? a.id : ''),
             screenshot: true,
           }
-          : { kind: 'text', page: a?.page || null, text: String(a?.text || '').slice(0, 3000) };
+          : { kind: 'text', draftId, page: a?.from === 'right' ? null : a?.page || null,
+            from: a?.from === 'right' ? 'right' : '', text: String(a?.text || '').slice(0, 3000) };
       }),
     };
   }
@@ -6288,7 +6420,7 @@ function restoreComposerFallback(question, payload = null) {
   revealPanel('chat');
   const ta = $('#chatInput');
   if (!ta) return;
-  const text = String(payload?.inputValue || question || '').trim();
+  const text = String(payload?.inputValue ?? question ?? '').trim();
   ta.value = text;
   ta.style.height = 'auto';
   ta.style.height = `${Math.min(130, ta.scrollHeight)}px`;
@@ -6297,7 +6429,7 @@ function restoreComposerFallback(question, payload = null) {
     state.useWeb = !!payload.useWeb;
     const textAttachments = (Array.isArray(payload.attachments) ? payload.attachments : [])
       .filter((a) => a?.kind === 'text' && String(a.text || '').trim())
-      .map((a) => ({ id: uid(), kind: 'text', page: a.from === 'right' ? null : a.page || null,
+      .map((a) => ({ id: String(a.draftId || '') || uid(), kind: 'text', page: a.from === 'right' ? null : a.page || null,
         text: String(a.text).slice(0, 3000), from: a.from || '' }));
     state.attachments = textAttachments;
     renderAttachments();
@@ -6361,6 +6493,7 @@ function restoreRetryCallback(row, entry, priorUser) {
     const openSeq = state.openSeq;
     const retryOwner = composerOwner;
     const retryRevision = composerRevision;
+    const retryDraft = captureRetryDraft(entry, docId);
     let imageAttachments = [];
     if (recoverable.length) {
       const urls = await Promise.all(recoverable.map((a) => fetchAttachmentDataUrl(a.id, docId, sid)));
@@ -6376,7 +6509,7 @@ function restoreRetryCallback(row, entry, priorUser) {
         return;
       }
       imageAttachments = recoverable.map((a, i) => ({
-        id: uid(), kind: 'image', page: a.page || null, dataUrl: urls[i],
+        id: String(a.draftId || '') || uid(), kind: 'image', page: a.page || null, dataUrl: urls[i],
         w: Number(a.w) || 0, h: Number(a.h) || 0,
         label: String(a.label || '截图').slice(0, 120), ref: a.id,
       }));
@@ -6389,12 +6522,12 @@ function restoreRetryCallback(row, entry, priorUser) {
     const attachments = [
       ...rawAttachments
         .filter((a) => a?.kind === 'text' && String(a.text || '').trim())
-        .map((a) => ({ id: uid(), kind: 'text', page: a.from === 'right' ? null : a.page || null,
+        .map((a) => ({ id: String(a.draftId || '') || uid(), kind: 'text', page: a.from === 'right' ? null : a.page || null,
           text: String(a.text).slice(0, 3000), from: a.from || '' })),
       ...imageAttachments,
     ];
     const pending = {
-      inputValue: String(payload.inputValue || payload.question || ''),
+      inputValue: String(payload.inputValue ?? payload.question ?? ''),
       question: String(payload.question || fallbackQuestion || '请解释我加进来的这段内容。'),
       attachments,
       quoteText: String(payload.quoteText || attachments.map((a) => (a.page ? `[第${a.page}页] ` : '') + (a.text || '')).join('\n\n')),
@@ -6418,7 +6551,7 @@ function restoreRetryCallback(row, entry, priorUser) {
       toast('已恢复问题；先配置模型接口，再点发送。', 'ok', 4200);
       return;
     }
-    send(pending);
+    send(pending, retryDraft);
   };
 }
 
@@ -6454,7 +6587,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
         if (!refs?.length || (only === 'chat' && row.block !== 'chat')
           || (only === 'translate' && row.block !== 'translate')) return;
         const origin = row?.retry?.kind === 'translate-shot' ? row.retry : null;
-        remoteThumbs.set(row, await hydrateShotThumbs(refs, origin?.docId || docId,
+        remoteThumbs.set(row, await hydrateShotThumbs(refs, origin?.docId || row?.retry?.docId || row?.docId || docId,
           typeof origin?.sid === 'string' ? origin.sid : sid));
       }));
       if (!canApply()) return;
@@ -6551,7 +6684,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
       if (row.screenshot || shotRefs.length) {
         if (shotRefs.length) {
           const origin = row?.retry?.kind === 'translate-shot' ? row.retry : null;
-          const hydrated = canApply ? remoteHydrated : await hydrateShotThumbs(shotRefs, origin?.docId || docId,
+          const hydrated = canApply ? remoteHydrated : await hydrateShotThumbs(shotRefs, origin?.docId || row?.retry?.docId || row?.docId || docId,
             typeof origin?.sid === 'string' ? origin.sid : sid);
           thumbs = hydrated.thumbs;
           shotsLost = hydrated.missing;
@@ -9718,7 +9851,7 @@ function returnTranslationBatchToDraft(batch) {
   draft.attachments = [...remaining.filter((item) => item.kind === 'image' && !ids.has(item.id))
     // 新一轮发送可能已经换了会话；原图仍在内存，重新上传，不能复用旧 sid 的 ref。
     .map(({ id, dataUrl, w, h, pages, page, label }) => ({ id, kind: 'image', dataUrl, w, h, pages, page, label })), ...draft.attachments];
-  composerDrafts.write(owner, draft);
+  writeComposerDraft(owner, draft);
   if (sameComposerOwner(owner, composerOwner)) {
     $('#chatInput').value = draft.text;
     state.attachments = draft.attachments;
@@ -10269,11 +10402,30 @@ function takeAttachments() {
   return list;
 }
 
-function dropSentAttachments(pending) {
+function captureRetryDraft(entry, docId) {
+  const owner = { docId: docId || '', mode: 'chat' };
+  if (sameComposerOwner(owner, composerOwner)) saveComposerDraft();
+  return { owner, revision: composerDraftState(owner).revision,
+    consumeText: entry?.root.__sessionRecord?.status === 'failed' };
+}
+
+function dropSentAttachments(pending, retryDraft = null) {
   const ids = new Set((pending?.attachments || []).map((a) => a && a.id).filter(Boolean));
-  if (!ids.size) return;
   const owner = pending.composerOwner || { docId: pending.docId || '', mode: 'chat' };
-  changeDraftAttachments(owner, (items) => items.filter((a) => !ids.has(a.id)));
+  if (sameComposerOwner(owner, composerOwner)) saveComposerDraft();
+  const draft = composerDrafts.read(owner);
+  draft.attachments = draft.attachments.filter((a) => !ids.has(a.id));
+  // 仅失败回填的原问题可被重试消费；重新生成和等待期间的新编辑保持原样。
+  if (retryDraft?.consumeText && sameComposerOwner(owner, retryDraft.owner)
+      && composerDraftState(owner).revision === retryDraft.revision
+      && pending.inputValue && draft.text === pending.inputValue) draft.text = '';
+  writeComposerDraft(owner, draft);
+  if (sameComposerOwner(owner, composerOwner)) {
+    $('#chatInput').value = draft.text;
+    state.attachments = draft.attachments;
+    resizeComposer();
+    renderAttachments();
+  }
 }
 
 /** 发送失败：回填原问答草稿；用户已写的下一条问题保持原样。 */
@@ -10288,7 +10440,7 @@ function restoreSentAttachments(pending) {
   });
   const draft = composerDrafts.restoreAttachments(owner, recoverable);
   if (!draft.text) draft.text = String(pending.inputValue || '');
-  composerDrafts.write(owner, draft);
+  writeComposerDraft(owner, draft, { edited: true });
   if (sameComposerOwner(owner, composerOwner)) {
     $('#chatInput').value = draft.text;
     state.attachments = draft.attachments;
@@ -10370,7 +10522,7 @@ function initComposer() {
   });
   ta.addEventListener('input', () => {
     composerRevision += 1;
-    saveComposerDraft();
+    saveComposerDraft({ edited: true });
     resizeComposer();
     updateSendScope();
   });
@@ -10920,18 +11072,32 @@ function translateOnlyAsk(text) {
 }
 
 let sendPreparing = false;
-async function send(retryPending = null) {
+function chatRetryPayload(pending) {
+  return {
+    kind: 'chat', docId: pending.docId, docTitle: pending.docTitle,
+    inputValue: pending.inputValue, question: pending.question, quoteText: pending.quoteText,
+    firstPage: pending.firstPage, pageRole: pending.pageRole, attachments: pending.attachments,
+    selectionSource: pending.selectionSource || '', useFullText: pending.useFullText, useWeb: pending.useWeb,
+    scopeRange: pending.scopeRange, reading: pending.reading, history: pending.history,
+  };
+}
+async function send(retryPending = null, retryDraft = null) {
   if (sendPreparing) return;
   sendPreparing = true;
-  try { return await sendWithDraft(retryPending); }
+  const guard = retryDraft || (retryPending ? captureRetryDraft(retryPending.entry, retryPending.docId) : null);
+  try { return await sendWithDraft(retryPending, guard); }
   finally { sendPreparing = false; }
 }
 
-async function sendWithDraft(retryPending = null) {
+async function sendWithDraft(retryPending = null, retryDraft = null) {
   const sendingOwner = composerOwner;
   const sendingRevision = composerRevision;
   const draftUnchanged = () => sendingOwner === composerOwner && sendingRevision === composerRevision;
+  // 恢复的请求可能先于 IndexedDB 草稿到达；先读取原草稿，避免迟到的读取复活已发送附件。
+  // 存储不可用时仍允许问答，保存状态继续显示恢复/写入错误。
+  if (retryDraft) await loadComposerDraft(retryDraft.owner).catch(() => {});
   if (!await allowEdit('问答')) return;
+  if (retryPending && !readingRequestCurrent(retryPending)) return;
   if (!retryPending && !draftUnchanged()) return;
   const ta = $('#chatInput');
   if (state.busy) return;
@@ -11056,15 +11222,7 @@ async function sendWithDraft(retryPending = null) {
     });
     pending.entry = addEntry({
       block: 'chat', tag: 'answer', page: firstPage,
-      retry: {
-        kind: 'chat', docId: pending.docId, docTitle: pending.docTitle,
-        inputValue: pending.inputValue, question: pending.question, quoteText: pending.quoteText,
-        firstPage: pending.firstPage, pageRole: pending.pageRole, attachments: pending.attachments,
-        selectionSource: pending.selectionSource || '',
-        useFullText: pending.useFullText, useWeb: pending.useWeb,
-        scopeRange: pending.scopeRange,
-        reading, history,
-      },
+      retry: chatRetryPayload(pending),
     });
     // 回答存笔记时标题默认用用户的问题（会话恢复时另有一处从历史里回填）
     if (pending.entry) {
@@ -11077,7 +11235,10 @@ async function sendWithDraft(retryPending = null) {
     pending.entry.root.classList.remove('err', 'error');
     pending.entry.root.querySelectorAll('.entry-meta, .source-details, .src-list, .agent-steps').forEach((node) => node.remove());
     const record = pending.entry.root.__sessionRecord;
-    if (record) { record.text = ''; record.meta = ''; record.status = 'pending'; }
+    if (record) {
+      record.text = ''; record.meta = ''; record.status = 'pending';
+      record.retry = chatRetryPayload(pending);
+    }
   }
 
   const ctl = makeController();
@@ -11086,7 +11247,7 @@ async function sendWithDraft(retryPending = null) {
   rememberExplicitIdentity(pending.question, {
     docId: pending.docId || '', paper: pending.docTitle || '', capability: 'chat',
   });
-  dropSentAttachments(pending);
+  dropSentAttachments(pending, retryDraft);
   // 这条待发记录的范围固定下来：state 的两个标记跟着它走（重试时 pending 原样复用，不会串范围）
   applyRangeForSend(pending.scopeRange || currentRange());
   const images = pending.attachments.filter((a) => a.kind === 'image');
@@ -12639,8 +12800,12 @@ function saveOnUnload(url, text) {
   } catch { /* 尽力而为 */ }
 }
 
-window.addEventListener('beforeunload', () => {
+window.addEventListener('beforeunload', (event) => {
   if (isWindowClosed()) return;
+  saveComposerDraft();
+  const draftPending = hasUnsavedComposerDrafts();
+  flushComposerDrafts().catch(() => {});
+  if (draftPending) { event.preventDefault(); event.returnValue = ''; }
   // 不能只是 cancel：那样刚翻的那页进度就丢了。用 keepalive fetch 保证送达。
   saveProgress.cancel?.();
   persistSession.flush?.();
@@ -12661,4 +12826,8 @@ window.addEventListener('beforeunload', () => {
     const payload = { ...serverState, docs, lastDoc: state.doc.docId, lastUrl: state.doc.url, lastName: state.doc.name };
     saveOnUnload('/api/state', JSON.stringify(payload));
   } catch { /* 尽力而为 */ }
+});
+
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') flushComposerDrafts().catch(() => {});
 });
