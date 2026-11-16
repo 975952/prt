@@ -12913,7 +12913,7 @@ function checkConfigWarning() {
 function initShortcuts() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
-    const typing = tag === 'input' || tag === 'textarea' || e.target.isContentEditable;
+    const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
 
     if (e.key === 'Escape') {
       // Esc 的第一优先级：退出全屏（全屏时用户只有这个明确预期；引用高亮不再用 Esc 取消）

@@ -753,7 +753,7 @@ body.dragging .viewer { pointer-events: none; }
   /* 缩放时页面尺寸会整体变一遍；浏览器的「滚动锚定」会自己补 scrollTop，
      和 pdfview.js 里自己算的锚点打架（缩放后位置会飘）。锚点一律由 JS 管。 */
   overflow-anchor: none; }
-.pages { display: flex; flex-direction: column; align-items: center; width: max-content; min-width: 100%; gap: 14px; padding: 14px 0 50px; }
+.pages { --page-gap: 14px; display: flex; flex-direction: column; align-items: center; width: max-content; min-width: 100%; gap: var(--page-gap); padding: 14px 0 50px; }
 /* Old render-scale overlays may extend beyond the new paper while repainting.
    Only the laid-out paper defines horizontal travel. Preview transforms retain
    their own clipping at the viewer while the pointer gesture is in progress. */
@@ -762,10 +762,11 @@ body.dragging .viewer { pointer-events: none; }
 /* 双页显示（用户口径 2026-11-02）：两页一行、按行换行。页宽仍由 JS 布局按比例写死，
    这里只负责换成横向 flex 并留出页间距；间距值必须和 pdfview.js 的 TWO_UP_GAP 一致。 */
 .pages.two-up {
+  --page-gap: 18px;
   width: 100%; max-width: 100%;
   flex-direction: row; flex-wrap: wrap; align-items: flex-start; align-content: flex-start;
   justify-content: center;
-  column-gap: 18px; row-gap: 18px;
+  column-gap: 18px; row-gap: var(--page-gap);
 }
 
 .pages.zoom-preview .textLayer { visibility: hidden; }
@@ -817,7 +818,11 @@ body.dragging .viewer { pointer-events: none; }
 }
 /* canvas 用内联 left/top/width/height 定位：高倍放大只渲染可见切片 */
 .page canvas { position: absolute; left: 0; top: 0; display: block; border-radius: 3px; }
-.page .page-number { position: absolute; left: 50%; bottom: -13px; transform: translateX(-50%); font-size: 10px; color: var(--fg-faint); user-select: none; }
+.page .page-number {
+  position: absolute; left: 50%; top: 100%; transform: translateX(-50%);
+  display: flex; align-items: center; justify-content: center; min-width: 24px; height: var(--page-gap);
+  font-size: 10px; line-height: 1; color: var(--fg-faint); font-variant-numeric: tabular-nums; user-select: none;
+}
 .page.placeholder::after {
   content: ""; position: absolute; inset: 0; border-radius: 3px;
   background: repeating-linear-gradient(115deg, transparent, transparent 14px, rgba(120, 110, 80, .10) 14px, rgba(120, 110, 80, .10) 28px);
@@ -986,9 +991,9 @@ body.dragging .viewer { pointer-events: none; }
 }
 .viewer-foot .foot-grp { display: flex; align-items: center; gap: 3px; }
 .viewer-foot .tbtn { width: 30px; height: 30px; }
-/* 页码输入框搬进底栏后给大一点，和 44px 的栏高匹配 */
-.viewer-foot .page-input { height: 26px; width: 52px; font-size: var(--ui-fs); text-align: center; }
-.viewer-foot .of { color: var(--fg-faint); }
+/* 输入值和总页数共用高度与字号，去掉输入框默认内边距带来的基线偏移。 */
+.viewer-foot .page-input { height: 28px; width: 44px; margin: 0; padding: 0 4px; font-size: var(--ui-fs); line-height: 28px; text-align: center; }
+.viewer-foot .of { display: inline-flex; align-items: center; gap: 4px; height: 28px; font-size: var(--ui-fs); line-height: 28px; color: var(--fg-faint); }
 .viewer-foot .zoom-word { color: var(--fg-faint); margin-right: 4px; }
 .viewer-foot .zoom-range { width: 150px; }
 .viewer-foot .zoom-pct { min-width: 46px; text-align: right; font-variant-numeric: tabular-nums; }
@@ -1526,6 +1531,7 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .modal-box { cursor: default; }
 
 .composer-opts { display: flex; align-items: center; gap: calc(var(--ctl-gap) + 3px); padding: 3px 2px 0; min-height: 22px; position: relative; }
+.composer-opts:has(> .composer-hint:empty) { display: none; }
 
 /* ── 输入框旁只留一行范围提示（原来的「发送范围」芯片 + 四选项面板已于 2026-11-04 移除，
       范围默认值只保留在设置页「交互与发送」里） ───────────────────────── */
@@ -2128,12 +2134,26 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 .side.right:not([data-active-panel="chat"]):not([data-active-panel="translate"]) > .composer { display: none; }
 .side.right[data-active-panel="translate"] #composerHint { display: block; flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
 .side.right[data-active-panel="translate"] .composer-opts { flex-wrap: wrap; row-gap: 4px; }
-.translate-target-label,
-.translate-target { display: none; }
-.side.right[data-active-panel="translate"] .translate-target-label,
-.side.right[data-active-panel="translate"] .translate-target { display: inline-flex; }
-.translate-target-label { color: var(--fg-faint); font-size: var(--ui-fs-xs); }
-.translate-target { min-width: 82px; padding: 2px 5px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg-elev); color: var(--fg); font: inherit; font-size: var(--ui-fs-xs); }
+.translate-target-control {
+  display: none; grid-column: 1; justify-self: start; align-self: end; align-items: center; gap: 6px;
+  position: relative; height: 32px; min-width: 0; max-width: 100%; padding: 0 9px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 55%, transparent); border-radius: 9px;
+  background: rgba(var(--surface-rgb, 255, 255, 255), .12); color: var(--fg-dim);
+  transition: background .12s, border-color .12s;
+}
+.side.right[data-active-panel="translate"] .translate-target-control { display: inline-flex; }
+.translate-target-control:hover, .translate-target-control:focus-within {
+  border-color: var(--border-strong); background: rgba(var(--surface-rgb, 255, 255, 255), .24);
+}
+.translate-target-label { flex: none; color: var(--fg-dim); font-size: var(--ui-fs-xs); line-height: 1; }
+.translate-target {
+  appearance: none; min-width: 0; width: 72px; height: 30px; padding: 0 17px 0 0; margin: 0;
+  border: 0; border-radius: 0; outline: none; box-shadow: none; background: transparent;
+  color: var(--fg); font: inherit; font-size: var(--ui-fs-sm); line-height: 30px; cursor: pointer;
+}
+.translate-target option { color: var(--fg); background: var(--bg-elev); }
+.translate-target:focus-visible { outline: 1px solid var(--border-strong); outline-offset: 2px; border-radius: 3px; }
+.translate-target-chevron { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); pointer-events: none; }
 
 /* ── 区域之间的分隔线统一为一条 1px 暖灰线，不用卡片阴影 ──
    只写 border-top-color：宽度与样式由各区域自己的既有规则决定，这里不越权。 */

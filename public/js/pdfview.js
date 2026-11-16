@@ -789,14 +789,14 @@ export class PdfViewer {
   }
 
   _computeFitScale() {
-    const pad = 32;
-    // 双页显示：两页并排，每页只能占「去掉中间间距」后的一半宽度
+    // clientWidth 已扣除滚动条；直接用满可读宽度，不再预留两侧空白。
+    // 双页向下取整到完整像素，避免奇数宽度让第二页被挤到下一行。
     const span = this._twoUp ? 2 : 1;
     const gap = this._twoUp ? TWO_UP_GAP : 0;
-    const avail = Math.max(200, this.container.clientWidth - pad - gap);
+    const avail = Math.max(1, Math.floor((this.container.clientWidth - gap) / span));
     const size = this._sizeOf(1);
     const w = (size && size.width) || 612;   // 没有文档时 baseSizes 是空的
-    return clamp(avail / (w * span), 0.15, 6);
+    return clamp(avail / w, 0.15, 6);
   }
 
   /** 按当前是单页还是双页，给 .pages 带上/去掉 two-up 类 */
