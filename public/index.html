@@ -210,11 +210,13 @@
         <button type="button" id="translationBatchReturn">放回草稿</button>
       </div>
       <div class="composer-row">
+        <label class="glass-composer-title" for="chatInput"><span class="glass-chat-title">继续理解这篇论文</span><span class="glass-translate-title">翻译选文与截图</span></label>
         <div class="attach-row" id="attachRow"></div>
         <textarea id="chatInput" rows="1" placeholder="问点什么…（Enter 发送）"></textarea>
+        <span class="glass-composer-caption" aria-hidden="true">Shift+Enter 换行</span>
         <button type="button" class="clip" id="clipBtn" title="截图 / 长截图，加进对话"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.6 2.6v14.8a1.6 1.6 0 0 0 1.6 1.6h13.2"/><path d="M2.6 6.6h14.8a1.6 1.6 0 0 1 1.6 1.6v13.2"/></svg></button>
         <button type="button" class="stop hidden" id="stopBtn" title="停止生成"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="6.4" y="6.4" width="11.2" height="11.2" rx="1.8"/></svg></button>
-        <button class="send" id="sendBtn" type="submit" title="发送"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20.6 3.4 3.6 10.2l6.6 2.8 2.8 6.6z"/><path d="m10.2 13 10.4-9.6"/></svg></button>
+        <button class="send" id="sendBtn" type="submit" title="发送"><svg class="send-plane" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20.6 3.4 3.6 10.2l6.6 2.8 2.8 6.6z"/><path d="m10.2 13 10.4-9.6"/></svg><svg class="glass-send-arrow" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
       </div>
       <div class="composer-opts">
         <!-- 发送范围不再放输入框旁：AI 会自己翻页读论文，范围只保留设置页里的两个默认值开关。 -->

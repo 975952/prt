@@ -3019,7 +3019,7 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
 :root[data-theme="glass"] .modal { background: rgba(45, 45, 45, .22); }
 :root[data-theme="glass"] .brand img { filter: grayscale(1); }
 :root[data-theme="glass"] #main > .main-row {
-  padding: 10px;
+  padding: 18px 18px 10px;
   background: transparent;
 }
 :root[data-theme="glass"] .main-row .viewer-wrap {
@@ -3029,11 +3029,11 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
 }
 :root[data-theme="glass"] .viewer { background: transparent; }
 :root[data-theme="glass"] .main-row .side {
-  background: rgba(255, 255, 255, .22);
-  border: 1px solid rgba(255, 255, 255, .54);
-  border-radius: 14px;
-  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .4);
-  backdrop-filter: blur(var(--glass-frost));
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
 }
 :root[data-theme="glass"] :is(.topbar, .tab-bar, .viewer-foot) {
   background: rgba(255, 255, 255, .2);
@@ -3066,16 +3066,107 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
   background: rgba(255, 255, 255, .45);
 }
 :root[data-theme="glass"] #composer .composer-row {
-  background: rgba(255, 255, 255, .32);
-  border: 1px solid rgba(255, 255, 255, .65);
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 32px 32px;
+  gap: 6px 8px;
+  padding: 13px;
+  background: rgba(255, 255, 255, .20);
+  border: 1px solid rgba(255, 255, 255, .69);
   border-radius: 14px;
-  box-shadow: none;
+  backdrop-filter: blur(min(var(--glass-frost), 20px));
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 7px 20px rgba(0, 0, 0, .02);
 }
 :root[data-theme="glass"] #composer .composer-row:focus-within {
-  background: rgba(255, 255, 255, .42);
-  border-color: rgba(255, 255, 255, .65) !important;
+  background: rgba(255, 255, 255, .27);
+  border-color: rgba(255, 255, 255, .69) !important;
   outline: none !important;
-  box-shadow: none !important;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .5), 0 7px 20px rgba(0, 0, 0, .02) !important;
+}
+.glass-composer-title, .glass-composer-caption, .glass-send-arrow { display: none; }
+:root[data-theme="glass"] .glass-composer-title {
+  display: block; grid-column: 1 / -1; color: #535353;
+  font-size: var(--ui-fs-xs); line-height: 1.6; cursor: text;
+}
+.glass-translate-title { display: none; }
+:root[data-theme="glass"] [data-active-panel="translate"] .glass-chat-title { display: none; }
+:root[data-theme="glass"] [data-active-panel="translate"] .glass-translate-title { display: inline; }
+:root[data-theme="glass"] #composer #attachRow { grid-column: 1 / -1; }
+:root[data-theme="glass"] #composer #attachRow:empty { display: none; }
+:root[data-theme="glass"] #composer #chatInput {
+  grid-column: 1 / -1; width: 100%; min-height: 60px;
+  max-height: min(160px, 24vh); padding: 3px 0 0; line-height: 1.6;
+}
+:root[data-theme="glass"] #composer .glass-composer-caption {
+  display: block; grid-column: 1; align-self: center;
+  font-size: var(--ui-fs-2xs); color: #5c5c5c;
+}
+:root[data-theme="glass"] #composer :is(.send, .stop, .clip) {
+  width: 32px; height: 32px; border-radius: 50%; align-self: end;
+}
+:root[data-theme="glass"] #composer .clip { grid-column: 2; background: transparent; border: 0; }
+:root[data-theme="glass"] #composer :is(.send, .stop) { grid-column: 3; }
+:root[data-theme="glass"] #composer .send { background: #323232; box-shadow: 0 3px 7px rgba(0, 0, 0, .06); }
+:root[data-theme="glass"] #composer .send:hover { background: #111; }
+:root[data-theme="glass"] .send-plane { display: none; }
+:root[data-theme="glass"] .glass-send-arrow { display: block; }
+:root[data-theme="glass"] #composer {
+  padding: 15px 12px 6px; border: 0; position: relative; z-index: 6;
+}
+:root[data-theme="glass"] .composer-opts { padding: 6px 5px 0; }
+/* 侧栏融入同一背景，只有纸面、提问与输入区保留玻璃表面。 */
+:root[data-theme="glass"] :is(.side-head, .sec-head, .aibar, .sessbar) { border-color: transparent; box-shadow: none; }
+:root[data-theme="glass"] :is(.side-head, .sec-head):hover { background: transparent; }
+:root[data-theme="glass"] .splitter { flex-basis: 14px; background: transparent; }
+:root[data-theme="glass"] .splitter::after {
+  content: ''; position: absolute; width: 2px; top: 16px; bottom: 16px; left: 6px;
+  border-radius: 2px; background: #8c8c8c; opacity: 0; transition: opacity .15s;
+}
+:root[data-theme="glass"] .splitter:is(:hover, :focus-visible, .dragging)::after { opacity: .4; }
+:root[data-theme="glass"] .aibar { padding: 8px 12px 12px; gap: 14px; }
+:root[data-theme="glass"] .aibar-btn {
+  border: 0; border-radius: 0; padding: 5px 0; min-height: 30px;
+  color: #626262; background: transparent; box-shadow: none;
+}
+:root[data-theme="glass"] .aibar-btn.on {
+  background: transparent; color: #292929; border: 0;
+  box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .3); font-weight: 500;
+}
+:root[data-theme="glass"] .aibar-btn:hover:not(:disabled) { background: transparent; color: #292929; }
+:root[data-theme="glass"] .sessbar { padding: 0 12px 12px; }
+:root[data-theme="glass"] .ai-block { background: transparent; border-radius: 0; }
+:root[data-theme="glass"] .ai > .entry-card { background: transparent; }
+:root[data-theme="glass"] .ai-block::after { display: none; }
+:root[data-theme="glass"] .ai-body { padding-bottom: 14px; }
+:root[data-theme="glass"] .ai-body > .msg { padding: 10px 17px; }
+:root[data-theme="glass"] .msg + .msg { border-top: 0; }
+:root[data-theme="glass"] .ai-body > .msg.user {
+  margin: 7px 12px 18px; padding: 11px 13px;
+  border: 1px solid rgba(255, 255, 255, .44);
+  border-radius: 13px 13px 3px 13px;
+  background: rgba(255, 255, 255, .20); opacity: 1;
+}
+:root[data-theme="glass"] .ai-body .msg .text { line-height: 1.85; }
+:root[data-theme="glass"] .ai-body .msg .text p + p { margin-top: 12px !important; }
+:root[data-theme="glass"] .page::before {
+  content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
+  background: linear-gradient(125deg, rgba(255, 255, 255, .086), transparent 35% 80%, rgba(255, 255, 255, .063));
+}
+:root[data-theme="glass"] .viewer-foot .grp { background: transparent; border-color: transparent; box-shadow: none; }
+:root[data-theme="glass"] .viewer-foot { padding-inline: 22px; }
+:root[data-theme="glass"] :is(.sess-quick, .sess-menu, .ctx-menu, .ops-menu, .bubble, .notebox, .translation-card) {
+  background: rgba(249, 249, 249, .96); border-color: rgba(255, 255, 255, .8);
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7), 0 12px 28px rgba(0, 0, 0, .10);
+  backdrop-filter: blur(min(var(--glass-frost), 20px));
+}
+@media (max-width: 1100px) {
+  :root[data-theme="glass"] #main > .main-row { padding: 12px 10px 6px; }
+  :root[data-theme="glass"] .splitter { flex-basis: 8px; }
+  :root[data-theme="glass"] .splitter::after { left: 3px; }
+  :root[data-theme="glass"] #composer { padding-inline: 6px; }
+}
+@media (max-height: 650px) {
+  :root[data-theme="glass"] #composer { padding-top: 8px; }
+  :root[data-theme="glass"] #composer #chatInput { min-height: 38px; }
 }
 #composer textarea:focus, #composer textarea:focus-visible {
   outline: none !important;
