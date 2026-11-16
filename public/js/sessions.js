@@ -5,7 +5,7 @@ import { windowStorage as localStorage } from './window-storage.js';
  *   - 会话头（标题 / 运行状态点 / 新建 / 历史）
  *   - 快速切换浮层（点标题）
  *   - 全高历史面板（搜索 / 分组 / 行内重命名 / 置顶 / 归档 / 删除 / 应用内确认）
- *   - 进文件夹的「空态选择卡片」（继续上次 / 新建 / 最近会话 / 默认进入方式）
+ *   - 进文件夹的简洁入口（继续上次 / 新建 / 历史；默认行为在设置中）
  *   - 会话 meta 接口（GET /api/sessions、PATCH /api/session、DELETE /api/session、move-folder）
  *
  * 与 app.js 的边界：本模块不 import app.js（避免循环依赖），app.js 在启动时调用
@@ -112,7 +112,6 @@ function readOnEnter() {
 
 function setOnEnter(mode) {
   try { localStorage.setItem(ON_ENTER_KEY, mode); } catch { /* ignore */ }
-  renderModeChips(st.ui?.entry?.querySelector('#sessEntryModes'));
 }
 
 /** 历史面板排列方式：按文件整理（默认）/ 按时间顺序 */
@@ -336,7 +335,7 @@ function currentRow() {
 }
 
 function headerName() {
-  if (st.entryVisible) return '选择会话';
+  if (st.entryVisible) return '会话';
   const row = currentRow();
   if (row?.title) return row.title;
   if (st.currentSid) return row?.count ? '（无标题会话）' : '新会话';
@@ -469,29 +468,6 @@ function activeRows() {
 
 /* ───────────────────────────── 进文件夹选择卡片 ───────────────────────────── */
 
-function modeLabel(mode) {
-  return mode === 'resume' ? '自动恢复上次' : mode === 'new' ? '总是新会话' : '选择卡片';
-}
-
-function renderModeChips(box) {
-  if (!box) return;
-  const mode = readOnEnter();
-  box.replaceChildren(
-    el('span', { class: 'sess-mode-label', text: '打开文件夹默认：' }),
-    ...['choose', 'resume', 'new'].map((m) => el('button', {
-      type: 'button',
-      class: `sess-mode-chip${m === mode ? ' on' : ''}`,
-      text: modeLabel(m),
-      title: m === 'choose'
-        ? '打开文件夹时显示这张选择卡片，不自动恢复（默认，推荐）'
-        : m === 'resume'
-          ? '打开文件夹时自动回到上次会话（超过 7 天或 60 条消息仍会显示选择卡片）'
-          : '每次打开文件夹都新建一个空会话',
-      onclick: () => { setOnEnter(m); toast(`之后打开文件夹：${modeLabel(m)}`, 'err', 1800); },
-    })),
-  );
-}
-
 function showEntryCard(lastRow) {
   st.entryVisible = true;
   renderEntryCard(lastRow);
@@ -516,72 +492,21 @@ function hideEntryCard({ render = true } = {}) {
 function renderEntryCard(lastRow) {
   const ui = st.ui;
   if (!ui?.entry) return;
-  // 空会话没有可继续的内容，不进选择卡片（否则点「继续上次」看起来就是一片空白）
-  const actives = activeRows().filter((r) => (r.count || 0) > 0);
-  const others = actives.filter((r) => r.sid !== (lastRow?.sid || '')).slice(0, 4);
-  const recentRows = lastRow ? others : actives.slice(0, 5);
-
-  const recent = recentRows.length
-    ? el('div', { class: 'entry-recent' },
-      el('div', { class: 'entry-recent-title', text: lastRow ? '最近会话' : '最近会话' }),
-      ...recentRows.map((r) => el('button', {
-        type: 'button',
-        class: 'entry-recent-row',
-        title: r.title || '（无标题会话）',
-        onclick: () => chooseSession(r.sid),
-      },
-      el('span', { class: 'entry-recent-name', text: r.title || (r.count ? '（无标题会话）' : '新会话') }),
-      el('span', { class: 'entry-recent-meta', text: [r.count ? `${r.count} 条` : '', relTime(r.updatedAt)].filter(Boolean).join(' · ') }))))
-    : null;
-
-  const mode = scopeMode();
-  const docName = st.ctx?.doc?.()?.name || '这篇论文';
-  const emptyHint = mode === 'paper' ? '这篇论文还没有会话。'
-    : mode === 'global' ? '还没有共用会话。'
-      : '这个文件夹还没有会话。';
-  const emptySub = mode === 'paper'
-    ? '发第一条消息后会创建这篇论文自己的会话，之后可以在这里切换。'
-    : mode === 'global'
-      ? '发第一条消息后会开始所有论文共用的对话，之后可以在这里切换。'
-      : '发第一条消息后会创建这个文件夹的会话，之后可以在这里切换。';
-
-  const primary = lastRow
-    ? el('button', {
-      type: 'button',
-      class: 'entry-primary',
-      onclick: () => chooseSession(lastRow.sid),
-    },
-    el('span', { class: 'entry-primary-main', text: `继续上次「${lastRow.title || (lastRow.count ? '无标题会话' : '新会话')}」` }),
-    el('span', { class: 'entry-primary-meta', text: [lastRow.count ? `${lastRow.count} 条消息` : '还没有消息', relTime(lastRow.updatedAt)].filter(Boolean).join(' · ') }))
-    : el('div', { class: 'entry-empty-hint', text: emptyHint });
-  const title = lastRow
-    ? (mode === 'paper' ? '继续这篇论文的对话？' : mode === 'global' ? '继续所有论文共用的对话？' : '继续这个文件夹的对话？')
-    : '开始新的对话';
-  const sub = lastRow
-    ? (mode === 'paper'
-      ? `「${docName}」有 ${actives.length} 个会话（只列这篇论文的）。默认不自动恢复，挑一个继续，或者新建一个。`
-      : mode === 'global'
-        ? `所有论文共用 ${actives.length} 个会话。可以接着上一段继续，也可以新建一段。`
-        : `这个文件夹里有 ${actives.length} 个会话。默认不自动恢复，挑一个继续，或者新建一个。`)
-    : emptySub;
-
+  if (!lastRow) {
+    ui.entry.replaceChildren(st.ctx.createReadingWelcome('chat'));
+    return;
+  }
+  const name = lastRow.title || '未命名会话';
   ui.entry.replaceChildren(
-    el('div', { class: 'entry-big-ic', html: ICONS.dot }),
-    el('div', { class: 'entry-title', text: title }),
-    el('div', { class: 'entry-sub', text: sub }),
-    primary,
-    el('button', { type: 'button', class: 'entry-new', text: '＋ 新建会话', onclick: doNewSession }),
-    // 注意：replaceChildren 会把 null 参数按 DOMString 转成字面「null」文本，
-    // 最近会话为空时必须展开成空数组，不能直接传 null。
-    ...(recent ? [recent] : []),
-    el('div', { class: 'entry-modes', id: 'sessEntryModes' }),
-    el('div', { class: 'entry-hint', text: mode === 'paper'
-      ? '选择卡片只在打开文件夹时出现；同一文件夹里换论文会接上那篇论文自己的对话，不重新弹卡片。'
-      : mode === 'global'
-        ? '选择卡片只在打开文件夹时出现；同一文件夹里换论文会接着同一段对话，不重新弹卡片。'
-        : '选择卡片只在打开文件夹时出现；同一文件夹里换论文会接着同一段对话，不重新弹卡片。' }),
+    el('div', { class: 'entry-heading' },
+      el('h3', { class: 'entry-title', text: '接着上次聊' }),
+      el('button', { type: 'button', class: 'entry-link', text: '全部会话', onclick: openHistory })),
+    el('button', { type: 'button', class: 'entry-primary', title: `继续「${name}」`, onclick: () => chooseSession(lastRow.sid) },
+      el('span', { class: 'entry-primary-main', text: name }),
+      el('span', { class: 'entry-primary-meta', text: `${lastRow.count} 条消息 · ${relTime(lastRow.updatedAt)}` }),
+      el('span', { class: 'entry-continue', text: '继续对话 →' })),
+    el('button', { type: 'button', class: 'entry-new', text: '新建会话', onclick: doNewSession }),
   );
-  renderModeChips(ui.entry.querySelector('#sessEntryModes'));
 }
 
 async function chooseSession(sidOrRow, docIdHint = '') {
@@ -624,7 +549,7 @@ function buildQuick() {
   quick.replaceChildren(
     el('div', { class: 'sess-quick-head' },
       el('span', { class: 'sess-quick-title', text: '切换会话' }),
-      el('span', { class: 'sess-quick-hint', text: '本文件夹' })),
+      el('span', { class: 'sess-quick-hint', text: scopeMode() === 'global' ? '全部论文' : scopeMode() === 'paper' ? '当前论文' : '当前文件夹' })),
     search,
     el('div', { class: 'sess-quick-list', id: 'sessQuickList' }),
     el('div', { class: 'sess-quick-foot' },
@@ -723,7 +648,6 @@ function buildHistory() {
         arrangeChip('file', '按文件', 'doc', '同一篇论文的会话归在一起：问过它的每个会话都在该论文下显示一次'),
         arrangeChip('time', '按时间', 'clock', '全部会话按时间排列，并标出按顺序问过哪些论文')),
       el('span', { class: 'sess-hist-summary', id: 'sessHistSummary' })),
-    el('div', { class: 'sess-hist-modehint', id: 'sessHistModeHint' }),
     el('div', { class: 'sess-hist-list', id: 'sessHistList' }),
     el('div', { class: 'sess-hist-foot' },
       el('button', { type: 'button', class: 'sess-foot-btn', id: 'sessHistMemory', onclick: () => st.ctx.togglePaperMemory?.() }),
@@ -738,7 +662,8 @@ function renderMemoryBtn() {
   const btn = st.ui?.history?.querySelector('#sessHistMemory');
   if (!btn) return;
   const off = !!st.ctx?.paperMemoryOff?.();
-  btn.textContent = off ? '本篇对话记忆：关闭（点开启）' : '本篇对话记忆：开启（点关闭）';
+  btn.textContent = off ? '论文记忆：关' : '论文记忆：开';
+  btn.setAttribute('aria-pressed', String(!off));
   btn.title = '新会话是否参考这篇论文之前会话的摘要；不影响各会话自己的历史';
 }
 
@@ -972,17 +897,7 @@ function renderHistoryList() {
   const globalScope = scopeMode() === 'global';
   const summary = st.ui?.history?.querySelector('#sessHistSummary');
   if (summary) {
-    // 标明当前「换论文时对话怎么接」，避免把「共用会话」误当成 bug
-    const modeText = globalScope ? '全局共用' : (scopeMode() === 'paper' ? '按论文' : '按文件夹');
-    summary.textContent = rows.length ? `${rows.length} 个会话 · ${modeText} · 全部文件夹` : '';
-  }
-  const hint = st.ui?.history?.querySelector('#sessHistModeHint');
-  if (hint) {
-    hint.textContent = st.histMode === 'file'
-      ? (globalScope
-        ? '所有论文共用一个会话列表，下面标出每个会话按顺序读过哪些论文'
-        : '同一会话问过多篇论文时，会在每篇论文下各显示一次')
-      : '全部会话按最近活动排序，下面标出按顺序读过哪些论文';
+    summary.textContent = rows.length ? `${rows.length} 个会话` : '';
   }
   if (st.allLoading && !st.allList.length) {
     box.replaceChildren(el('div', { class: 'sess-empty', text: '正在读取全部会话…' }));

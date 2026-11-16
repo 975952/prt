@@ -75,12 +75,12 @@
       <button type="button" class="tbtn folder-new" id="folderNew" title="新建文件夹" aria-label="新建文件夹"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></button>
     </div>
     <div class="dropzone" id="dropzone">
-      拖入 PDF（可多选）　<label class="link" for="fileInput">选文件</label>
+      拖入 PDF，或 <label class="link" for="fileInput">导入文件</label>
       <input type="file" id="fileInput" accept="application/pdf,.pdf" multiple hidden />
     </div>
     <!-- 每次只处理一个文件夹：这里显示当前文件夹，点开可切换（换文件夹 = 关掉旧标签 + 新会话） -->
     <div class="folder-switch-row">
-      <button type="button" class="folder-switch" id="folderSwitch" title="当前文件夹（点击切换）">📁 papers/</button>
+      <button type="button" class="folder-switch" id="folderSwitch" title="当前文件夹（点击切换）">未分组</button>
       <div class="folder-switch-menu hidden" id="folderSwitchMenu" role="menu" aria-label="切换文件夹"></div>
     </div>
     <ul class="filelist" id="fileList"></ul>
@@ -150,7 +150,7 @@
         </button>
         <div class="home-drop" id="homeDrop">
           <svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 16.4V4.6"/><path d="m7.6 9 4.4-4.4L16.4 9"/><path d="M4.6 16.4v2a1.6 1.6 0 0 0 1.6 1.6h11.6a1.6 1.6 0 0 0 1.6-1.6v-2"/></svg>
-          <span>把 PDF 拖到这里（支持多选）</span>
+          <span>拖入 PDF，支持多个文件</span>
         </div>
       </div>
 
@@ -210,10 +210,10 @@
         <button type="button" id="translationBatchReturn">放回草稿</button>
       </div>
       <div class="composer-row">
-        <label class="glass-composer-title" for="chatInput"><span class="glass-chat-title">继续理解这篇论文</span><span class="glass-translate-title">翻译选文与截图</span></label>
+        <label class="glass-composer-title" for="chatInput"><span class="glass-chat-title">向论文提问</span><span class="glass-translate-title">翻译原文</span></label>
         <div class="attach-row" id="attachRow"></div>
-        <textarea id="chatInput" rows="1" placeholder="问点什么…（Enter 发送）"></textarea>
-        <span class="glass-composer-caption" aria-hidden="true">Shift+Enter 换行</span>
+        <textarea id="chatInput" rows="1" placeholder="关于这篇论文，你想了解什么？"></textarea>
+        <span class="glass-composer-caption" aria-hidden="true">Enter 发送 · Shift+Enter 换行</span>
         <button type="button" class="clip" id="clipBtn" title="截图 / 长截图，加进对话"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.6 2.6v14.8a1.6 1.6 0 0 0 1.6 1.6h13.2"/><path d="M2.6 6.6h14.8a1.6 1.6 0 0 1 1.6 1.6v13.2"/></svg></button>
         <button type="button" class="stop hidden" id="stopBtn" title="停止生成"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><rect x="6.4" y="6.4" width="11.2" height="11.2" rx="1.8"/></svg></button>
         <button class="send" id="sendBtn" type="submit" title="发送"><svg class="send-plane" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M20.6 3.4 3.6 10.2l6.6 2.8 2.8 6.6z"/><path d="m10.2 13 10.4-9.6"/></svg><svg class="glass-send-arrow" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M12 19V5m-6 6 6-6 6 6"/></svg></button>
@@ -319,16 +319,16 @@
     <div class="modal-head">设置<button class="tbtn" id="closeSettings" title="关闭设置" aria-label="关闭设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.4 6.4 17.6 17.6"/><path d="M17.6 6.4 6.4 17.6"/></svg></button></div>
     <div class="settings-body">
       <nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical">
-        <button type="button" class="settings-nav-item on" id="settingsNavModel" data-pane="model" role="tab" aria-selected="true" aria-controls="settingsPaneModel">模型与接口</button>
-        <button type="button" class="settings-nav-item" id="settingsNavAppearance" data-pane="appearance" role="tab" aria-selected="false" aria-controls="settingsPaneAppearance">外观与字号</button>
-        <button type="button" class="settings-nav-item" id="settingsNavBehavior" data-pane="behavior" role="tab" aria-selected="false" aria-controls="settingsPaneBehavior">交互与发送</button>
+        <button type="button" class="settings-nav-item on" id="settingsNavModel" data-pane="model" role="tab" aria-selected="true" aria-controls="settingsPaneModel">模型连接</button>
+        <button type="button" class="settings-nav-item" id="settingsNavAppearance" data-pane="appearance" role="tab" aria-selected="false" aria-controls="settingsPaneAppearance">阅读外观</button>
+        <button type="button" class="settings-nav-item" id="settingsNavBehavior" data-pane="behavior" role="tab" aria-selected="false" aria-controls="settingsPaneBehavior">阅读与问答</button>
         <button type="button" class="settings-nav-item" id="settingsNavSession" data-pane="session" role="tab" aria-selected="false" aria-controls="settingsPaneSession">会话</button>
         <button type="button" class="settings-nav-item" id="settingsNavMemory" data-pane="memory" role="tab" aria-selected="false" aria-controls="settingsPaneMemory">长期记忆</button>
       </nav>
       <div class="settings-panes">
         <section class="settings-pane" id="settingsPaneModel" data-pane="model" role="tabpanel" aria-labelledby="settingsNavModel">
-          <div class="settings-pane-title">模型与接口</div>
-          <div class="settings-pane-sub">密钥仅保存在本机。选择配置后可以编辑，保存后用于后续 AI 请求。</div>
+          <div class="settings-pane-title">模型连接</div>
+          <div class="settings-pane-sub">连接你使用的 AI 服务。密钥保存在本机，请求发送到你配置的服务。</div>
     <div class="model-profile-toolbar">
       <label class="field"><span>模型配置</span><select id="cfgProfile" aria-label="已保存的模型配置"></select></label>
       <button type="button" class="model-profile-button" id="newProfile">新增</button>
@@ -348,12 +348,12 @@
       <input id="cfgApiKey" type="password" placeholder="sk-…" autocomplete="off" spellcheck="false" />
     </label>
     <label class="field">
-      <span>模型名</span>
+      <span>模型名称</span>
       <input id="cfgModel" type="text" placeholder="填写接口服务提供的模型名" spellcheck="false" />
     </label>
     <label class="field">
-      <span>视觉模型（可选）</span>
-      <input id="cfgVisionModel" type="text" placeholder="留空 = 用上面的模型；扫描件与截图需要能读图的模型" spellcheck="false" />
+      <span>图片模型（可选）</span>
+      <input id="cfgVisionModel" type="text" placeholder="留空则使用上面的模型" spellcheck="false" />
     </label>
     <div class="model-profile-test">
       <button type="button" class="model-profile-button" id="testModel">测试连接</button>
@@ -361,15 +361,15 @@
     </div>
         </section>
         <section class="settings-pane hidden" id="settingsPaneAppearance" data-pane="appearance" role="tabpanel" aria-labelledby="settingsNavAppearance">
-          <div class="settings-pane-title">外观与字号</div>
-          <div class="settings-pane-sub">主题与阅读字号立即生效；Ctrl/⌘ + = / - 也能随时调阅读字号。</div>
-    <div class="settings-section-title">阅读助手样式</div>
+          <div class="settings-pane-title">阅读外观</div>
+          <div class="settings-pane-sub">调整即时生效。阅读字号也可用 Ctrl + 加号 / 减号调节。</div>
+    <div class="settings-section-title">主题与文字</div>
     <div class="settings-grid settings-core-grid">
-      <label class="field"><span>主题</span><select id="uiTheme"><option value="glass">透光</option><option value="system">跟随系统</option><option value="light">米宣</option><option value="mist">白瓷</option><option value="sage">青瓷</option><option value="dark">乌木</option><option value="graphite">石墨</option><option value="black">玄墨</option></select></label>
-      <label class="field"><span>阅读字号 <output class="range-value" id="uiFontSizeValue"></output></span><input id="uiFontSize" type="range" min="12" max="30" step="1" /></label>
+      <label class="field"><span>主题</span><select id="uiTheme"><option value="glass">透光</option><option value="light">米宣</option><option value="dark">深色</option></select></label>
+      <label class="field"><span>回答与译文字号 <output class="range-value" id="uiFontSizeValue"></output></span><input id="uiFontSize" type="range" min="12" max="30" step="1" /></label>
     </div>
     <div class="settings-section-title">玻璃阅读</div>
-    <div class="modal-note">选择「透光」主题后可调整；文字保持清晰，文档自带的白底图片保留原样。</div>
+    <div class="modal-note">仅用于透光主题。深色主题自动调整论文文字，图片保持原色。</div>
     <fieldset id="glassAppearanceControls" class="glass-appearance-controls" aria-label="玻璃阅读样式">
       <div class="settings-grid settings-core-grid">
         <label class="field"><span>纸面透明度 <output class="range-value" id="uiGlassTransparencyValue"></output></span><input id="uiGlassTransparency" type="range" min="35" max="96" step="1" /></label>
@@ -378,39 +378,39 @@
         <label class="field"><span>背景亮度 <output class="range-value" id="uiGlassBrightnessValue"></output></span><input id="uiGlassBrightness" type="range" min="80" max="100" step="1" /></label>
       </div>
     </fieldset>
-    <label class="field field-switch"><input id="uiMotion" type="checkbox" /><span>交互动效（遵循系统的减少动态效果设置）</span></label>
+    <label class="field field-switch"><input id="uiMotion" type="checkbox" /><span>交互动效</span></label>
         </section>
         <section class="settings-pane hidden" id="settingsPaneBehavior" data-pane="behavior" role="tabpanel" aria-labelledby="settingsNavBehavior">
-          <div class="settings-pane-title">交互与发送</div>
-          <div class="settings-pane-sub">触摸屏缩放手感，以及问答默认发送范围的偏好。</div>
+          <div class="settings-pane-title">阅读与问答</div>
+          <div class="settings-pane-sub">调整缩放手感与提问时使用的资料。修改即时生效。</div>
           <div class="settings-section-title">双指缩放</div>
     <div class="settings-grid settings-core-grid">
       <!-- 缩放速度：触摸屏捏合与触摸板捏合都乘这个倍率（1 = 默认手感，见 pdfview.js 的 clampZoomSpeed）。
            min/max 必须与 pdfview.js 的 ZOOM_SPEED_MIN/MAX 一致（那边是权威，这里只是滑杆行程）。 -->
       <label class="field"><span>缩放速度 <output class="range-value" id="uiZoomSpeedValue"></output></span><input id="uiZoomSpeed" type="range" min="0.5" max="2" step="0.05" /></label>
     </div>
-    <div class="modal-note"><span>触摸屏两指张开、触摸板两指捏合都按这个速度；1.0× 是默认手感，往右更快。</span></div>
+    <div class="modal-note"><span>适用于触摸屏和触摸板。向右调节，缩放更快。</span></div>
     <div class="settings-section-title">发送范围</div>
     <div class="settings-grid settings-core-grid">
       <label class="field field-switch"><input id="cfgUseFullText" type="checkbox" /><span>整篇论文</span></label>
       <label class="field field-switch"><input id="cfgUseWeb" type="checkbox" /><span>联网搜索</span></label>
     </div>
-    <div class="modal-note"><span>这两个是问答的默认发送范围，改完立刻生效：<b>整篇论文</b>=每次提问默认把整篇论文放进上下文（AI 自己会翻页读论文时一般不用开）；<b>联网搜索</b>=每次提问默认先联网查一次资料。输入框旁边不再放临时切换按钮。</span></div>
+    <div class="modal-note"><span>开启后，每次提问都会读取整篇论文或先搜索网络，可能增加等待时间与模型用量。关闭时，助手仍可按问题需要查阅。</span></div>
     <div class="settings-section-title">连贯追问</div>
     <div class="settings-grid settings-core-grid">
       <label class="field field-switch"><input id="cfgFollowUpDirect" type="checkbox" /><span>连贯追问优先沿用上文</span></label>
     </div>
-    <div class="modal-note"><span>提示模型优先结合前文理解连贯追问。是否直接回答、补充解释或查阅材料，始终由模型判断；不会仅因输入问号或命中某个词就自动查阅。</span></div>
+    <div class="modal-note"><span>追问时优先结合已有对话，需要时再查阅资料。</span></div>
         </section>
         <section class="settings-pane hidden" id="settingsPaneSession" data-pane="session" role="tabpanel" aria-labelledby="settingsNavSession">
           <div class="settings-pane-title">会话</div>
-          <div class="settings-pane-sub">决定换论文时自动接上哪一段对话、打开文件夹时怎么接、历史怎么排、标题怎么来。会话记录永远保留在历史面板里，改这些设置不会迁移或删除它们。</div>
-    <div class="settings-section-title">换论文时对话怎么接</div>
+          <div class="settings-pane-sub">设置对话的延续方式。修改即时生效，已有记录会保留。</div>
+    <div class="settings-section-title">对话范围</div>
     <div class="settings-grid settings-core-grid">
-      <label class="field"><span>换论文时接哪段</span><select id="settScopeMode">
-        <option value="folder">按文件夹：同一文件夹里的论文接着同一段</option>
-        <option value="paper">按论文：每篇论文各接自己那一段</option>
-        <option value="global">全局共用：所有论文接同一段</option>
+      <label class="field"><span>会话归属</span><select id="settScopeMode">
+        <option value="folder">同一文件夹共用</option>
+        <option value="paper">每篇论文独立</option>
+        <option value="global">所有论文共用</option>
       </select></label>
     </div>
     <div class="modal-note session-effect" id="settScopeHint"><span></span></div>
@@ -422,29 +422,29 @@
     <div class="settings-section-title">打开文件夹时</div>
     <div class="settings-grid settings-core-grid">
       <label class="field"><span>默认动作</span><select id="settOnEnter">
-        <option value="choose">先让我选择会话</option>
+        <option value="choose">选择继续或新建</option>
         <option value="resume">继续上次的会话</option>
-        <option value="new">总是新开会话</option>
+        <option value="new">开始新会话</option>
       </select></label>
     </div>
     <div class="modal-note session-effect" id="settEnterHint"><span></span></div>
     <div class="settings-section-title">历史面板</div>
     <div class="settings-grid settings-core-grid">
       <label class="field"><span>默认排列</span><select id="settHistoryMode">
-        <option value="file">按文件（每篇论文下列出问过它的会话）</option>
-        <option value="time">按时间（最近活动在前）</option>
+        <option value="file">按论文分组</option>
+        <option value="time">按最近活动</option>
       </select></label>
     </div>
     <div class="modal-note session-effect" id="settHistoryHint"><span></span></div>
         </section>
         <section class="settings-pane hidden" id="settingsPaneMemory" data-pane="memory" role="tabpanel" aria-labelledby="settingsNavMemory">
           <div class="settings-pane-title">长期记忆</div>
-          <div class="settings-pane-sub">写给 AI 的长期背景与要求，只存本机 data/config.json。</div>
+          <div class="settings-pane-sub">让助手记住你的研究方向与回答偏好。</div>
     <label class="field">
-      <span>写给 AI 的长期背景与要求（≤4000 字）</span>
+      <span>个人背景与偏好（最多 4000 字）</span>
       <textarea id="cfgLongTermMemory" rows="4" placeholder="例如：我在读多模态方向，解释术语时保留英文原词；先给直觉再给公式……" spellcheck="false"></textarea>
     </label>
-    <div class="modal-note"><span>只存本机 data/config.json；每次问答和「读懂论文」都会带上，但不当作论文证据。后台学习记忆（你懂到什么程度）是另一套、自动维护。</span></div>
+    <div class="modal-note"><span>保存在本机，并随问答和讲解请求发送给你配置的模型。</span></div>
     <!-- 样式部分只保留：主题 / 阅读字号（另有「发送范围」两个开关，见下）。
          结果密度、顶栏行为、「更多样式」里那一堆调试刻度（界面字号 / 控件大小 / 行高 /
          代码大小 / 结果最大宽度 / 结果透明度 / PDF 纸张 / 三个显示开关）全部下架：
@@ -455,7 +455,7 @@
     </div>
     <div class="modal-foot">
       <div class="settings-reset">
-        <button type="button" id="resetSettings">恢复默认设置</button>
+        <button type="button" id="resetSettings" title="重置外观、布局和阅读偏好；保留模型配置与阅读记录">重置阅读偏好</button>
       </div>
       <span class="test-result" id="testResult" role="status" aria-live="polite"></span>
       <button class="primary" id="saveSettings">保存并使用</button>

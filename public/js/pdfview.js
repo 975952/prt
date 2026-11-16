@@ -1,6 +1,7 @@
 import { clamp, throttle, sleep } from './util.js';
 import { stripPageLabels } from './reading-context.js';
 import { orderSelectionRuns, clipSelectionRuns, selectionTextOf, selectionRunAt } from './selection-reading-order.js';
+import { applyNightReading, NIGHT_PAPER } from './pdf-reading-theme.js';
 
 let pdfjsLib = null;
 
@@ -57,8 +58,10 @@ function paperColor() {
 }
 
 // 只有屏幕阅读画布透明；截图、OCR、跨文档读取保留不透明背景。
-function readingPaperColor() {
-  return document.documentElement.dataset.theme === 'glass' ? 'rgba(0, 0, 0, 0)' : paperColor();
+function readingPaperColor(pageEl) {
+  if (pageEl?.dataset.imageOnly === 'true') return '#FFFFFF';
+  const theme = document.documentElement.dataset.theme;
+  return theme === 'dark' ? NIGHT_PAPER : theme === 'glass' ? 'rgba(0, 0, 0, 0)' : paperColor();
 }
 
 /** 切片向外多渲染多少像素（CSS px，上限）。滚动时不至于一屏就重画一次；
@@ -1645,6 +1648,25 @@ export class PdfViewer {
       }
       if (stale() || !this.pageEls[i]) return;
 
+      let textContent = null;
+      try { textContent = await page.getTextContent({ includeMarkedContent: true }); } catch { /* text layer may be unavailable */ }
+      if (stale()) return;
+      if (textContent && !pageEl.dataset.imageOnly) {
+        let imageOnly = false;
+        if (!textContent.items.some(item => typeof item.str === 'string' && item.str.trim())) {
+          const ops = await page.getOperatorList();
+          const imageOps = new Set([
+            pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintInlineImageXObject,
+            pdfjsLib.OPS.paintImageMaskXObject, pdfjsLib.OPS.paintImageXObjectRepeat,
+            pdfjsLib.OPS.paintInlineImageXObjectGroup, pdfjsLib.OPS.paintImageMaskXObjectGroup,
+            pdfjsLib.OPS.paintImageMaskXObjectRepeat,
+          ].filter(Number.isFinite));
+          imageOnly = ops.fnArray.some(op => imageOps.has(op));
+        }
+        if (stale()) return;
+        pageEl.dataset.imageOnly = String(imageOnly);
+      }
+
       const viewport = page.getViewport({ scale: this.scale });
       const cssW = viewport.width;
       const cssH = viewport.height;
@@ -1656,6 +1678,7 @@ export class PdfViewer {
       const oy = slice ? slice.y : 0;
 
       const canvas = document.createElement('canvas');
+      canvas.dataset.slice = String(!!slice);
       canvas.width = Math.max(1, Math.floor(drawW * ratio));
       canvas.height = Math.max(1, Math.floor(drawH * ratio));
       canvas.style.width = `${drawW}px`;
@@ -1668,7 +1691,7 @@ export class PdfViewer {
       // 一旦给画布设了 z-index，它就会盖住文本层，鼠标点不到文字 —— 选取文字直接失效。
       // 这里靠 DOM 顺序解决：新画布插在旧画布后面，天然在上层。
       if (prevCanvas) canvas.style.visibility = 'hidden';
-      const paper = readingPaperColor();
+      const paper = readingPaperColor(pageEl);
       const ctx = canvas.getContext('2d', { alpha: paper === 'rgba(0, 0, 0, 0)' });
       ctx.fillStyle = paper;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1717,6 +1740,7 @@ export class PdfViewer {
         background: paper,
       });
       entry.task = renderTask;
+      if (paper === NIGHT_PAPER) applyNightReading(renderTask, pdfjsLib.OPS);
       try {
         await renderTask.promise;
       } catch (e) {
@@ -1767,30 +1791,6 @@ export class PdfViewer {
 
       // 文本层
       try {
-        let textContent = null;
-        try {
-          textContent = await page.getTextContent({ includeMarkedContent: true });
-        } catch { textContent = null; }
-        if (stale()) return;
-        // A scan's white paper is baked into its bitmap. Giving the surrounding
-        // page a rounded glass surface makes alternating image margins look like
-        // alternating themes. Classify per page, retaining the result on its DOM
-        // shell across zoom, theme changes and virtualized bitmap replacement.
-        if (textContent && !pageEl.dataset.imageOnly) {
-          let imageOnly = false;
-          if (!textContent.items.some(item => typeof item.str === 'string' && item.str.trim())) {
-            const ops = await page.getOperatorList();
-            const imageOps = new Set([
-              pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintInlineImageXObject,
-              pdfjsLib.OPS.paintImageMaskXObject, pdfjsLib.OPS.paintImageXObjectRepeat,
-              pdfjsLib.OPS.paintInlineImageXObjectGroup, pdfjsLib.OPS.paintImageMaskXObjectGroup,
-              pdfjsLib.OPS.paintImageMaskXObjectRepeat,
-            ].filter(Number.isFinite));
-            imageOnly = ops.fnArray.some(op => imageOps.has(op));
-          }
-          if (stale()) return;
-          pageEl.dataset.imageOnly = String(imageOnly);
-        }
         const tl = new pdfjsLib.TextLayer({
           textContentSource: textContent
             ? { items: textContent.items, styles: textContent.styles, lang: textContent.lang }
@@ -1833,7 +1833,7 @@ export class PdfViewer {
       this.renderTasks.delete(i);
       // 切换主题时若旧帧正在绘制，完成后补画最新纸底，避免旧底色残留。
       const completed = this.rendered.get(i);
-      if (!stale() && completed && completed.paper !== readingPaperColor()) {
+      if (!stale() && completed && completed.paper !== readingPaperColor(pageEl)) {
         completed.dirty = true;
         this._scheduleRerender(0);
       }

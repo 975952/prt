@@ -58,8 +58,8 @@ function nextFrame(ms = 120) {
 
 /** AI 区的分块定义。默认一个都不显示，用到哪块就自动出现，也可以手动增删。 */
 const AI_BLOCKS = [
-  { id: 'translate', title: '译文', hint: '划选正文后点「译」，或框选截图翻译图表/公式；译文按时间堆在这里' },
-  { id: 'chat', title: '问答', hint: '点「释」在这里解释这段；「＋对话」加入选中的文字或截图，然后你自己提问' },
+  { id: 'translate', title: '译文', hint: '翻译选文、粘贴的文字或截图' },
+  { id: 'chat', title: '问答', hint: '围绕论文提问，或选中一段文字深入讨论' },
 ];
 
 
@@ -1744,7 +1744,8 @@ const PAPER_TINT_LIGHT = (v) => {
 function applyUiStyle() {
   const root = document.documentElement;
   const style = uiStyle;
-  const retiredTheme = { sand: 'light', fjord: 'graphite', plum: 'dark' }[style.theme];
+  const retiredTheme = { sand: 'light', mist: 'glass', sage: 'light', fjord: 'dark', plum: 'dark', graphite: 'dark', black: 'dark',
+    system: window.matchMedia?.('(prefers-color-scheme: dark)').matches ? 'dark' : 'glass' }[style.theme];
   if (retiredTheme) {
     style.theme = retiredTheme;
     try {
@@ -1753,11 +1754,8 @@ function applyUiStyle() {
       localStorage.setItem('reader.ui', JSON.stringify(saved));
     } catch { /* 存储不可用时仍应用对应主题 */ }
   }
-  if (style.theme === 'system' || !['light', 'dark', 'black', 'graphite', 'mist', 'sage', 'glass'].includes(style.theme)) {
-    delete root.dataset.theme;
-  } else {
-    root.dataset.theme = style.theme;
-  }
+  if (!['light', 'dark', 'glass'].includes(style.theme)) style.theme = 'glass';
+  root.dataset.theme = style.theme;
   document.body.dataset.density = ['compact', 'standard', 'comfortable'].includes(style.density) ? style.density : 'standard';
   root.style.setProperty('--ai-fs', `${clamp(Number(style.fontSize) || 14, READ_FS_MIN, READ_FS_MAX)}px`);
   root.style.setProperty('--ai-lh', `${clamp(Number(style.lineHeight) || 1.72, 1.45, 2.05)}`);
@@ -1781,7 +1779,7 @@ function applyUiStyle() {
   const paperMode = style.paper === 'white' ? 'white' : 'tint';
   const paperTint = getComputedStyle(root).getPropertyValue('--paper-tint').trim();
   // 截图和导出仍用实色纸底；透明只在阅读画布和它独立的玻璃底层生效。
-  root.style.setProperty('--paper', style.theme === 'glass' || paperMode === 'white' ? '#FFFFFF' : PAPER_TINT_LIGHT(paperTint));
+  root.style.setProperty('--paper', style.theme !== 'light' || paperMode === 'white' ? '#FFFFFF' : PAPER_TINT_LIGHT(paperTint));
   const glassControls = $('#glassAppearanceControls');
   if (glassControls) glassControls.disabled = style.theme !== 'glass';
   /* 双指缩放速度也得跟着 uiStyle 走。设置页改动那条路走 applyUiSettingsFromControls，
@@ -2123,10 +2121,12 @@ function setView(view) {
   document.body.classList.toggle('reading', !home);
   $('#home')?.classList.toggle('hidden', !home);
   syncFootEnabled(!home);
-  if (!home) return;
-  // 首页是书架 / 目录，不需要两侧阅读工具栏；进入时自动让正文占满窗口。
-  setSideCollapsed('left', true);
-  setSideCollapsed('right', true);
+  if (!home) {
+    applyResponsiveLayout();
+    refitViewer(0);
+    return;
+  }
+  // 首页由样式临时隐藏阅读侧栏，不把首页布局保存成用户的阅读偏好。
   state.homeReady = true;
   renderHome();
 }
@@ -2224,7 +2224,7 @@ function renderHome() {
   // ── 书架：**按文件夹分组**列出 papers 里全部论文（用户口径：不要全部散着铺开） ──
   list.replaceChildren();
   const allPapers = state.papers || [];
-  if (title) title.textContent = allPapers.length ? `书架（按文件夹，共 ${allPapers.length} 篇）` : '书架';
+  if (title) title.textContent = allPapers.length ? `书架 · ${allPapers.length} 篇` : '书架';
   if (!allPapers.length) {
     list.append(el('li', { class: 'home-empty' },
       el('div', { text: '还没有论文' }),
@@ -2234,7 +2234,7 @@ function renderHome() {
   const recById = new Map(rows.map((r) => [r.docId, r]));
   const groups = [];
   const rootFiles = allPapers.filter((p) => !p.folder);
-  if (rootFiles.length) groups.push({ path: '', name: 'papers/', files: rootFiles });
+  if (rootFiles.length) groups.push({ path: '', name: '未分组', files: rootFiles });
   for (const f of (state.folders || [])) {
     const files = allPapers.filter((p) => p.folder === f.path);
     if (files.length) groups.push({ path: f.path, name: f.name, files });
@@ -2400,7 +2400,7 @@ function renderPaperList() {
     if (!hits.length) {
       list.append(el('li', {
         class: 'empty',
-        text: state.papers.length ? '没有匹配的文件' : 'papers/ 里还没有 PDF',
+        text: state.papers.length ? '没有找到论文，试试其他关键词' : '导入 PDF，开始阅读',
       }));
       syncFileSelection();
       return;
@@ -2412,7 +2412,7 @@ function renderPaperList() {
 
   const frag = renderTreeLevel('', 0);
   if (!frag) {
-    list.append(el('li', { class: 'empty', text: 'papers/ 里还没有 PDF' }));
+    list.append(el('li', { class: 'empty', text: '导入 PDF，开始阅读' }));
     syncFileSelection();
     return;
   }
@@ -3959,7 +3959,7 @@ async function renderOutline() {
   try { items = await viewer.getOutline(); } catch { items = []; }
   if (state.doc?.docId !== myDoc) return;
   if (!items.length) {
-    list.append(el('li', { class: 'empty', text: '这篇 PDF 没有书签目录' }));
+    list.append(el('li', { class: 'empty', text: '这篇论文没有内置目录，可用全文搜索定位内容' }));
     return;
   }
   $('#outlineCount').textContent = `(${items.length})`;
@@ -3990,7 +3990,7 @@ async function renderNotes() {
   // 笔记可能在别处被删（左栏删除 / 换论文），回答卡片上的图标要跟着回到「未保存」
   syncAllAnswerNoteButtons();
   if (!state.highlights.length) {
-    list.append(el('li', { class: 'empty', text: '还没有笔记' }));
+    list.append(el('li', { class: 'empty', text: '选中文字或收藏回答，留下第一条笔记' }));
     return;
   }
   for (const h of [...state.highlights].sort((a, b) => (b.ts || 0) - (a.ts || 0))) {
@@ -4977,24 +4977,34 @@ function clearChatBlock() {
   refreshCounts();
 }
 
+function createReadingWelcome(id) {
+  const translating = id === 'translate';
+  const actions = translating
+    ? [el('button', { type: 'button', class: 'welcome-action', text: '截图翻译', onclick: () => {
+      if (!state.busy) state.startRegion?.('translate');
+    } })]
+    : [
+      ['解释当前页', '请解释当前页的核心概念。'],
+      ['梳理论文思路', '请梳理这篇论文的问题、方法和主要结论。'],
+    ].map(([text, prompt]) => el('button', { type: 'button', class: 'welcome-action', text, onclick: () => {
+      if (state.busy) return;
+      const input = $('#chatInput');
+      input.value = input.value.trim() ? `${input.value}\n${prompt}` : prompt;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+      input.focus();
+    } }));
+  return el('div', { class: 'ai-hint reading-welcome' },
+    el('h3', { text: translating ? '读懂每一段' : '从这里读懂论文' }),
+    el('p', { text: translating ? '选中原文即可翻译，也可以在下方粘贴文字。' : '在下方提问，或选中正文中的一段深入讨论。' }),
+    el('div', { class: 'welcome-actions' }, ...actions));
+}
+
 function ensureBlock(id) {
   if (state.blockEls[id]) return state.blockEls[id];
   const count = el('span', { class: 'ai-count' });
-  const meta0 = AI_BLOCKS.find((b) => b.id === id) || {};
-  const hint = el('div', { class: 'ai-hint', text: meta0.hint || '' });
+  const hint = createReadingWelcome(id);
   const body = el('div', { class: 'ai-body' }, hint);
-  // 译文面板的工具条只放辅助入口（截图框选）；文字直接用右栏底部的常驻 composer 输入。
-  const tools = id === 'translate' ? el('div', { class: 'ai-tools' },
-    el('button', {
-      type: 'button', class: 'ai-tool-btn',
-      title: '框选论文区域放进输入框，再按 Enter 翻译截图里的文字（也可按 R；图片需要视觉模型）',
-      onclick: () => {
-        if (state.busy) { toast('正在生成中，先等它跑完或点停止再截图翻译', 'err', 3200); return; }
-        state.startRegion?.('translate');
-      },
-    }, iconEl('region'), el('span', { text: '截图翻译' })),
-  ) : null;
-  const root = el('section', { class: 'ai-block', dataset: { block: id, panel: id } }, tools, body);
+  const root = el('section', { class: 'ai-block', dataset: { block: id, panel: id } }, body);
 
   // R7：滚动时刷新底部渐隐（滚到底就摘掉标记）
   body.addEventListener('scroll', updateScrollFades, { passive: true });
@@ -5122,10 +5132,12 @@ function fitBlockSizes() {
 }
 
 function refreshCounts() {
-  for (const meta of Object.values(state.blockMeta)) {
+  for (const [id, meta] of Object.entries(state.blockMeta)) {
     const n = meta.body.querySelectorAll('.msg').length;
     meta.count.textContent = n ? `(${n})` : '';
-    meta.body.querySelector('.ai-hint')?.classList.toggle('hidden', n > 0);
+    let hint = meta.body.querySelector('.ai-hint');
+    if (!hint && !n) { hint = createReadingWelcome(id); meta.body.append(hint); }
+    hint?.classList.toggle('hidden', n > 0);
   }
   updateScrollFades();
 }
@@ -5351,7 +5363,7 @@ function syncComposerMode(id = rightPanelInCol(1)) {
   const clip = $('#clipBtn');
   const sendBtn = $('#sendBtn');
   if (input) {
-    input.placeholder = translating ? '输入原文，或划选后点「加入译文」…（Enter 合并翻译）' : '问点什么…（Enter 发送）';
+    input.placeholder = translating ? '粘贴需要翻译的文字…' : '关于这篇论文，你想了解什么？';
     if (translating) input.maxLength = 20000;
     else input.removeAttribute('maxlength');
   }
@@ -5361,6 +5373,8 @@ function syncComposerMode(id = rightPanelInCol(1)) {
     clip.classList.remove('hidden');
   }
   if (sendBtn) sendBtn.title = translating ? '翻译' : '发送';
+  const caption = document.querySelector('.glass-composer-caption');
+  if (caption) caption.textContent = translating ? 'Enter 翻译 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行';
   const target = $('#translateTargetLang');
   if (target && !target.dataset.ready) {
     try {
@@ -5393,12 +5407,12 @@ function renderCol(n) {
       if (empty && area.children.length === 1) return;
       area.replaceChildren(el('div', { class: 'ai-empty' },
         el('div', { text: '结果会出现在这里' }),
-        el('div', { text: '从下面这一排图标打开译文 / 问答，或在正文中选择文字开始。' }),
+        el('div', { text: '选中正文，开始翻译或提问。' }),
       ));
     } else {
       area.replaceChildren(el('div', { class: 'ai-empty' },
         el('div', { text: '这一栏还空着' }),
-        el('div', { text: '右键下面的图标 →「放到第 2 栏」，或把图标拖出去开一个应用内卡片。' }),
+        el('div', { text: '选择一个工具，开始阅读。' }),
       ));
     }
     return;
@@ -5791,7 +5805,7 @@ function folderOfDoc(docId) {
   return p ? String(p.folder || '') : '';
 }
 function folderDisplayName(path) {
-  if (!path) return 'papers/';
+  if (!path) return '未分组';
   return path.replace(/\//g, ' / ');
 }
 function persistCurrentFolder() {
@@ -6355,8 +6369,8 @@ async function switchFolder(path) {
 function renderFolderSwitch() {
   const btn = $('#folderSwitch');
   if (!btn) return;
-  btn.textContent = `📁 ${folderDisplayName(currentFolderPath())}`;
-  btn.title = `当前文件夹：papers/${currentFolderPath() ? `${currentFolderPath()}/` : ''}（点击切换文件夹）`;
+  btn.replaceChildren(iconEl('folder'), el('span', { text: folderDisplayName(currentFolderPath()) }));
+  btn.title = `切换文件夹 · ${folderDisplayName(currentFolderPath())}`;
 }
 
 /** 左栏文件夹切换菜单 */
@@ -6367,7 +6381,7 @@ function initFolderSwitch() {
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (!menu.classList.contains('hidden')) { menu.classList.add('hidden'); return; }
-    const rows = [{ path: '', name: 'papers/' }];
+    const rows = [{ path: '', name: '未分组' }];
     for (const f of (state.folders || [])) rows.push({ path: f.path, name: `${f.path.replace(/\//g, ' / ')}/` });
     menu.replaceChildren(...rows.map((row) => {
       const count = (state.papers || []).filter((p) => String(p.folder || '') === row.path).length;
@@ -6829,6 +6843,7 @@ function sessionsContext() {
     folderDisplayName: (path) => folderDisplayName(path),
     papers: () => state.papers || [],
     toast,
+    createReadingWelcome,
     adoptList: (rows) => { sessionStore.list = rows; },
     showChatAndRender: () => { showAiBlock('chat'); renderAiArea(); },
     renderAi: () => renderAiArea(),
@@ -6839,7 +6854,7 @@ function sessionsContext() {
     clearCurrentSession: () => clearCurrentSession({ confirm: false }),
     saveNow: () => saveSessionNow(),
     // 会话头/历史面板里的「会话设置」按钮：直接打开设置里的「会话」分类
-    openSessionSettings: () => { openSettings(); showSettingsPane('session'); },
+    openSessionSettings: async () => { await openSettings(); showSettingsPane('session'); },
     paperMemoryOff: () => isPaperMemoryOff(state.doc?.docId || ''),
     togglePaperMemory: () => togglePaperMemory(),
     restoreChatOnly: () => restoreChatOnly(),
@@ -8202,14 +8217,14 @@ async function openVisualPicker({ replace = false } = {}) {
       el('span', { class: 'ops-icon' }, iconEl(obj.kind === 'table' ? 'chart' : obj.kind === 'formula' ? 'formula' : 'explain')),
       el('span', { class: 'ops-text' },
         el('span', { class: 'ops-title', text: `${obj.label}${obj.page ? ` · 第 ${obj.page} 页` : ''}` }),
-        el('span', { class: 'ops-hint', text: obj.title || obj.snippet || '（抽取文本里没有标题）' })))) : [
-        el('div', { class: 'ops-empty', text: '整篇文本里没识别到图/表/公式编号。可以直接用「框选截图」把这一块发进对话问。' }),
+        el('span', { class: 'ops-hint', text: obj.title || obj.snippet || '查看并解释' })))) : [
+        el('div', { class: 'ops-empty', text: '未找到图表编号。可以截图提问。' }),
       ]),
     );
   };
   const head = [
     el('div', { class: 'ops-head-title', text: '讲懂图表与公式' }),
-    el('div', { class: 'ops-head-note', text: `当前是第 ${page} 页；先选一个对象（不会默认分析整篇）` }),
+    el('div', { class: 'ops-head-note', text: `第 ${page} 页 · 选择要理解的图表或公式` }),
   ];
   const items = objects.map((obj) => el('button', {
     type: 'button', class: 'ops-item ops-obj',
@@ -8218,16 +8233,16 @@ async function openVisualPicker({ replace = false } = {}) {
   el('span', { class: 'ops-icon' }, iconEl(obj.kind === 'table' ? 'chart' : obj.kind === 'formula' ? 'formula' : 'explain')),
   el('span', { class: 'ops-text' },
     el('span', { class: 'ops-title', text: obj.label }),
-    el('span', { class: 'ops-hint', text: obj.title || obj.snippet || '（抽取文本里没有标题）' }))));
+    el('span', { class: 'ops-hint', text: obj.title || obj.snippet || '查看并解释' }))));
   const extras = [
     el('button', { type: 'button', class: 'ops-back', text: '看全文的图表清单', onclick: fullList }),
   ];
   if (!objects.length) {
     menu.replaceChildren(
       el('div', { class: 'ops-head' }, ...head),
-      el('div', { class: 'ops-empty', text: `第 ${page} 页没识别到图 / 表 / 公式编号（可能是扫描页，或标题被拆行）。` }),
+      el('div', { class: 'ops-empty', text: `第 ${page} 页未找到图表或公式编号。` }),
       el('button', { type: 'button', class: 'ops-back', text: '看全文的图表清单', onclick: fullList }),
-      el('div', { class: 'ops-empty', text: '也可以回到正文框选一块图/表/公式，用「⎚ 截图」发进对话问。' }),
+      el('div', { class: 'ops-empty', text: '用输入框旁的截图按钮，选中想问的区域。' }),
     );
     return;
   }
@@ -8760,7 +8775,7 @@ function renderRelations() {
   list.replaceChildren(...out);
 
   if (!refs.length) {
-    list.append(el('li', { class: 'empty', text: '没在文末找到编号式参考文献（[1] [2] …）。扫描版 PDF 抽不出文字，这类文献抽不出来。' }));
+    list.append(el('li', { class: 'empty', text: '未识别到参考文献。可选中正文中的引用查询；扫描件可截图提问。' }));
   }
 }
 
@@ -10740,9 +10755,9 @@ function updateComposerHint() {
     const text = translationDraftText($('#chatInput')?.value || '', segments);
     const images = state.attachments.filter((a) => a.kind === 'image').length;
     $('#sendBtn').title = segments.length ? '合并翻译' : '翻译';
-    $('#chatInput').placeholder = segments.length ? '补充原文（接在已加入选段之后）…' : '输入原文，或划选后点「加入译文」…（Enter 翻译）';
-    setHint(segments.length ? `${segments.length} 段按列表顺序合并 · ${text.length.toLocaleString()} / 20,000 字${images ? ` · ${images} 张截图另译` : ''}`
-      : images ? `${images} 张截图${text ? '与输入文字' : ''}将依次翻译` : '可分段加入正文，跳过图注或脚注');
+    $('#chatInput').placeholder = segments.length ? '继续补充原文…' : '粘贴需要翻译的文字…';
+    setHint(segments.length ? `将合并翻译 ${segments.length} 段选文${images ? ` · ${images} 张截图另译` : ''}`
+      : images ? `${images} 张截图${text ? '与输入文字' : ''}将依次翻译` : '');
     return;
   }
   setHint(rangeOverview());
@@ -10835,8 +10850,8 @@ function applyDocProfile(docId, profile) {
     // 用户口径（2026-11-02）：右下角只弹问题类提示，扫描件说明属于信息类 → 放到输入框下方的小字里，不弹窗。
     const hasVision = String(Settings.data.visionModel || '').trim();
     setHint(hasVision
-      ? `扫描件：没有文本层，问答将按页面图片理解（读图模型：${hasVision}）`
-      : '扫描件：没有文本层，问答与「读懂论文」将按页面图片理解（图片交给主模型；若主模型不能读图，请到设置里配置视觉模型）');
+      ? '扫描件 · 将通过图片理解页面'
+      : '扫描件 · 需要支持图片的模型，可在设置中配置');
   }
 }
 
@@ -11000,7 +11015,7 @@ async function warmDocText() {
     state.docText = '';
     state.docTextDoc = myDoc;
     updateSendScope();
-    setHint('扫描件：没有文本层，问答会按页面图片理解（不需要抽取全文）');
+    setHint('扫描件 · 将通过图片理解页面');
     return;
   }
   try {
@@ -11013,7 +11028,7 @@ async function warmDocText() {
     updateSendScope();
     // 用户在读取过程中取消了这次范围，就不要把过时的完成提示写回输入框。
     if (!state.useFullText) return;
-    setHint(text ? `整篇论文已就绪：${text.length.toLocaleString()} 字（本次发送会增加请求量）` : '这篇文章抽不出文本（可能是扫描件），改用框选截图问');
+    setHint(text ? '已准备好整篇论文' : '这篇文章抽不出文本（可能是扫描件），改用框选截图问');
   } catch {
     if (state.doc?.docId !== myDoc) return;
     setHint('读取整篇论文失败，这次提问只带选中内容和当前页上下文');
@@ -12386,9 +12401,9 @@ function updateModelControls() {
   const dirty = modelDraftDirty();
   const current = !!settingsProfileId && settingsProfileId === d.activeProfile;
   $('#profileState').textContent = active ? `当前使用：${profileLabel(active)}${active.name && active.name !== active.model ? ` · ${active.model}` : ''}` : '当前未启用模型配置';
-  $('#profileHint').textContent = !settingsProfileId ? '新配置独立保存，不会沿用其他配置的密钥。'
-    : dirty ? '有未保存的修改，保存并使用后可测试连接。'
-    : !current ? '正在查看其他配置，保存并使用后才会切换。' : '此配置正在使用。测试连接会发送一条简短请求。';
+  $('#profileHint').textContent = !settingsProfileId ? '填写后保存，即可启用。'
+    : dirty ? '请先保存修改，再测试连接。'
+    : !current ? '保存并使用后切换到此配置。' : '测试连接会发送一条简短请求。';
   MODEL_INPUTS.forEach(id => { $(`#${id}`).disabled = !!settingsOperation; });
   $('#cfgProfile').disabled = !!settingsOperation;
   $('#newProfile').disabled = !!settingsOperation;
@@ -12476,22 +12491,22 @@ function updateSessionSettingHints() {
   };
   const mode = readSessionScopeMode();
   set('settScopeHint', mode === 'paper'
-    ? '每篇论文各接自己那一段对话：换论文会自动恢复那篇论文上次的对话，不会把上一篇的问答带过去，会话头显示这篇论文的会话。想比较几篇论文、让助手带着前文跨论文追问时，临时把这里切到「全局共用」即可。会话记录始终在历史面板里。'
+    ? '每篇论文保留独立对话，切换论文时接上各自的进度。'
     : mode === 'global'
-      ? '所有论文接同一段对话：换论文、换文件夹都能接着上一句问，助手始终带着同一段前文。适合把整个书库当成一段连贯的阅读笔记；想每篇论文互不干扰时切到「按论文」。会话记录始终在历史面板里。'
-      : '同一文件夹里的论文接着同一段对话：在这个文件夹里换论文，问的是同一段对话（继续追问、助手能看到前文）。只有打开另一个文件夹时，才按下面「打开文件夹时」执行。适合把一个课题的多篇论文放在一个文件夹、当成一段长讨论。会话记录始终在历史面板里。');
+      ? '所有论文共享对话，适合跨论文、跨文件夹讨论。'
+      : '同一文件夹内换论文时继续当前对话，适合按课题阅读。');
   set('settTitleHint', aiTitleEnabled()
-    ? '会话有第一轮完整回答后自动生成一次清晰标题（≤28 字）；手动改名永远优先，已生成过的会话不会再请求模型，断网也不会一直重试。'
-    : '不生成 AI 标题：会话头沿用首条问题的摘要，随时可以手动改名（手动改过的标题在任何模式下都优先）。');
+    ? '首次回答后生成标题，会额外请求一次模型；手动修改的标题会保留。'
+    : '使用首条问题作为标题，随时可以重命名。');
   const enter = sessionsGetEnterMode();
   set('settEnterHint', enter === 'resume'
-    ? '打开文件夹时自动接上最近一段有内容的会话；超过 7 天或 60 条消息仍会弹选择卡片，避免误开太旧的对话。同一文件夹里换论文不受这里影响，按上面的「换论文时对话怎么接」处理。'
+    ? '自动继续最近会话；超过 7 天或 60 条消息时，先由你选择。'
     : enter === 'new'
-      ? '每次打开文件夹都新建一个空会话，旧会话留在历史里。同一文件夹里换论文不受这里影响，按上面的「换论文时对话怎么接」接上对应会话。'
-      : '打开一个文件夹（或启动应用）时显示选择卡片，由你挑一段继续。同一文件夹里换论文不会重新弹卡片，按上面的「换论文时对话怎么接」自动接上。');
+      ? '打开文件夹时开始新会话，原来的对话保留在历史中。'
+      : '打开文件夹时选择继续或新建；同一文件夹内换论文不再询问。');
   set('settHistoryHint', sessionsGetHistoryMode() === 'time'
-    ? '全部会话按最近活动排成一个列表（今天 / 昨天 / 最近 7 天 / 更早），每个会话后面标出按顺序读过哪些论文。'
-    : '按文件夹分组：组头是论文名、路径和会话数，组内是这个文件夹的会话；一个会话读过几篇论文时会标注「还读过 N 篇」。');
+    ? '最近聊过的会话排在前面。'
+    : '按论文整理会话，便于回到对应的阅读内容。');
 }
 
 /** 切换「换论文时对话怎么接」：当前这段对话先按旧归属存盘，再把同一个 sid 接到新归属方式下，
@@ -12645,7 +12660,7 @@ function resetSettings() {
   fillUiSettings();
   resetPanels();          // 面板显隐 / 顺序 / 两侧栏宽度 / 收起意图
   saveUi();
-  toast('已恢复默认设置，论文和会话未受影响', 'ok');
+  toast('已重置外观与阅读偏好，模型配置和阅读记录已保留', 'ok');
 }
 
 const SETTINGS_PANE_KEY = 'reader.settings.pane';
@@ -12850,7 +12865,11 @@ function checkConfigWarning() {
   const need = !Settings.data.hasApiKey && !/127\.0\.0\.1|localhost/.test(Settings.data.baseURL || '');
   warn.classList.toggle('hidden', !need);
   if (need) {
-    warn.innerHTML = '还没配置模型接口：点右上角 <b>⚙</b> 填 API Key 和模型名。<br />密钥只写在本机 <code>data/config.json</code>，PDF 不会离开这台电脑。';
+    warn.replaceChildren(
+      el('span', { text: '已可以阅读 PDF。连接模型后，可使用翻译和问答。' }),
+      el('button', { type: 'button', class: 'welcome-action', text: '连接模型', onclick: async () => {
+        await openSettings(); showSettingsPane('model');
+      } }));
   }
 }
 

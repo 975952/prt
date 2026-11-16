@@ -1,9 +1,6 @@
 /**
- * 主题皮肤验收（2026-11）：
- *  - 设置里能选到全部极简皮肤；
- *  - 青瓷可切换、刷新恢复；已移除主题自动迁移到保留主题；
- *  - 纯黑皮肤：界面暗色表面是纯黑 rgb(0,0,0)、阴影全部为 none（不发光）；
- *  - 米宣、白瓷、青瓷、乌木、石墨、玄墨命名一致，选择可保存。
+ * 主题皮肤验收：透光 / 米宣 / 深色共用布局。
+ * 验证透明纸面、夜读文字、图片原色、截图隔离、参数持久化和旧主题迁移。
  *
  *   node test/theme.mjs
  */
@@ -13,6 +10,9 @@ import http from 'node:http';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, ROOT, SANDBOX } from './_env.mjs';
+import { stageExe, spawnReader, stopChild } from './_exe.mjs';
+import { writeNightFixture } from './fixtures/make-night-pdf.mjs';
+const desktop = process.argv.includes('--desktop');
 
 const scratch = fs.mkdtempSync(path.join(SANDBOX, 'theme-'));
 const DATA = path.join(scratch, 'data');
@@ -23,7 +23,8 @@ fs.mkdirSync(PAPERS);
 fs.copyFileSync(path.join(import.meta.dirname, 'fixtures', 'multipage-sample.pdf'), path.join(PAPERS, 'theme-paper.pdf'));
 fs.copyFileSync(path.join(import.meta.dirname, 'fixtures', 'image-sample.pdf'), path.join(PAPERS, 'theme-image.pdf'));
 
-const CHROME = process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe';
+writeNightFixture(path.join(PAPERS, 'night-composite.pdf'));
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const checks = [];
 const check = (label, ok, detail = '') => {
@@ -45,13 +46,10 @@ let reader = null;
 let browser = null;
 try {
   const readerPort = await findPort();
-  reader = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-    env: {
-      ...process.env, PORT: String(readerPort), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS,
-      NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1',
-    },
-    stdio: 'ignore',
-  });
+  const env = { ...process.env, PORT: String(readerPort), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS,
+    NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1' };
+  reader = desktop ? spawnReader(stageExe('theme').exe, { args: ['--port', String(readerPort)], env })
+    : spawn(process.execPath, [path.join(ROOT, 'server.js')], { env, stdio: 'ignore', windowsHide: true });
   const BASE = `http://127.0.0.1:${readerPort}`;
   let ready = false;
   for (let i = 0; i < 100 && !ready; i += 1) {
@@ -60,6 +58,10 @@ try {
   }
   check('隔离服务启动', ready);
   if (!ready) throw new Error('isolated server failed to start');
+
+  for (const asset of ['style.css', 'js/app.js', 'js/sessions.js', 'js/pdfview.js', 'js/pdf-reading-theme.js']) {
+    if (await fetch(`${BASE}/${asset}`).then(r => r.text()) !== fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8')) throw new Error(`Stale embedded asset: ${asset}`);
+  }
 
   browser = await puppeteer.launch({
     executablePath: CHROME,
@@ -79,25 +81,6 @@ try {
     }, value);
     await wait(200);
   };
-  const themeState = () => page.evaluate(() => {
-    const root = document.documentElement;
-    const cs = getComputedStyle(root);
-    const body = getComputedStyle(document.body);
-    const topbar = getComputedStyle(document.querySelector('.topbar'));
-    const modal = getComputedStyle(document.querySelector('.modal-box'));
-    return {
-      theme: root.dataset.theme || '',
-      bg: cs.getPropertyValue('--bg').trim(),
-      bgElev: cs.getPropertyValue('--bg-elev').trim(),
-      shadow: cs.getPropertyValue('--shadow').trim(),
-      shadowSm: cs.getPropertyValue('--shadow-sm').trim(),
-      bodyBg: body.backgroundColor,
-      bodyImage: body.backgroundImage,
-      topbarShadow: topbar.boxShadow,
-      modalShadow: modal.boxShadow,
-      fg: cs.getPropertyValue('--fg').trim(),
-    };
-  });
 
   const artifactDir = path.join(import.meta.dirname, 'artifacts');
   fs.mkdirSync(artifactDir, { recursive: true });
@@ -108,10 +91,9 @@ try {
   await page.waitForSelector('#settingsModal:not(.hidden)');
 
   const options = await page.evaluate(() => [...document.querySelectorAll('#uiTheme option')].map((o) => [o.value, o.textContent.trim()]));
-  check('主题命名统一，已移除三套重复配色',
+  check('主题只保留透光、米宣与深色',
     JSON.stringify(options) === JSON.stringify([
-      ['glass', '透光'], ['system', '跟随系统'], ['light', '米宣'], ['mist', '白瓷'], ['sage', '青瓷'],
-      ['dark', '乌木'], ['graphite', '石墨'], ['black', '玄墨'],
+      ['glass', '透光'], ['light', '米宣'], ['dark', '深色'],
     ]), JSON.stringify(options));
 
   /* 透明只影响纸底：验证真实像素、控件保存和不透明 AI 截图。 */
@@ -209,103 +191,99 @@ try {
   await page.click('#settingsBtn');
   await page.waitForSelector('#settingsModal:not(.hidden)');
 
-  /* ── 纯黑：暗色表面纯黑、无阴影（不发光） ── */
-  await setTheme('black');
-  await page.waitForFunction(() => {
-    const v = window.__viewer; const e = v.rendered.get(v.current);
-    return e && e.paper !== 'rgba(0, 0, 0, 0)' && e.canvas.getContext('2d').getImageData(2, 2, 1, 1).data[3] === 255;
-  });
-  check('离开玻璃主题后恢复不透明纸底', true);
-  const black = await themeState();
-  check('纯黑皮肤：根主题生效', black.theme === 'black', black.theme);
-  check('纯黑皮肤：背景变量是 #000000', black.bg.toLowerCase() === '#000000' && black.bgElev.toLowerCase() === '#000000',
-    `${black.bg} / ${black.bgElev}`);
-  check('纯黑皮肤：阴影全部为 none（完全不发光）',
-    black.shadow === 'none' && black.shadowSm === 'none' && black.topbarShadow === 'none' && black.modalShadow === 'none',
-    `${black.shadow} | topbar=${black.topbarShadow} | modal=${black.modalShadow}`);
-  check('纯黑皮肤：界面纯黑底且没有渐变/背景图', black.bodyBg === 'rgb(0, 0, 0)' && black.bodyImage === 'none',
-    `${black.bodyBg} / ${black.bodyImage}`);
-  check('纯黑皮肤：正文色不是纯白刺眼（留一点余量）', black.fg && black.fg.toLowerCase() !== '#ffffff', black.fg);
-
-  /* ── 石墨灰 / 纯白 / 暖白：能切换，且不是纯黑 ── */
-  await setTheme('graphite');
-  const graphite = await themeState();
-  check('石墨灰：深色但不是纯黑', graphite.theme === 'graphite'
-    && graphite.bodyBg === 'rgb(17, 18, 20)' && graphite.shadow === 'none', `${graphite.bodyBg} / ${graphite.shadow}`);
-
-  await setTheme('mist');
-  const mist = await themeState();
-  check('纯白：白色极简、无阴影', mist.theme === 'mist'
-    && mist.bodyBg === 'rgb(255, 255, 255)' && mist.shadow === 'none', `${mist.bodyBg} / ${mist.shadow}`);
-
-  await setTheme('light');
-  const light = await themeState();
-  check('暖白：现有浅色皮肤仍正常', light.theme === 'light' && light.bodyBg !== 'rgb(0, 0, 0)', light.bodyBg);
-
-  /* ── 新主题：验证主题变量、浅/深色外观、偏好持久化并保存截图 ── */
-  const newThemes = [
-    ['sage', '#EEF2EE', '#293B33', 'rgb(238, 242, 238)', '青瓷'],
-  ];
-  for (const [id, bg, fg, bodyBg, label] of newThemes) {
-    await setTheme(id);
-    const state = await themeState();
-    check(`${label}：主题与明暗配色正确`, state.theme === id
-      && state.bg.toLowerCase() === bg.toLowerCase()
-      && state.fg.toLowerCase() === fg.toLowerCase()
-      && state.bodyBg === bodyBg,
-    `${state.theme} / ${state.bg} / ${state.fg} / ${state.bodyBg}`);
-    const stored = await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.theme);
-    check(`${label}：选择已保存`, stored === id, String(stored));
-    await page.evaluate(() => document.querySelector('#settingsModal')?.classList.add('hidden'));
-    await page.screenshot({ path: path.join(artifactDir, `theme-${id}.png`) });
-    await page.click('#settingsBtn');
-    await page.waitForSelector('#settingsModal:not(.hidden)');
-    await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => window.__state?.doc && window.__viewer?.numPages > 0, { timeout: 40000 });
-    const restoredTheme = await page.evaluate(() => document.documentElement.dataset.theme || '');
-    check(`${label}：刷新后恢复`, restoredTheme === id, restoredTheme);
-    await page.click('#settingsBtn');
-    await page.waitForSelector('#settingsModal:not(.hidden)');
+  // Shared layout and readable paper, independent of palette.
+  await page.evaluate(() => { window.__viewer.setScale(1); window.__viewer.goToPage(1); });
+  const layouts = [];
+  for (const theme of ['glass', 'light', 'dark']) {
+    await setTheme(theme);
+    await page.waitForFunction(() => {
+      const v = window.__viewer, e = v.rendered.get(1);
+      const theme = document.documentElement.dataset.theme;
+      return e?.renderScale === 1 && !v.renderTasks.size && e.paper === (theme === 'dark' ? '#222426' : theme === 'glass' ? 'rgba(0, 0, 0, 0)' : getComputedStyle(document.documentElement).getPropertyValue('--paper').trim());
+    }, { timeout: 30000 });
+    await page.click('#closeSettings');
+    layouts.push(await page.evaluate(() => {
+      const get = selector => { const s = getComputedStyle(document.querySelector(selector)); return [s.display, s.padding, s.borderRadius, s.gap]; };
+      return [get('#composer .composer-row'), get('.aibar'), get('.viewer-foot')];
+    }));
+    await page.screenshot({ path: path.join(artifactDir, `theme-${theme}-unified.png`) });
+    if (theme === 'dark') {
+      const pixels = await page.evaluate(() => {
+        const c = window.__viewer.rendered.get(1).canvas, ctx = c.getContext('2d');
+        const data = ctx.getImageData(0, 0, c.width, c.height).data;
+        let ink = 0, bg = 0;
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i] === 226 && data[i + 1] === 228 && data[i + 2] === 230) ink++;
+          if (data[i] === 34 && data[i + 1] === 36 && data[i + 2] === 38) bg++;
+        }
+        return { ink, bg };
+      });
+      check('深色论文为浅字深底', pixels.ink > 100 && pixels.bg > 1000, JSON.stringify(pixels));
+      const capture = await page.evaluate(async () => {
+        const shot = await window.__viewer.capturePageImage(1, { maxDim: 600 });
+        const img = new Image(); img.src = shot.dataUrl; await img.decode();
+        const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+        const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+        return [...ctx.getImageData(2, 2, 1, 1).data];
+      });
+      check('夜读不改变截图和模型输入的原始纸面', capture.slice(0, 3).every(v => v > 248), String(capture));
+    }
+    await page.click('#settingsBtn'); await page.waitForSelector('#settingsModal:not(.hidden)');
   }
-
-  for (const [oldTheme, newTheme] of [['sand', 'light'], ['fjord', 'graphite'], ['plum', 'dark']]) {
-    await page.evaluate((theme) => {
+  check('三套配色共用输入框、标签栏和底栏布局', layouts.every(l => JSON.stringify(l) === JSON.stringify(layouts[0])));
+  const nightImage = await browser.newPage();
+  await nightImage.goto(`${BASE}/?open=theme-image.pdf`, { waitUntil: 'domcontentloaded' });
+  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === '#222426' && !window.__viewer.renderTasks.size);
+  const preserved = await nightImage.evaluate(() => {
+    const c = window.__viewer.rendered.get(1).canvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
+    let orange = 0, white = 0, ink = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] === 200 && d[i + 1] === 108 && d[i + 2] === 62 && d[i + 3] === 255) orange++;
+      if (d[i] === 250 && d[i + 1] === 246 && d[i + 2] === 232 && d[i + 3] === 255) white++;
+      if (d[i] === 226 && d[i + 1] === 228 && d[i + 2] === 230) ink++;
+    }
+    return { orange, white, ink };
+  });
+  check('夜读混排页：彩色图片和图内白色保持原色，文字反色', preserved.orange > 100 && preserved.white > 100 && preserved.ink > 100, JSON.stringify(preserved));
+  await nightImage.screenshot({ path: path.join(artifactDir, 'theme-dark-images.png') });
+  await nightImage.setViewport({ width: 1500, height: 950, deviceScaleFactor: 2 });
+  await nightImage.goto(`${BASE}/?open=night-composite.pdf`, { waitUntil: 'domcontentloaded' });
+  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === '#222426' && !window.__viewer.renderTasks.size);
+  const composited = await nightImage.evaluate(() => {
+    const c = window.__viewer.rendered.get(1).canvas, ctx = c.getContext('2d');
+    const sample = (x, y) => [...ctx.getImageData(Math.floor(x / 480 * c.width), Math.floor((640 - y) / 640 * c.height), 1, 1).data];
+    return { background: sample(10, 10), orange: sample(50, 490), white: sample(170, 370), black: sample(50, 370),
+      repeated: sample(260, 490), masked: sample(260, 270), line: sample(100, 565) };
+  });
+  check('显式白色纸底与线条反色，重复图片和透明遮罩内的图片保持原色',
+    JSON.stringify(composited.background) === '[34,36,38,255]' && JSON.stringify(composited.line) === '[226,228,230,255]'
+    && JSON.stringify(composited.orange) === '[200,108,62,255]' && JSON.stringify(composited.repeated) === '[200,108,62,255]'
+    && JSON.stringify(composited.masked) === '[200,108,62,255]' && JSON.stringify(composited.white) === '[255,255,255,255]'
+    && JSON.stringify(composited.black) === '[0,0,0,255]', JSON.stringify(composited));
+  await nightImage.screenshot({ path: path.join(artifactDir, 'theme-dark-composite.png') });
+  await nightImage.evaluate(() => window.__viewer.setScale(6));
+  await nightImage.waitForFunction(() => {
+    const v = window.__viewer, e = v.rendered.get(1);
+    return e?.slice && e.renderScale === 6 && e.paper === '#222426' && !v.renderTasks.has(1);
+  }, { timeout: 30000 });
+  check('深色切片缩放不产生圆角接缝，文字层仍可选择', await nightImage.evaluate(() => {
+    const e = window.__viewer.rendered.get(1);
+    return getComputedStyle(e.canvas).borderRadius === '0px' && e.textDiv.textContent.includes('Night reading');
+  }));
+  await nightImage.close();
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === '#222426');
+  check('刷新恢复深色主题和论文反色', await page.evaluate(() => document.documentElement.dataset.theme === 'dark'));
+  for (const [oldTheme, newTheme] of [['sand', 'light'], ['mist', 'glass'], ['sage', 'light'], ['fjord', 'dark'], ['plum', 'dark'], ['graphite', 'dark'], ['black', 'dark']]) {
+    await page.evaluate(theme => {
       const saved = JSON.parse(localStorage.getItem('reader.ui') || '{}');
-      saved.style = { ...saved.style, theme };
-      localStorage.setItem('reader.ui', JSON.stringify(saved));
+      saved.style = { ...saved.style, theme }; localStorage.setItem('reader.ui', JSON.stringify(saved));
     }, oldTheme);
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.__state?.doc && window.__viewer?.numPages > 0);
-    const migrated = await page.evaluate(() => ({
-      active: document.documentElement.dataset.theme,
-      saved: JSON.parse(localStorage.getItem('reader.ui')).style.theme,
-    }));
-    check('移除主题后偏好迁移 ' + oldTheme, migrated.active === newTheme && migrated.saved === newTheme);
+    const migrated = await page.evaluate(() => ({ active: document.documentElement.dataset.theme, saved: JSON.parse(localStorage.getItem('reader.ui')).style.theme }));
+    check('旧主题偏好平滑迁移 ' + oldTheme, migrated.active === newTheme && migrated.saved === newTheme);
   }
-
-  /* system 模式由操作系统色彩偏好控制；核验浅/深两套系统色板均正确。 */
-  await setTheme('system');
-  await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'light' }]);
-  let systemState = await themeState();
-  check('跟随系统：浅色偏好使用浅色配色', systemState.theme === '' && systemState.bodyBg === 'rgb(248, 245, 235)',
-    `${systemState.theme || 'system'} / ${systemState.bodyBg}`);
-  await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);
-  systemState = await themeState();
-  check('跟随系统：深色偏好使用深色配色', systemState.theme === '' && systemState.bodyBg === 'rgb(46, 43, 36)',
-    `${systemState.theme || 'system'} / ${systemState.bodyBg}`);
-  await page.emulateMediaFeatures([]);
-
-  /* ── 选择保存后刷新恢复 ── */
-  await setTheme('black');
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.theme);
-  check('主题写入本地偏好', saved === 'black', String(saved));
-  await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.__state?.doc && window.__viewer?.numPages > 0, { timeout: 40000 });
-  const restored = await page.evaluate(() => ({
-    theme: document.documentElement.dataset.theme || '',
-    bg: getComputedStyle(document.documentElement).getPropertyValue('--bg').trim(),
-  }));
-  check('刷新后恢复纯黑皮肤', restored.theme === 'black' && restored.bg.toLowerCase() === '#000000', JSON.stringify(restored));
 
   check('操作期间没有页面错误', pageErrors.length === 0, pageErrors.join(' | '));
   const failed = checks.filter((c) => !c.ok);
@@ -313,5 +291,5 @@ try {
   process.exitCode = failed.length ? 1 : 0;
 } finally {
   try { await browser?.close(); } catch { /* ignore */ }
-  try { reader?.kill(); } catch { /* ignore */ }
+  if (reader) await stopChild(reader);
 }

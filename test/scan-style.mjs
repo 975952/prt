@@ -72,7 +72,7 @@ try {
   assert.equal((await style(1)).radius, '0px');
   console.log('PASS original colored/white/black pixels preserved; square shape survives bitmap replacement and tiled zoom');
   await page.click('#settingsBtn'); await page.waitForSelector('#settingsModal:not(.hidden)');
-  for (const theme of ['mist', 'glass']) {
+  for (const theme of ['light', 'dark', 'glass']) {
     await page.evaluate(theme => { const s = document.querySelector('#uiTheme'); s.value = theme; s.dispatchEvent(new Event('input', { bubbles: true })); }, theme);
     await wait(300); assert.equal((await style(1)).radius, '0px');
   }
