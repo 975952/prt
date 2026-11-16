@@ -316,10 +316,20 @@
       <div class="settings-panes">
         <section class="settings-pane" id="settingsPaneModel" data-pane="model" role="tabpanel" aria-labelledby="settingsNavModel">
           <div class="settings-pane-title">模型与接口</div>
-          <div class="settings-pane-sub">API Key 只写在本机 data/config.json；换模型、换接口都在这里。</div>
+          <div class="settings-pane-sub">密钥仅保存在本机。选择配置后可以编辑，保存后用于后续 AI 请求。</div>
+    <div class="model-profile-toolbar">
+      <label class="field"><span>模型配置</span><select id="cfgProfile" aria-label="已保存的模型配置"></select></label>
+      <button type="button" class="model-profile-button" id="newProfile">新增</button>
+      <button type="button" class="model-profile-button danger" id="deleteProfile">删除</button>
+    </div>
+    <div class="model-profile-state" id="profileState" aria-live="polite"></div>
     <label class="field">
-      <span>已保存的模型配置</span>
-      <select id="cfgProfile" aria-label="已保存的模型配置"></select>
+      <span>配置名称（可选）</span>
+      <input id="cfgProfileName" type="text" maxlength="80" placeholder="例如：日常阅读、图表识读" autocomplete="off" />
+    </label>
+    <label class="field" id="endpointField">
+      <span>接口地址</span>
+      <input id="cfgBaseURL" type="url" placeholder="https://api.example.com/v1" spellcheck="false" autocomplete="off" />
     </label>
     <label class="field">
       <span>API Key</span>
@@ -327,19 +337,15 @@
     </label>
     <label class="field">
       <span>模型名</span>
-      <input id="cfgModel" type="text" placeholder="deepseek-flash" spellcheck="false" />
+      <input id="cfgModel" type="text" placeholder="填写接口服务提供的模型名" spellcheck="false" />
     </label>
     <label class="field">
       <span>视觉模型（可选）</span>
       <input id="cfgVisionModel" type="text" placeholder="留空 = 用上面的模型；扫描件与截图需要能读图的模型" spellcheck="false" />
     </label>
-    <label class="field hidden" id="endpointField">
-      <span>接口地址</span>
-      <input id="cfgBaseURL" type="text" spellcheck="false" />
-    </label>
-  <div class="modal-note">
-      <span id="endpointNote"></span>
-      <a class="link" id="toggleEndpoint" href="javascript:void(0)">改接口地址</a>
+    <div class="model-profile-test">
+      <button type="button" class="model-profile-button" id="testModel">测试连接</button>
+      <span id="profileHint">保存并使用后可测试连接。</span>
     </div>
         </section>
         <section class="settings-pane hidden" id="settingsPaneAppearance" data-pane="appearance" role="tabpanel" aria-labelledby="settingsNavAppearance">
@@ -428,8 +434,8 @@
       <div class="settings-reset">
         <button type="button" id="resetSettings">恢复默认设置</button>
       </div>
-      <span class="test-result" id="testResult"></span>
-      <button class="primary" id="saveSettings">保存</button>
+      <span class="test-result" id="testResult" role="status" aria-live="polite"></span>
+      <button class="primary" id="saveSettings">保存并使用</button>
     </div>
   </div>
 </div>

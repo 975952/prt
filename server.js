@@ -2093,7 +2093,8 @@ async function handle(req, res) {
       if (raw === null) return undefined;
       // 审计 §P1：严格字段白名单 + 范围限制，未知字段忽略
       const { patch, ignored, capped } = sec.sanitizeConfigPatch(raw);
-      if (ignored.length) sec.diag(`/api/config 忽略字段: ${ignored.join(', ')}`);
+      const unknown = ignored.filter(k => !modelProfiles.controlFields.includes(k));
+      if (unknown.length) sec.diag(`/api/config 忽略字段: ${unknown.join(', ')}`);
       /**
        * 超长字段返回 400，绝不截断保存（审计 §验收：「超限返回 413/400，
        * 不截断后静默保存」）。从前一个 5000 字的 model 会被悄悄存成 256 字、
@@ -2103,22 +2104,24 @@ async function handle(req, res) {
         const detail = capped.map((c) => `${c.field}（上限 ${c.limit} 字符）`).join('、');
         return sendJson(res, 400, { error: { message: `字段超长：${detail}。请缩短后重试（未保存任何改动）` } });
       }
-      let cur;
-      try {
-        cur = JSON.parse(await fsp.readFile(path.join(DATA_DIR, 'config.json'), 'utf8'));
-      } catch (e) {
-        if (e && e.code === 'ENOENT') cur = {};
-        else {
-          sec.diag(`读取 config.json 失败: ${e && e.message}`);
-          return sendJson(res, 500, { error: { message: '配置文件损坏，已拒绝覆盖，请先修复 config.json' } });
+      return modelProfiles.withSaveLock(async () => {
+        let cur;
+        try {
+          cur = JSON.parse(await fsp.readFile(path.join(DATA_DIR, 'config.json'), 'utf8'));
+        } catch (e) {
+          if (e && e.code === 'ENOENT') cur = {};
+          else {
+            sec.diag(`读取 config.json 失败: ${e && e.message}`);
+            return sendJson(res, 500, { error: { message: '配置文件损坏，已拒绝覆盖，请先修复 config.json' } });
+          }
         }
-      }
-      const next = { ...DEFAULT_CONFIG, ...cur, ...patch };
-      if (!patch.apiKey) next.apiKey = cur.apiKey || '';
-      try { modelProfiles.saveProfiles({ ...DEFAULT_CONFIG, ...cur }, next, raw); }
-      catch (e) { return sendJson(res, 400, { error: { message: e.message } }); }
-      await writeDataFile('config.json', next);
-      return sendJson(res, 200, { ok: true, hasApiKey: !!next.apiKey });
+        const next = { ...DEFAULT_CONFIG, ...cur, ...patch };
+        if (!patch.apiKey) next.apiKey = cur.apiKey || '';
+        try { modelProfiles.saveProfiles({ ...DEFAULT_CONFIG, ...cur }, next, raw, patch); }
+        catch (e) { return sendJson(res, 400, { error: { message: e.message } }); }
+        await writeDataFile('config.json', next);
+        return sendJson(res, 200, { ok: true, hasApiKey: !!next.apiKey, config: modelProfiles.publicConfig(next) });
+      });
     }
     return send(res, 405, 'Method Not Allowed');
   }

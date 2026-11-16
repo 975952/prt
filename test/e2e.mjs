@@ -897,8 +897,8 @@ check('顶栏只剩核心控件 + 标题栏按钮，且删掉的入口没有回�
   ui.topbar.join(' '));
 await page.evaluate(() => { document.getElementById('cfgModel').value = 'deepseek-chat'; });
 await page.click('#saveSettings');
-await page.waitForFunction(() => /✅|❌/.test(document.getElementById('testResult').textContent || ''), { timeout: 20000 });
-check('保存并测试连接可用', /✅|❌/.test(await page.evaluate(() => document.getElementById('testResult').textContent)));
+await page.waitForFunction(() => /已保存|保存失败/.test(document.getElementById('testResult').textContent || ''), { timeout: 20000 });
+check('保存配置成功且不强制测试连接', /已保存/.test(await page.evaluate(() => document.getElementById('testResult').textContent)));
 await page.evaluate(() => document.getElementById('closeSettings').click());
 // 必须等弹窗真的关掉再往下点：设置是覆盖层，弹窗还开着时点 #settingsBtn 的坐标会先命中
 // 遮罩（它的 mousedown 会顺手把弹窗关掉），于是后面点 #saveSettings 时它已经不可见了 ——
@@ -913,7 +913,7 @@ await page.waitForSelector('#settingsModal:not(.hidden)', { timeout: 6000 });
 await sleep(200);
 await page.evaluate(() => { document.getElementById('cfgApiKey').value = 'sk-persist-check-abcdef'; });
 await page.click('#saveSettings');
-await page.waitForFunction(() => /✅|❌/.test(document.getElementById('testResult').textContent || ''), { timeout: 20000 });
+await page.waitForFunction(() => /已保存|保存失败/.test(document.getElementById('testResult').textContent || ''), { timeout: 20000 });
 const savedOnce = await page.evaluate(() => ({
   hasKey: window.__settings.data.hasApiKey,
   inputCleared: document.getElementById('cfgApiKey').value === '',

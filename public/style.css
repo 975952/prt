@@ -1622,6 +1622,16 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .settings-pane-sub { color: var(--fg-faint); font-size: var(--ui-fs-xs); line-height: 1.55; margin-bottom: 13px; }
 .settings-pane > .field { margin-bottom: 13px; }
 .settings-pane > .field:last-child { margin-bottom: 0; }
+.model-profile-toolbar { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 6px; }
+.model-profile-toolbar .field { flex: 1; min-width: 0; margin: 0; }
+.model-profile-toolbar select { width: 100%; text-overflow: ellipsis; }
+.model-profile-button { flex: none; border: 1px solid var(--border-strong); border-radius: 7px; padding: 7px 11px; background: var(--bg); color: var(--fg); font: inherit; font-size: var(--ui-fs-sm); cursor: pointer; }
+.model-profile-button:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.model-profile-button.danger { color: var(--err-text); }
+.model-profile-button:disabled { opacity: .45; cursor: default; }
+.model-profile-state { margin: 0 0 14px; color: var(--accent); font-size: var(--ui-fs-xs); line-height: 1.5; overflow-wrap: anywhere; }
+.model-profile-test { display: flex; align-items: center; gap: 10px; margin-top: 14px; }
+.model-profile-test > span { color: var(--fg-faint); font-size: var(--ui-fs-xs); line-height: 1.5; }
 .settings-pane .settings-section-title { margin-top: 4px; }
 .settings-pane .settings-section-title:not(:first-child) { margin-top: 16px; }
 .settings-pane .modal-note { margin: 6px 0 14px; }
@@ -1646,14 +1656,18 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
   font-size: calc(12.5px * var(--ctl-scale)); font-weight: 600;
 }
 @media (max-width: 640px) {
-  .settings-body { flex-direction: column; min-height: 0; max-height: none; }
+  .settings-body { flex: 1 1 auto; flex-direction: column; min-height: 0; max-height: none; overflow: hidden; }
   .settings-nav {
-    flex-direction: row; overflow-x: auto; gap: 4px;
+    flex: 0 0 auto; flex-direction: row; overflow-x: auto; gap: 4px;
     padding: 0 0 8px; margin-bottom: 10px;
     border-right: 0; border-bottom: 1px solid var(--border);
   }
-  .settings-nav-item { width: auto; white-space: nowrap; }
-  .settings-panes { padding: 0 0 12px; overflow: visible; }
+  .settings-nav-item { flex: 0 0 auto; width: auto; white-space: nowrap; }
+  .settings-panes { min-height: 0; padding: 0 0 12px; overflow-y: auto; }
+  .settings-box .modal-foot { flex-wrap: wrap; }
+  .settings-box .modal-foot .test-result:not(:empty) { flex: 1 0 100%; order: -1; }
+  .settings-box .modal-foot .test-result:empty { display: none; }
+  .settings-box .modal-foot .settings-reset { margin-right: auto; }
 }
 
 

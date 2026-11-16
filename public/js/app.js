@@ -11750,23 +11750,67 @@ const ENDPOINT_SHORT = {
   'http://127.0.0.1:11434/v1': '本地 Ollama',
 };
 
-function fillSettings() {
+let settingsProfileId = '';
+let settingsModelBaseline = '';
+let settingsOperation = '';
+let settingsOpening = false;
+let settingsTestAbort = null;
+const MODEL_INPUTS = ['cfgProfileName', 'cfgBaseURL', 'cfgApiKey', 'cfgModel', 'cfgVisionModel'];
+const profileLabel = (p) => p?.name || p?.model || '未命名配置';
+const modelDraft = () => JSON.stringify(MODEL_INPUTS.map(id => $(`#${id}`).value));
+const modelDraftDirty = () => modelDraft() !== settingsModelBaseline;
+
+function settingsStatus(text = '', kind = '') {
+  $('#testResult').className = `test-result ${kind}`;
+  $('#testResult').textContent = text;
+}
+
+function updateModelControls() {
   const d = Settings.data;
+  const active = (d.modelProfiles || []).find(p => p.id === d.activeProfile);
+  const dirty = modelDraftDirty();
+  const current = !!settingsProfileId && settingsProfileId === d.activeProfile;
+  $('#profileState').textContent = active ? `当前使用：${profileLabel(active)}${active.name && active.name !== active.model ? ` · ${active.model}` : ''}` : '当前未启用模型配置';
+  $('#profileHint').textContent = !settingsProfileId ? '新配置独立保存，不会沿用其他配置的密钥。'
+    : dirty ? '有未保存的修改，保存并使用后可测试连接。'
+    : !current ? '正在查看其他配置，保存并使用后才会切换。' : '此配置正在使用。测试连接会发送一条简短请求。';
+  MODEL_INPUTS.forEach(id => { $(`#${id}`).disabled = !!settingsOperation; });
+  $('#cfgProfile').disabled = !!settingsOperation;
+  $('#newProfile').disabled = !!settingsOperation;
+  $('#deleteProfile').disabled = !!settingsOperation || !settingsProfileId;
+  $('#saveSettings').disabled = !!settingsOperation;
+  $('#testModel').disabled = !!settingsOperation || !current || dirty;
+}
+
+function fillModelSettings(id = Settings.data.activeProfile || '') {
+  const d = Settings.data;
+  const list = d.modelProfiles || [];
+  const selected = list.find(p => p.id === id);
+  settingsProfileId = selected?.id || '';
   const profiles = $('#cfgProfile');
-  profiles.replaceChildren(...(d.modelProfiles || []).map(p => {
+  profiles.replaceChildren(...list.map(p => {
     const option = document.createElement('option');
     option.value = p.id;
-    option.textContent = `${p.model} · ${p.baseURL} · 配置 ${Number(p.id) + 1}`;
+    let endpoint = ENDPOINT_SHORT[p.baseURL] || p.baseURL;
+    try { endpoint = ENDPOINT_SHORT[p.baseURL] || new URL(p.baseURL).host; } catch { /* legacy value */ }
+    option.textContent = `${profileLabel(p)} · ${endpoint}${p.id === d.activeProfile ? '（当前使用）' : ''}`;
     return option;
   }));
-  profiles.value = d.activeProfile || '0';
-  $('#cfgModel').value = d.model || '';
-  $('#cfgVisionModel').value = d.visionModel || '';
-  $('#cfgLongTermMemory').value = d.longTermMemory || '';
-  $('#cfgBaseURL').value = d.baseURL || '';
+  if (!selected) profiles.add(new Option('新配置（未保存）', ''));
+  profiles.value = settingsProfileId;
+  $('#cfgProfileName').value = selected?.name || '';
+  $('#cfgModel').value = selected?.model || '';
+  $('#cfgVisionModel').value = selected?.visionModel || '';
+  $('#cfgBaseURL').value = selected?.baseURL || '';
   $('#cfgApiKey').value = '';
-  $('#cfgApiKey').placeholder = d.hasApiKey ? '已保存，留空则不改' : 'sk-…';
-  updateEndpointNote();
+  $('#cfgApiKey').placeholder = selected?.hasApiKey ? '此配置已保存密钥，留空则保留' : '填写此配置的密钥；本地免密接口可留空';
+  settingsModelBaseline = modelDraft();
+  updateModelControls();
+}
+
+function fillSettings() {
+  fillModelSettings();
+  $('#cfgLongTermMemory').value = Settings.data.longTermMemory || '';
   fillUiSettings();
   fillSessionSettings();
 }
@@ -11790,7 +11834,7 @@ function fillUiSettings() {
 }
 
 /* 会话设置（设置 → 会话）：这些只影响本机的会话行为，切换/勾选就生效，
-   不需要走「保存并测试」。 */
+   不需要点「保存」。 */
 function fillSessionSettings() {
   const scope = $('#settScopeMode');
   if (scope) scope.value = readSessionScopeMode();
@@ -11962,11 +12006,6 @@ function resetSettings() {
   toast('已恢复默认设置，论文和会话未受影响', 'ok');
 }
 
-function updateEndpointNote() {
-  const url = $('#cfgBaseURL').value || Settings.data.baseURL || '';
-  $('#endpointNote').textContent = `接口：${ENDPOINT_SHORT[url] || url}`;
-}
-
 const SETTINGS_PANE_KEY = 'reader.settings.pane';
 const SETTINGS_PANES = ['model', 'appearance', 'behavior', 'session', 'memory'];
 
@@ -11988,45 +12027,89 @@ function showSettingsPane(name) {
   });
   const box = document.querySelector('.settings-box');
   if (box) box.dataset.settingsPane = pane;
+  $('#saveSettings').textContent = pane === 'model' ? '保存并使用' : '保存';
   try { localStorage.setItem(SETTINGS_PANE_KEY, pane); } catch (e) { /* 隐私模式写不了，忽略 */ }
 }
 
-function openSettings(hint) {
+async function openSettings(hint) {
+  if (settingsOperation || settingsOpening) return;
+  settingsOpening = true;
+  try { await Settings.load(); } finally { settingsOpening = false; }
   const modal = $('#settingsModal');
   modal.classList.remove('hidden');
   fillSettings();
+  settingsStatus();
   let pane = 'model';
   try { pane = localStorage.getItem(SETTINGS_PANE_KEY) || 'model'; } catch (e) { pane = 'model'; }
   showSettingsPane(pane);
   if (hint) { $('#testResult').className = 'test-result err'; $('#testResult').textContent = hint; }
-  // 只在「模型与接口」时自动聚焦 Key 输入框；其他面板聚焦左列当前分类，别把焦点塞进看不见的面板
+  // 模型面板先聚焦配置选择器；其他面板聚焦当前分类。
   setTimeout(() => {
-    if (pane === 'model') $('#cfgApiKey')?.focus();
+    if (pane === 'model') $('#cfgProfile')?.focus();
     else document.querySelector(`.settings-nav-item[data-pane="${pane}"]`)?.focus();
   }, 50);
 }
 
 function closeSettings() {
+  if (settingsOperation && settingsOperation !== 'test') return;
+  if ((modelDraftDirty() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || ''))
+    && !window.confirm('有尚未保存的修改，确定放弃并关闭设置吗？')) return;
+  settingsTestAbort?.abort();
   $('#settingsModal').classList.add('hidden');
   $('#testResult').textContent = '';
 }
 
 function initSettings() {
-  $('#cfgProfile').onchange = async () => {
+  $('#cfgProfile').onchange = () => {
     const select = $('#cfgProfile');
-    select.disabled = true;
-    $('#saveSettings').disabled = true;
+    if (modelDraftDirty() && !window.confirm('当前配置有未保存的修改，确定放弃并查看其他配置吗？')) {
+      select.value = settingsProfileId;
+      return;
+    }
+    fillModelSettings(select.value);
+    settingsStatus();
+  };
+  MODEL_INPUTS.forEach(id => $(`#${id}`).addEventListener('input', () => { settingsStatus(); updateModelControls(); }));
+  $('#newProfile').onclick = () => {
+    if (modelDraftDirty() && !window.confirm('当前配置有未保存的修改，确定放弃并新增配置吗？')) return;
+    fillModelSettings('');
+    settingsStatus();
+    $('#cfgProfileName').focus();
+  };
+  $('#deleteProfile').onclick = async () => {
+    if (settingsOperation || !settingsProfileId) return;
+    const list = Settings.data.modelProfiles || [];
+    const index = list.findIndex(p => p.id === settingsProfileId);
+    const selected = list[index];
+    if (!selected) return;
+    const remaining = list.filter(p => p.id !== settingsProfileId);
+    const next = remaining[Math.min(index, remaining.length - 1)];
+    const effect = settingsProfileId !== Settings.data.activeProfile ? '当前正在使用的配置不受影响。'
+      : next ? `删除后将使用“${profileLabel(next)}”。` : '这是最后一份配置。删除后需重新配置才能使用 AI。';
+    if (!window.confirm(`删除配置“${profileLabel(selected)}”及其已保存的密钥？\n${effect}${modelDraftDirty() ? '\n未保存的修改也会丢弃。' : ''}`)) return;
+    settingsOperation = 'delete';
+    updateModelControls();
     try {
-      await Settings.save({ selectProfile: select.value });
-      fillSettings();
+      await Settings.save({ profileAction: 'delete', profileId: settingsProfileId });
+      fillModelSettings();
       checkConfigWarning();
-      $('#testResult').className = 'test-result ok';
-      $('#testResult').textContent = '已切换模型配置';
+      settingsStatus('配置已删除。', 'ok');
     } catch (e) {
-      select.value = Settings.data.activeProfile || '0';
-      $('#testResult').className = 'test-result err';
-      $('#testResult').textContent = e.message;
-    } finally { select.disabled = false; $('#saveSettings').disabled = false; }
+      settingsStatus(e.message, 'err');
+    } finally { settingsOperation = ''; updateModelControls(); }
+  };
+  $('#testModel').onclick = async () => {
+    if (settingsOperation || !settingsProfileId || modelDraftDirty() || settingsProfileId !== Settings.data.activeProfile) return;
+    settingsOperation = 'test';
+    const ctl = settingsTestAbort = new AbortController();
+    updateModelControls();
+    settingsStatus('正在测试当前配置…');
+    try {
+      const r = await testConnection({ signal: ctl.signal });
+      if (!ctl.signal.aborted) settingsStatus(`连接正常 · ${r.model} · ${r.ms}ms`, 'ok');
+    } catch (e) {
+      if (!ctl.signal.aborted) settingsStatus(`连接测试失败：${e.message}。配置仍已保存，可修改后重试。`, 'err');
+    } finally { settingsTestAbort = null; settingsOperation = ''; updateModelControls(); }
   };
   $('#settingsBtn').onclick = () => openSettings();
   // 左列分类：点击切换；键盘 ↑/↓/Home/End 也能在分类间走动（panel 内部 Tab 正常）
@@ -12050,17 +12133,12 @@ function initSettings() {
   });
   $('#closeSettings').onclick = closeSettings;
   $('#settingsModal').addEventListener('mousedown', (e) => { if (e.target.id === 'settingsModal') closeSettings(); });
-  $('#toggleEndpoint').onclick = () => {
-    $('#endpointField').classList.toggle('hidden');
-    updateEndpointNote();
-  };
-  $('#cfgBaseURL').addEventListener('input', updateEndpointNote);
   // 设置页里「即时生效」的控件：主题、阅读字号、双指缩放速度，以及两个默认发送范围偏好
   // （输入框旁的临时切换按钮已于 2026-11-04 移除；这里的两个勾就是唯一入口，
   //   勾选走 applyUiSettingsFromControls → syncScopePrefs → updateComposerHint）。
   ['uiTheme', 'uiFontSize', 'uiZoomSpeed', 'cfgUseFullText', 'cfgUseWeb', 'cfgFollowUpDirect']
     .forEach((id) => document.getElementById(id)?.addEventListener('input', applyUiSettingsFromControls));
-  // 「会话」分类：四项都只影响本机行为，切换/勾选立刻生效（和「保存并测试」无关）
+  // 「会话」分类：四项都只影响本机行为，切换/勾选立刻生效。
   $('#settScopeMode')?.addEventListener('change', () => applySessionScopeMode($('#settScopeMode').value));
   $('#settAiTitle')?.addEventListener('change', () => {
     const on = !!$('#settAiTitle').checked;
@@ -12080,28 +12158,45 @@ function initSettings() {
   $('#resetSettings').onclick = () => resetSettings();
 
   $('#saveSettings').onclick = async () => {
-    const out = $('#testResult');
+    if (settingsOperation) return;
     const key = $('#cfgApiKey').value.trim();
-    const model = $('#cfgModel').value.trim() || Settings.data.model;
+    const model = $('#cfgModel').value.trim();
     const visionModel = $('#cfgVisionModel').value.trim();
     const longTermMemory = $('#cfgLongTermMemory').value.slice(0, 4000);
-    const baseURL = $('#cfgBaseURL').value.trim() || Settings.data.baseURL;
-    out.className = 'test-result';
-    out.textContent = '保存并测试中…';
-    try {
-      await Settings.save({ model, visionModel, longTermMemory, baseURL, ...(key ? { apiKey: key } : {}) });
-      fillSettings();
-      $('#cfgApiKey').value = '';
-      $('#cfgApiKey').placeholder = Settings.data.hasApiKey ? '已保存，留空则不改' : 'sk-…';
-      updateEndpointNote();
-      const r = await testConnection();
-      out.className = 'test-result ok';
-      out.textContent = `✅ ${r.model} · ${r.ms}ms`;
-      setTimeout(closeSettings, 900);
-    } catch (e) {
-      out.className = 'test-result err';
-      out.textContent = `❌ ${e.message}`;
+    const baseURL = $('#cfgBaseURL').value.trim();
+    const saveModel = document.querySelector('.settings-box')?.dataset.settingsPane === 'model' || modelDraftDirty();
+    const patch = {};
+    if (longTermMemory !== (Settings.data.longTermMemory || '')) patch.longTermMemory = longTermMemory;
+    if (saveModel) {
+      if (!model || !baseURL) {
+        settingsStatus('请填写模型名和接口地址。', 'err');
+        showSettingsPane('model');
+        $(!baseURL ? '#cfgBaseURL' : '#cfgModel').focus();
+        return;
+      }
+      try {
+        const url = new URL(baseURL);
+        if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error();
+      } catch {
+        settingsStatus('请输入有效的 http 或 https 接口地址；密钥请填在 API Key 中。', 'err');
+        showSettingsPane('model');
+        $('#cfgBaseURL').focus();
+        return;
+      }
+      Object.assign(patch, { profileAction: settingsProfileId ? 'save' : 'create', profileId: settingsProfileId,
+        profileName: $('#cfgProfileName').value.trim(), model, visionModel, baseURL, ...(key ? { apiKey: key } : {}) });
     }
+    settingsOperation = 'save';
+    updateModelControls();
+    settingsStatus('正在保存…');
+    try {
+      await Settings.save(patch);
+      fillSettings();
+      checkConfigWarning();
+      settingsStatus(saveModel ? '已保存并使用此配置。可按需测试连接。' : '设置已保存。', 'ok');
+    } catch (e) {
+      settingsStatus(e.message, 'err');
+    } finally { settingsOperation = ''; updateModelControls(); }
   };
 }
 

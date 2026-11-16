@@ -74,7 +74,8 @@ export const Settings = {
       if (r.ok) {
         const j = await r.json();
         this.data.hasApiKey = j.hasApiKey;
-        await this.load();
+        if (j.config) this.data = { ...this.data, ...j.config, theme: theme ?? this.data.theme, fontSize: fontSize ?? this.data.fontSize };
+        else await this.load();
       }
     } catch (e) {
       throw new Error(`保存失败：${e.message}`);
@@ -297,12 +298,13 @@ export async function streamChat(opts) {
 }
 
 /** 测试连接：发一条最短的请求 */
-export async function testConnection() {
+export async function testConnection({ signal, idleMs = 15000 } = {}) {
   const t0 = Date.now();
   const text = await streamChat({
     messages: [{ role: 'user', content: '只回复两个字：可用' }],
     stream: false,
     temperature: 0,
+    signal, idleMs,
   });
   return { ms: Date.now() - t0, text: (text || '').trim().slice(0, 40), model: Settings.data.model };
 }

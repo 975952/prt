@@ -112,6 +112,8 @@ data/prt.log  运行日志（超过 512KB 就不再追加）
 | POST | `/api/session?doc=<docId>` | 原子保存当前论文会话；写盘失败返回 HTTP 500 |
 | POST | `/api/chat` | AI 转发，见下 |
 
+模型配置：`GET /api/config` 另返回 `modelProfiles` 和 `activeProfile`，列表中的配置含稳定 `id`、名称及模型字段，以 `hasApiKey` 表示是否保存密钥，绝不返回密钥。`POST /api/config` 支持 `profileAction: create/save/select/delete`；编辑、切换、删除需传 `profileId`，名称用 `profileName`，模型字段仍按白名单校验。保存响应附带脱敏后的 `config`。编辑时空密钥保留该配置自己的密钥；新增时不继承其他密钥；删除当前配置会选用相邻剩余配置，删除最后一份会清空当前模型字段。兼容 `selectProfile`，但不得与其他配置操作混用。
+
 其它方法 → `405`；未知路由 → 走静态逻辑（无扩展名的会回落 `index.html`，和 Node 版一致）。
 请求体上限 64MB。
 

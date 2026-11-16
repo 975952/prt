@@ -14,6 +14,7 @@ mod auth;
 mod chat;
 mod icon_geometry;
 mod limits;
+mod model_profiles;
 mod server;
 mod store;
 mod util;
