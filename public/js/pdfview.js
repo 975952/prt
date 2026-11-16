@@ -1,5 +1,6 @@
 import { clamp, throttle, sleep } from './util.js';
 import { stripPageLabels } from './reading-context.js';
+import { orderSelectionRuns, clipSelectionRuns, selectionTextOf, selectionRunAt } from './selection-reading-order.js';
 
 let pdfjsLib = null;
 
@@ -1769,6 +1770,7 @@ export class PdfViewer {
                返回值是这一页的命中表（页面内局部坐标），`charPosAt()` 直接用它做几何命中，
                不再每次鼠标移动都逐 span 读 DOM。 */
             entry.hitBoxes = this._tileTextHitBoxes(textDiv) || null;
+            entry.selectionRuns = null;
             this._paintCites(i);
           }
         }
@@ -2448,50 +2450,92 @@ export class PdfViewer {
 
   /* ------------------------------------------------------------ 选区 */
 
-  /** 读取当前浏览器选区，返回与页面绑定的干净文本和坐标 */
+  _selectionRunsForPage(page) {
+    const entry = this.rendered.get(page);
+    if (!entry?.textDiv) return [];
+    if (entry.selectionRuns) return entry.selectionRuns;
+    let boxes = entry.hitBoxes;
+    if (!boxes) {
+      const layer = entry.textDiv.getBoundingClientRect();
+      const scale = layerScale(entry.textDiv);
+      boxes = [...entry.textDiv.querySelectorAll('span:not(.markedContent)')].flatMap((span) => {
+        const node = span.firstChild;
+        if (span.getAttribute('role') === 'img' || node?.nodeType !== 3 || !node.textContent) return [];
+        const range = document.createRange(); range.selectNodeContents(node);
+        const rect = range.getBoundingClientRect();
+        return rect.height > 0 ? [{ span, node, l: (rect.left - layer.left) / scale, t: (rect.top - layer.top) / scale,
+          w: rect.width / scale, h: rect.height / scale }] : [];
+      });
+    }
+    entry.selectionRuns = orderSelectionRuns(boxes.map((box) => ({
+      ...box, text: box.node.textContent || '', left: box.l, top: box.t, width: box.w, height: box.h,
+      direction: box.span.dir || '', page,
+    })), { width: entry.cssW, height: entry.cssH });
+    return entry.selectionRuns;
+  }
+
+  /** Read character endpoints in visual order without changing pdf.js's text-layer DOM. */
   getSelectionInfo() {
     const sel = window.getSelection();
     if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
     const range = sel.getRangeAt(0);
-    const text = sel.toString();
+    if (!this.pagesEl) return null;
+    if (!this.pagesEl.contains(sel.anchorNode) && !this.pagesEl.contains(sel.focusNode)) {
+      try { if (!range.intersectsNode(this.pagesEl)) return null; } catch { return null; }
+    }
+    const pageOf = (node) => Number((node?.nodeType === 1 ? node : node?.parentElement)?.closest?.('.page')?.dataset.page) || null;
+    const endpoints = [pageOf(sel.anchorNode), pageOf(sel.focusNode)].filter(Boolean);
+    const lowPage = endpoints.length === 2 ? Math.min(...endpoints) : 1;
+    const highPage = endpoints.length === 2 ? Math.max(...endpoints) : this.numPages;
+    const runs = [...this.rendered.keys()].filter((page) => page >= lowPage && page <= highPage).sort((a, b) => a - b)
+      .flatMap((page) => this._selectionRunsForPage(page));
+    const indices = new Map(runs.map((run, index) => [run.node, index]));
+    const point = (node, offset) => indices.has(node) ? { index: indices.get(node), offset } : null;
+    const anchor = point(sel.anchorNode, sel.anchorOffset);
+    const focus = point(sel.focusNode, sel.focusOffset);
+    let selected;
+    if (!anchor || !focus) {
+      // Element boundaries (selectNodeContents/Ctrl+A) describe a set of DOM nodes,
+      // not two glyphs. Keep that exact membership and order it visually: converting
+      // the DOM's first/last node into a visual interval can silently lose a footer.
+      selected = runs.flatMap((run) => {
+        try { if (!range.intersectsNode(run.node)) return []; } catch { return []; }
+        const start = range.startContainer === run.node ? range.startOffset : 0;
+        const end = range.endContainer === run.node ? range.endOffset : run.text.length;
+        return end > start ? [{ ...run, start, end, text: run.text.slice(start, end) }] : [];
+      });
+    } else selected = clipSelectionRuns(runs, anchor, focus);
+    const text = selectionTextOf(selected);
     if (!text.trim()) return null;
 
-    const startEl = range.startContainer.nodeType === 1 ? range.startContainer : range.startContainer.parentElement;
-    const pageEl = startEl?.closest?.('.page');
+    const pageNum = selected[0].page;
+    const endPage = selected.at(-1).page;
+    const pageEl = this.pageEls[pageNum];
     if (!pageEl) return null;
-
-    const pageNum = Number(pageEl.dataset.page);
     const pr = pageEl.getBoundingClientRect();
-    const rawRects = Array.from(range.getClientRects()).filter((r) => r.width > 0.5 && r.height > 0.5);
-
-    // 选区可能横跨多页：每个矩形按它实际落在的那一页归一化。
-    // 全按起始页归一化的话，落到下一页的矩形会在起始页上画到错误的位置。
+    const pageBoxes = new Map();
     const byPage = new Map();
-    for (const r of rawRects) {
-      const cx = (r.left + r.right) / 2;
-      const cy = (r.top + r.bottom) / 2;
-      let host = null;
-      for (let p = 1; p <= this.numPages; p++) {
-        const el = this.pageEls[p];
-        if (!el) continue;
-        const box = el.getBoundingClientRect();
-        if (cx >= box.left && cx <= box.right && cy >= box.top && cy <= box.bottom) { host = { p, box }; break; }
+    const rawRects = [];
+    for (const run of selected) {
+      if (!pageBoxes.has(run.page)) pageBoxes.set(run.page, this.pageEls[run.page]?.getBoundingClientRect());
+      const host = pageBoxes.get(run.page);
+      if (!host?.width || !host?.height) continue;
+      const part = document.createRange();
+      part.setStart(run.node, run.start); part.setEnd(run.node, run.end);
+      const arr = byPage.get(run.page) || [];
+      for (const rect of part.getClientRects()) {
+        if (rect.width <= 0.5 || rect.height <= 0.5) continue;
+        rawRects.push(rect);
+        const x = clamp((rect.left - host.left) / host.width, 0, 1);
+        const y = clamp((rect.top - host.top) / host.height, 0, 1);
+        arr.push({ x, y, w: clamp(rect.width / host.width, 0, 1 - x), h: clamp(rect.height / host.height, 0, 1 - y) });
       }
-      if (!host) continue;
-      const arr = byPage.get(host.p) || [];
-      // 归一化后夹进 [0,1]：跨页/跨栏时偶尔会有矩形探出页面边界，
-      // 不夹的话会画出横贯整页的方块
-      const nx = clamp((r.left - host.box.left) / host.box.width, 0, 1);
-      const nw = clamp(r.width / host.box.width, 0, 1 - nx);
-      const ny = clamp((r.top - host.box.top) / host.box.height, 0, 1);
-      const nh = clamp(r.height / host.box.height, 0, 1 - ny);
-      arr.push({ x: nx, y: ny, w: nw, h: nh });
-      byPage.set(host.p, arr);
+      byPage.set(run.page, arr);
     }
-
-    const box = range.getBoundingClientRect();
-    const endEl = range.endContainer.nodeType === 1 ? range.endContainer : range.endContainer.parentElement;
-    const endPage = endEl?.closest?.('.page');
+    if (!rawRects.length) return null;
+    const box = { left: Math.min(...rawRects.map((rect) => rect.left)), top: Math.min(...rawRects.map((rect) => rect.top)),
+      right: Math.max(...rawRects.map((rect) => rect.right)), bottom: Math.max(...rawRects.map((rect) => rect.bottom)) };
+    box.width = box.right - box.left; box.height = box.bottom - box.top;
 
     // 去掉上下重叠：pdf.js 的行盒常常比行距还高，不过一遍的话
     // 选区/高亮看起来就是一块块互相压着的方块
@@ -2500,8 +2544,10 @@ export class PdfViewer {
     const pages = Array.from(byPage.keys()).sort((a, b) => a - b);
     return {
       text,
+      textByPage: Object.fromEntries([...new Set(selected.map((run) => run.page))]
+        .map((page) => [page, selectionTextOf(selected.filter((run) => run.page === page))])),
       page: pageNum,
-      endPage: endPage ? Number(endPage.dataset.page) : pageNum,
+      endPage,
       rects: byPage.get(pageNum) || [],
       rectsByPage: Object.fromEntries(byPage),
       pages,
@@ -2818,6 +2864,8 @@ export class PdfViewer {
     const k = layerScale(entry.textDiv);
     const x = (clamp(clientX, pr.left, pr.right) - pr.left) / k;
     const y = (clamp(clientY, pr.top, pr.bottom) - pr.top) / k;
+    const visual = selectionRunAt(this._selectionRunsForPage(i), x, y);
+    if (visual) return { ...this._offsetInSpan(visual.span, visual.node, clamp(clientX, pr.left, pr.right)), page: i };
     let best = null;
     for (const b of entry.hitBoxes) {
       // 先看纵向归属哪一行，再看横向差多少（缝隙被补上之后，正确的那一个两项都是 0）
@@ -2864,11 +2912,8 @@ export class PdfViewer {
   repairSelectionEnds({ anchor = null, focus = null, allowCollapsed = false } = {}) {
     const sel = window.getSelection();
     if (!sel || sel.rangeCount === 0) return false;
-    const range = sel.getRangeAt(0);
-    const common = range.commonAncestorContainer;
-    const commonEl = common.nodeType === 1 ? common : common.parentElement;
     // 只修 PDF 阅读区里的选区：笔记/问答里的输入框不走这条
-    if (!commonEl || !this.pagesEl?.contains(commonEl)) return false;
+    if (!this.pagesEl?.contains(sel.anchorNode) && !this.pagesEl?.contains(sel.focusNode)) return false;
     if (sel.isCollapsed) {
       if (!allowCollapsed || !anchor || !focus) return false;
       // 只处理「真的拖过」的那种：原地单击不该凭空造出选区
@@ -2879,12 +2924,14 @@ export class PdfViewer {
       try { sel.setBaseAndExtent(a0.node, a0.offset, f0.node, f0.offset); } catch { return false; }
       return true;
     }
-    const isText = (n) => !!(n && n.nodeType === 3 && n.parentElement?.closest?.('.textLayer'));
-    const okA = isText(range.startContainer);
-    const okF = isText(range.endContainer);
+    const isText = (n) => !!(n && n.nodeType === 3 && this.pagesEl.contains(n) && n.parentElement?.closest?.('.textLayer'));
+    const okA = isText(sel.anchorNode);
+    const okF = isText(sel.focusNode);
     if (okA && okF) return false;
-    const a = okA ? { node: range.startContainer, offset: range.startOffset } : (anchor ? this.charPosAt(anchor.x, anchor.y) : null);
-    const f = okF ? { node: range.endContainer, offset: range.endOffset } : (focus ? this.charPosAt(focus.x, focus.y) : null);
+    // Range start/end are DOM-sorted and reverse during a backwards drag. Keep the
+    // browser's anchor/focus identities paired with the actual down/up coordinates.
+    const a = okA ? { node: sel.anchorNode, offset: sel.anchorOffset } : (anchor ? this.charPosAt(anchor.x, anchor.y) : null);
+    const f = okF ? { node: sel.focusNode, offset: sel.focusOffset } : (focus ? this.charPosAt(focus.x, focus.y) : null);
     if (!a || !f) return false;
     try { sel.setBaseAndExtent(a.node, a.offset, f.node, f.offset); } catch { return false; }
     return true;

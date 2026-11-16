@@ -1478,6 +1478,14 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
   font-size: calc(11px * var(--ctl-scale)); padding: 0 calc(3px * var(--ctl-scale)); flex: 0 0 auto; align-self: flex-start;
 }
 .attach .at-x:hover { color: var(--err-text); }
+.attach-row .translation-segment { display: block; flex: 1 0 100%; min-width: 0; box-sizing: border-box; }
+.attach-row.has-translation-segments { max-height: clamp(142px, 32vh, 280px); }
+.translation-segment > summary { cursor: pointer; overflow-wrap: anywhere; }
+.translation-segment .at-edit { display: block; box-sizing: border-box; width: 100%; min-height: 90px; max-height: 220px; resize: vertical; margin-top: 7px; padding: 6px; border: 1px solid var(--border); border-radius: 5px; background: var(--bg); color: var(--fg); font: inherit; line-height: 1.6; }
+.translation-segment .at-tools { display: flex; gap: 10px; align-items: center; margin-top: 5px; }
+.translation-segment .at-tools button { border: 0; padding: 3px; background: transparent; color: var(--fg-dim); font: inherit; cursor: pointer; }
+.translation-segment .at-tools button:disabled { opacity: .4; cursor: default; }
+.translation-segment :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
 .composer-row {
   display: flex; flex-wrap: wrap; align-items: flex-end; gap: 6px;
@@ -1698,6 +1706,7 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .bubble button:hover { background: var(--accent-soft); color: var(--accent); }
 /* 右栏（问答回答 / 译文）选区：翻译与写笔记无意义，只留加入问答 / 直接解释 / 复制 */
 .bubble[data-source="right"] button[data-act="translate"],
+.bubble[data-source="right"] button[data-act="add-translate"],
 .bubble[data-source="right"] button[data-act="note"] { display: none; }
 
 .bubble, .notebox { opacity: var(--surface-opacity); }
@@ -2113,7 +2122,8 @@ button:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-
 }
 
 .side.right:not([data-active-panel="chat"]):not([data-active-panel="translate"]) > .composer { display: none; }
-.side.right[data-active-panel="translate"] #composerHint { display: none !important; }
+.side.right[data-active-panel="translate"] #composerHint { display: block; flex: 1 0 100%; white-space: normal; overflow-wrap: anywhere; }
+.side.right[data-active-panel="translate"] .composer-opts { flex-wrap: wrap; row-gap: 4px; }
 .translate-target-label,
 .translate-target { display: none; }
 .side.right[data-active-panel="translate"] .translate-target-label,

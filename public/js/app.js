@@ -1892,7 +1892,7 @@ function initViewer() {
     updateSendScope, runSearch, stepHit, searchLibrary, searchLibraryPages, searchScopeLabel,
     get searchScope() { return currentSearchScope(); },
     setSearchScope(scope) { const v = writeSearchScope(scope); try { $('#searchScope')?.querySelectorAll('[data-scope]').forEach((btn) => btn.setAttribute('aria-pressed', btn.dataset.scope === v ? 'true' : 'false')); } catch { /* ignore */ } return v; },
-    addToChat, addImageToChat, removeAttach, flushComposerDrafts,
+    addToChat, addToTranslate, addImageToChat, removeAttach, flushComposerDrafts,
     // 截图框选（自动化直接验证长截图/双页/缩放；真实入口还是鼠标拖框）
     captureRegionShot,
     renderAttachments, refreshReturnButton,
@@ -4445,6 +4445,22 @@ async function deleteNoteItem(id) {
   }
 }
 
+function deferSelectionChanged(options = {}, delay = 10) {
+  const docId = state.doc?.docId;
+  const openSeq = state.openSeq;
+  setTimeout(() => {
+    if (docId === state.doc?.docId && openSeq === state.openSeq) onSelectionChanged(options);
+  }, delay);
+}
+
+function selectionForAction(fresh = viewer?.getSelectionInfo()) {
+  const saved = state.selection;
+  if (saved?.docId && saved.docId !== state.doc?.docId) return null;
+  if (!fresh) return saved;
+  if (saved?.parts?.length && saved.tailText === fresh.text) return { ...saved, box: fresh.box };
+  return { ...fresh, cleanText: cleanText(fresh.text), docId: state.doc?.docId || '' };
+}
+
 function initSelection() {
   const v = $('#viewer');
   // 原生 ::selection 已设成透明，这里自己画不重叠的方块（拖动过程中也在刷新）
@@ -4457,9 +4473,16 @@ function initSelection() {
     // 选区为空时故意不动：虚拟化把页面卸掉时浏览器也会顺手把选区清空，
     // 那时若跟着清，滚回来就再也看不到刚才选的是哪一段了（用户反馈的 bug）。
     // 真正的「取消选择」由点击别处 / Esc / 做出新选择来触发。
-    if (info) viewer?.paintSelection(info.rectsByPage);
+    if (info) viewer?.paintSelection(selectionForAction(info)?.rectsByPage || info.rectsByPage);
   }, 50));
-  v.addEventListener('touchend', () => setTimeout(onSelectionChanged, 60));
+  v.addEventListener('touchend', () => deferSelectionChanged({}, 60));
+  document.addEventListener('copy', (event) => {
+    if (!event.clipboardData || !viewer?.getSelectionInfo()) return;
+    const selected = selectionForAction();
+    if (!selected?.cleanText) return;
+    event.clipboardData.setData('text/plain', selected.cleanText);
+    event.preventDefault();
+  });
 
   document.addEventListener('mouseup', (e) => {
     if (e.target?.closest?.('#bubble, #citeBox, #noteBox, #settingsModal')) return;
@@ -4491,11 +4514,11 @@ function initSelection() {
         return;
       }
     }
-    setTimeout(() => onSelectionChanged({
+    deferSelectionChanged({
       deselect: isClick && !onControl,
       down,
       up: { x: e.clientX, y: e.clientY },
-    }), 10);
+    });
   });
 
   /* 记录拖动中的实时位置：选区跑偏时要靠它算「终点该落在哪个字上」 */
@@ -4519,7 +4542,7 @@ function initSelection() {
     const up = state._lastPt;
     state._downAt = null;
     state._lastPt = null;
-    setTimeout(() => onSelectionChanged({ down, up }), 10);
+    deferSelectionChanged({ down, up });
   });
 
   document.addEventListener('mousedown', (e) => {
@@ -4545,13 +4568,13 @@ function initSelection() {
     const btn = e.target.closest('button[data-act]');
     if (!btn) return;
     // 用最新选区：用户可能在气泡弹出后又调整了选择范围
-    const fresh = viewer.getSelectionInfo();
-    const sel = fresh ? { ...fresh, cleanText: cleanText(fresh.text) } : state.selection;
+    const sel = selectionForAction();
     if (!sel?.cleanText) return;
     state.selection = sel;
     hideBubble();
     switch (btn.dataset.act) {
       case 'translate': doTranslate(sel); break;
+      case 'add-translate': await addToTranslate(sel); break;
       case 'explain': doExplain(sel); break;
       case 'add': addToChat(sel); break;
       case 'note': {
@@ -4575,7 +4598,7 @@ function onSelectionChanged({ deselect = false, down = null, up = null, retry = 
        这一次纠正就会落空 —— 表现是「拖了半天一个字都没选出来」。
        这种时候给一次 90ms 后的重试（只重试一次，不会无限循环）。 */
     if (retry && dragged && !deselect) {
-      setTimeout(() => onSelectionChanged({ deselect: false, down, up, retry: false }), 90);
+      deferSelectionChanged({ deselect: false, down, up, retry: false }, 90);
       return;
     }
     if (deselect) clearSelectionState();
@@ -4583,7 +4606,7 @@ function onSelectionChanged({ deselect = false, down = null, up = null, retry = 
     return;
   }
   let text = cleanText(info.text);
-  if (text.length < 2) {
+  if (!text) {
     if (deselect) clearSelectionState();
     else hideBubble();
     return;
@@ -4591,11 +4614,27 @@ function onSelectionChanged({ deselect = false, down = null, up = null, retry = 
   // Ctrl/⌘ + 划选：把上一次选区拼到前面（对付被图表/换栏切开的句子）
   const pending = state._pendingMerge;
   state._pendingMerge = null;
-  if (pending && !pending.includes(text)) {
-    text = `${pending}\n${text}`;
-    toast('已拼接上一段选区', 'ok', 1800);
+  if (pending && pending.docId === (state.doc?.docId || '')) {
+    const part = { text, page: info.page, endPage: info.endPage, pages: info.pages, rectsByPage: info.rectsByPage };
+    const parts = pending.parts || [{ text: pending.cleanText, page: pending.page,
+      endPage: pending.endPage, pages: pending.pages, rectsByPage: pending.rectsByPage }];
+    if (!parts.some((p) => p.text === text && JSON.stringify(p.rectsByPage) === JSON.stringify(part.rectsByPage))) {
+      info.parts = [...parts, part];
+    } else info.parts = parts;
+    info.tailText = info.text;
+    text = info.parts.map((p) => p.text).join('\n\n');
+    const rectsByPage = {};
+    for (const p of info.parts) for (const [page, rects] of Object.entries(p.rectsByPage || {})) {
+      (rectsByPage[page] ||= []).push(...rects);
+    }
+    info.rectsByPage = rectsByPage;
+    info.pages = Object.keys(rectsByPage).map(Number).sort((a, b) => a - b);
+    info.page = info.parts[0].page;
+    info.rects = rectsByPage[info.page] || [];
+    viewer?.paintSelection(rectsByPage);
   }
   info.cleanText = text;
+  info.docId = state.doc?.docId || '';
   state.selection = info;
   showBubble(info);
 }
@@ -4655,7 +4694,7 @@ function onRightSelectionChanged({ deselect = false } = {}) {
   }
   const selection = window.getSelection();
   const text = cleanText(selection?.toString() || '');
-  if (text.length < 2) {
+  if (!text) {
     if (deselect) clearSelectionState();
     else hideBubble();
     return;
@@ -5294,7 +5333,7 @@ function syncComposerMode(id = rightPanelInCol(1)) {
   const clip = $('#clipBtn');
   const sendBtn = $('#sendBtn');
   if (input) {
-    input.placeholder = translating ? '粘贴或输入要翻译的文字…（Enter 翻译，Shift+Enter 换行）' : '问点什么…（Enter 发送）';
+    input.placeholder = translating ? '输入原文，或划选后点「加入译文」…（Enter 合并翻译）' : '问点什么…（Enter 发送）';
     if (translating) input.maxLength = 20000;
     else input.removeAttribute('maxlength');
   }
@@ -5314,6 +5353,7 @@ function syncComposerMode(id = rightPanelInCol(1)) {
     target.dataset.ready = '1';
   }
   renderTranslationBatch();
+  updateComposerHint();
 }
 
 /** 一列的结果区长什么样（只改 DOM，不改导航） */
@@ -5490,13 +5530,19 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     const sourceText = retry?.kind === 'translate-text' || retry?.kind === 'translate'
       ? String(retry.text || quote || '') : (!shots.length ? String(quote || '') : '');
     const originLang = sourceText && targetLang === 'English' && /[\u4e00-\u9fff]/.test(sourceText) ? '中文' : '原文';
-    const direction = el('div', { class: 'translation-direction', text: `${retry?.kind === 'translate-text' ? '文本翻译' : '译文'} · ${originLang} → ${targetLang}` });
+    const sourceSegments = snapshotTranslationSegments(retry?.segments);
+    const direction = el('div', { class: 'translation-direction', text: `${sourceSegments.length ? `${sourceSegments.length} 段合并翻译`
+      : retry?.kind === 'translate-text' ? '文本翻译' : '译文'} · ${originLang} → ${targetLang}` });
     root.insertBefore(direction, ref || shot || textEl);
     if (sourceText) {
       root.querySelector('.ref')?.remove();
       const original = el('details', { class: 'translation-original' },
         el('summary', { text: '原文对照' }),
         el('div', { class: 'translation-source', text: sourceText }),
+        sourceSegments.length ? el('div', { class: 'translation-segment-sources' }, ...sourceSegments.filter((part) => part.page).map((part, index) =>
+          el('button', { type: 'button', class: 'translation-locate', text: `选段 ${index + 1} · 第${(part.pages.length ? part.pages : [part.page]).join('、')}页`,
+            onclick: () => jumpAndHighlight(part.page, part.text),
+          }))) : null,
         page && retry?.kind !== 'translate-text' ? el('button', {
           type: 'button', class: 'translation-locate', text: '定位原文',
           onclick: () => jumpAndHighlight(page, sourceText),
@@ -5656,6 +5702,7 @@ function serialiseRetryPayload(raw) {
       kind, docId: String(raw.docId || '').slice(0, 240),
       text: String(raw.text || '').slice(0, 20000),
       targetLang: raw.targetLang === 'English' ? 'English' : '中文',
+      segments: snapshotTranslationSegments(raw.segments),
     };
   }
   if (kind === 'operation') {
@@ -6468,7 +6515,8 @@ function restoreRetryCallback(row, entry, priorUser) {
     }
     if (payload.kind === 'translate-text') {
       // 文本输入翻译：原文存在 payload 里，直接原样再翻一次
-      doTranslateText({ text: payload.text || '', targetLang: payload.targetLang === 'English' ? 'English' : '中文', force: true });
+      doTranslateText({ text: payload.text || '', targetLang: payload.targetLang === 'English' ? 'English' : '中文',
+        segments: payload.segments || [], force: true });
       return;
     }
     if (payload.kind === 'operation') {
@@ -9845,10 +9893,13 @@ function returnTranslationBatchToDraft(batch) {
   saveComposerDraft();
   const draft = composerDrafts.read(owner);
   const remaining = batch.items.filter((item) => item.status !== 'complete');
-  const text = remaining.filter((item) => item.kind === 'text').map((item) => item.text).join('\n\n');
+  const text = remaining.filter((item) => item.kind === 'text')
+    .map((item) => Array.isArray(item.segments) ? item.inputText || '' : item.text).filter(Boolean).join('\n\n');
   if (text) draft.text = draft.text ? `${text}\n\n${draft.text}` : text;
   const ids = new Set(draft.attachments.map((a) => a.id));
-  draft.attachments = [...remaining.filter((item) => item.kind === 'image' && !ids.has(item.id))
+  const segments = remaining.filter((item) => item.kind === 'text').flatMap((item) => item.segments || [])
+    .filter((part) => !ids.has(part.id)).map((part) => structuredClone(part));
+  draft.attachments = [...segments, ...remaining.filter((item) => item.kind === 'image' && !ids.has(item.id))
     // 新一轮发送可能已经换了会话；原图仍在内存，重新上传，不能复用旧 sid 的 ref。
     .map(({ id, dataUrl, w, h, pages, page, label }) => ({ id, kind: 'image', dataUrl, w, h, pages, page, label })), ...draft.attachments];
   writeComposerDraft(owner, draft);
@@ -9883,7 +9934,7 @@ async function resumeTranslationBatch(batch) {
       runItem: async (item, { signal }) => {
         if (!isCurrent() || signal.aborted) return { status: 'stopped' };
         const task = { item, batch, controller: batch.controller, isCurrent };
-        if (item.kind === 'text') return doTranslateText({ text: item.text, targetLang: batch.targetLang, task });
+        if (item.kind === 'text') return doTranslateText({ text: item.text, segments: item.segments || [], targetLang: batch.targetLang, task });
         return doTranslateShot({ shot: { dataUrl: item.dataUrl, width: item.w, height: item.h },
           page: item.page, label: item.label, refId: item.ref || '', docId: batch.docId,
           sid: batch.sid, targetLang: batch.targetLang, task });
@@ -9979,6 +10030,85 @@ function revealPanel(id) {
 /** 兼容旧名字：译文结果走的就是 revealPanel('translate') */
 function revealTranslatePanel() { revealPanel('translate'); }
 
+function snapshotTranslationSegments(segments) {
+  return (Array.isArray(segments) ? segments : []).filter((part) => part && typeof part.text === 'string').map((part) => ({
+    id: String(part.id || ''), kind: 'text', text: part.text,
+    docId: String(part.docId || ''), page: Number(part.page) || null, endPage: Number(part.endPage || part.page) || null,
+    pages: (Array.isArray(part.pages) ? part.pages : [part.page]).map(Number).filter((p) => Number.isInteger(p) && p > 0),
+  }));
+}
+
+function translationDraftText(inputText, segments) {
+  return [...segments.map((part) => String(part.text || '').trim()), String(inputText || '').trim()].filter(Boolean).join('\n\n');
+}
+
+function translationSegmentLabel(part, index) {
+  const pages = part.pages?.length ? part.pages : [part.page].filter(Boolean);
+  const location = pages.length ? ` · 第${pages.join('、')}页` : '';
+  return `${index + 1}${location} · ${part.text.replace(/\s+/g, ' ').slice(0, 90)}`;
+}
+
+/** 按加入顺序收集正文；只翻译明确选中的片段，不补入中间的图注/脚注。 */
+async function addToTranslate(sel) {
+  if (!sel || sel.source === 'right' || state.busy) return;
+  const docId = state.doc?.docId || '';
+  if (sel.docId && sel.docId !== docId) return;
+  const openSeq = state.openSeq;
+  const pieces = (sel.parts || [sel]).map((part) => ({ ...structuredClone(part),
+    id: uid(), kind: 'text', text: part.cleanText || cleanText(part.text || ''), docId,
+  })).filter((part) => part.text);
+  if (!pieces.length) return;
+  const owner = { docId, mode: 'translate' };
+  revealTranslatePanel();
+  await loadComposerDraft(owner).catch(() => {});
+  if (docId !== (state.doc?.docId || '') || openSeq !== state.openSeq) return;
+  if (sameComposerOwner(owner, composerOwner)) saveComposerDraft();
+  const draft = composerDrafts.read(owner);
+  const segments = [...draft.attachments.filter((a) => a.kind === 'text'), ...pieces];
+  if (translationDraftText(draft.text, segments).length > 20000) {
+    toast('合并原文最多 20,000 字；请先翻译已有选段，再加入这一段', 'err', 4200); return;
+  }
+  changeDraftAttachments(owner, (items) => [...items, ...pieces]);
+  if (sameComposerOwner(owner, composerOwner)) updateComposerHint();
+}
+
+function renderTranslationSegment(part, index, segments) {
+  const summary = el('summary', { text: translationSegmentLabel(part, index), title: '展开检查或编辑原文' });
+  const owner = { ...composerOwner };
+  const editor = el('textarea', { class: 'at-edit', 'aria-label': `第 ${index + 1} 段原文`, maxlength: 20000,
+    oninput: (event) => {
+      if (!sameComposerOwner(owner, composerOwner)) return;
+      const current = state.attachments.find((item) => item.id === part.id);
+      if (!current) return;
+      current.text = event.target.value;
+      summary.textContent = translationSegmentLabel(current, index);
+      composerRevision += 1;
+      saveComposerDraft({ edited: true });
+      updateComposerHint();
+    },
+  });
+  editor.value = part.text;
+  const move = (direction) => {
+    if (state.busy || !sameComposerOwner(owner, composerOwner)) return;
+    const list = state.attachments.filter((item) => item.kind === 'text');
+    const at = list.findIndex((item) => item.id === part.id);
+    const other = list[at + direction];
+    if (!other) return;
+    const a = state.attachments.findIndex((item) => item.id === part.id);
+    const b = state.attachments.findIndex((item) => item.id === other.id);
+    [state.attachments[a], state.attachments[b]] = [state.attachments[b], state.attachments[a]];
+    renderAttachments();
+  };
+  return el('details', { class: 'attach text translation-segment', dataset: { id: part.id } }, summary, editor,
+    el('div', { class: 'at-tools' },
+      el('button', { type: 'button', class: 'at-up', text: '上移', disabled: state.busy || index === 0,
+        'aria-label': `上移第 ${index + 1} 段`, onclick: () => move(-1) }),
+      el('button', { type: 'button', class: 'at-down', text: '下移', disabled: state.busy || index === segments.length - 1,
+        'aria-label': `下移第 ${index + 1} 段`, onclick: () => move(1) }),
+      el('button', { type: 'button', class: 'at-x', text: '移除', 'aria-label': `移除第 ${index + 1} 段`, onclick: () => removeAttach(part.id) }),
+    ));
+}
+
 /**
  * 文本输入翻译（2026-11-03 用户要求）：粘贴/手输文字直接翻，不依赖 PDF 选区。
  * 与划词/截图翻译共用 translateMessages 与同一条流式管线，结果仍按时间堆在译文面板。
@@ -9989,7 +10119,7 @@ function translationCacheScope({ page = null, context = '' } = {}) {
     cfg.activeProfile || '', cfg.baseURL || '', cfg.model || '', cfg.visionModel || '', cfg.temperature]));
 }
 
-async function doTranslateText({ text, targetLang = '', force = false, task = null } = {}) {
+async function doTranslateText({ text, targetLang = '', force = false, task = null, segments = [] } = {}) {
   if (!task && !await allowEdit('译文')) return;
   const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
   if (!raw || (state.busy && !task)) return;
@@ -9998,16 +10128,18 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   const docId = state.doc?.docId || '';
   const openSeq = state.openSeq;
   const isCurrent = task?.isCurrent || (() => docId === (state.doc?.docId || '') && openSeq === state.openSeq);
-  const body = raw.slice(0, 20000);
+  if (raw.length > 20000) { toast('合并原文最多 20,000 字，请减少内容后重试；原文已保留', 'err'); return { status: 'failed', error: '原文超过 20,000 字' }; }
+  const body = raw;
+  const sourceSegments = snapshotTranslationSegments(segments);
   const lang = resolveTranslateTarget(targetLang);
   if (!task) revealTranslatePanel();
   const retryOf = () => ({
     kind: 'translate-text', docId: docId || null,
-    text: body, targetLang: lang,
+    text: body, targetLang: lang, segments: sourceSegments,
   });
   const retry = () => {
     if (docId !== (state.doc?.docId || '')) { toast('请切回原论文后重新翻译', 'err'); return; }
-    return doTranslateText({ text: body, targetLang: lang, force: true });
+    return doTranslateText({ text: body, targetLang: lang, force: true, segments: sourceSegments });
   };
   const retryUnfinished = task ? () => translationBatches.get(docId) === task.batch
     ? resumeTranslationBatch(task.batch) : retry() : retry;
@@ -10016,7 +10148,8 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   if (cached) {
     const existing = [...state.sessionEntries].reverse().find((x) => x?.block === 'translate'
       && x?.tag === 'translation' && x?.status === 'complete' && String(x?.text || '') === String(cached)
-      && String(x?.retry?.kind || '') === 'translate-text');
+      && String(x?.retry?.kind || '') === 'translate-text' && x.retry.text === body && x.retry.targetLang === lang
+      && JSON.stringify(x.retry.segments || []) === JSON.stringify(sourceSegments));
     if (existing) {
       const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
       row?.scrollIntoView({ block: 'nearest' });
@@ -10461,7 +10594,10 @@ function renderAttachments() {
     return;
   }
   row.classList.remove('hidden');
-  row.replaceChildren(...state.attachments.map((a) => el('div', { class: `attach ${a.kind}` },
+  const segments = composerMode() === 'translate' ? state.attachments.filter((a) => a.kind === 'text') : [];
+  row.classList.toggle('has-translation-segments', segments.length > 0);
+  row.replaceChildren(...state.attachments.map((a) => segments.includes(a)
+    ? renderTranslationSegment(a, segments.indexOf(a), segments) : el('div', { class: `attach ${a.kind}` },
     a.kind === 'image'
       ? el('img', { src: a.dataUrl, title: '点开看大图', onclick: () => window.open(a.dataUrl, '_blank') })
       : null,
@@ -10481,7 +10617,7 @@ function flashHint(msg, ms = 3200) {
   const node = $('#composerHint');
   node.textContent = msg;
   if (hintTimer) clearTimeout(hintTimer);
-  hintTimer = setTimeout(() => { if (!state.busy) node.textContent = ''; }, ms);
+  hintTimer = setTimeout(() => { hintTimer = null; if (!state.busy) updateComposerHint(); }, ms);
 }
 
 /* ── 第一次打开/切换论文的加载提示（热切换不显示，避免「点了没反应」） ── */
@@ -10581,6 +10717,16 @@ function rangeOverview() {
 
 function updateComposerHint() {
   if (state.busy) return;                    // 忙的时候那行归进度文案用
+  if (composerMode() === 'translate') {
+    const segments = state.attachments.filter((a) => a.kind === 'text');
+    const text = translationDraftText($('#chatInput')?.value || '', segments);
+    const images = state.attachments.filter((a) => a.kind === 'image').length;
+    $('#sendBtn').title = segments.length ? '合并翻译' : '翻译';
+    $('#chatInput').placeholder = segments.length ? '补充原文（接在已加入选段之后）…' : '输入原文，或划选后点「加入译文」…（Enter 翻译）';
+    setHint(segments.length ? `${segments.length} 段按列表顺序合并 · ${text.length.toLocaleString()} / 20,000 字${images ? ` · ${images} 张截图另译` : ''}`
+      : images ? `${images} 张截图${text ? '与输入文字' : ''}将依次翻译` : '可分段加入正文，跳过图注或脚注');
+    return;
+  }
   setHint(rangeOverview());
 }
 
@@ -11102,10 +11248,12 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   const ta = $('#chatInput');
   if (state.busy) return;
   if (!retryPending && composerMode() === 'translate') {
-    const text = String(ta.value || '').trim();
+    const inputText = String(ta.value || '');
+    const segments = state.attachments.filter((a) => a.kind === 'text').map((part) => structuredClone(part));
+    const text = translationDraftText(inputText, segments);
     const shots = state.attachments.filter((a) => a.kind === 'image');
     if (!text && !shots.length) return;
-    if (text.length > 20000) { toast('最多翻译 20,000 字', 'err', 2400); return; }
+    if (text.length > 20000) { toast('合并原文最多 20,000 字，请减少内容后重试；原文已保留', 'err', 4200); return; }
     const docId = state.doc?.docId || '';
     if (shots.length && !docId) { toast('先打开一篇论文，再翻译截图', 'err'); return; }
     if (docId && state.viewerDocId !== docId) { flashHint('论文正在打开，请稍候'); return; }
@@ -11118,11 +11266,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     const lang = selectedTranslateTarget();
     if (!ensureReady()) return;
     const batch = createTranslationBatch({ docId, sid: activeSidFor(docId), targetLang: lang,
-      items: [...(text ? [{ kind: 'text', text }] : []), ...shots] });
+      items: [...(text ? [{ kind: 'text', text, inputText, segments }] : []), ...shots] });
     translationBatches.set(docId, batch);
     ta.value = '';
     ta.style.height = 'auto';
-    const submitted = new Set(shots.map((a) => a.id));
+    const submitted = new Set([...segments, ...shots].map((a) => a.id));
     state.attachments = state.attachments.filter((a) => !submitted.has(a.id));
     renderAttachments();
     await resumeTranslationBatch(batch);
@@ -12675,7 +12823,7 @@ function initShortcuts() {
       if (state.abort) { abortStream('user'); $('#composerHint').textContent = '正在停止…'; return; }
       // 引用高亮不随 Esc 取消：点正文任意处 / 再点同一个引用 / 翻页 / 换文档时清
       // Esc 是明确的「不要这个选区了」：连方块和记住的选区一起清掉
-      if (state.selection) { clearSelectionState(); viewer?.clearSelection(); return; }
+      if (state.selection || viewer?.getSelectionInfo()) { clearSelectionState(); viewer?.clearSelection(); return; }
       hideBubble();
       return;
     }
@@ -12692,10 +12840,11 @@ function initShortcuts() {
     // 其余单键快捷键一律不能带修饰键，否则 Ctrl+A（全选）会被当成「问」真的发一次付费请求
     if (e.ctrlKey || e.metaKey || e.altKey) return;
 
-    const hasSel = state.selection?.cleanText;
-    if (e.key === 't' || e.key === 'T') { if (hasSel) { e.preventDefault(); doTranslate(state.selection); } return; }
-    if (e.key === 'e' || e.key === 'E') { if (hasSel) { e.preventDefault(); doExplain(state.selection); } return; }
-    if (e.key === 'q' || e.key === 'Q') { if (hasSel) { e.preventDefault(); addToChat(state.selection); } return; }
+    const selected = selectionForAction();
+    const hasSel = selected?.cleanText;
+    if (e.key === 't' || e.key === 'T') { if (hasSel) { e.preventDefault(); doTranslate(selected); } return; }
+    if (e.key === 'e' || e.key === 'E') { if (hasSel) { e.preventDefault(); doExplain(selected); } return; }
+    if (e.key === 'q' || e.key === 'Q') { if (hasSel) { e.preventDefault(); addToChat(selected); } return; }
     if (e.key === 'r' || e.key === 'R') {
       e.preventDefault();
       // 在译文面板里按 R = 截图翻译；其它情况仍是「框选加进问答」
@@ -12715,7 +12864,7 @@ function initShortcuts() {
   // 只在这里打标记，真正的合并交给 onSelectionChanged 做 ——
   // 否则 10ms 后那次回调会用新选区把合并结果覆盖掉。
   $('#viewer').addEventListener('mouseup', (e) => {
-    state._pendingMerge = (e.ctrlKey || e.metaKey) ? (state.selection?.cleanText || null) : null;
+    state._pendingMerge = (e.ctrlKey || e.metaKey) && state.selection?.source !== 'right' ? state.selection : null;
   });
 }
 
