@@ -159,6 +159,9 @@ const mock = http.createServer(async (req, res) => {
 let reader, browser, page, base;
 const searches = [], refLookups = [], pageErrors = [], requestFailures = [], navigationCancellations = [];
 let navigating = false;
+let navigationGeneration = 0;
+const requestStarts = new WeakMap();
+const requestFailureContexts = [];
 try {
   await listen(mock);
   const port = await freePort(); const debugPort = await freePort();
@@ -221,10 +224,14 @@ try {
     // 本套件主动重载页面，WebView2 会取消旧页面的模块加载和后台保存；仍记录这些证据。
     const expected = navigating && r.failure()?.errorText === 'net::ERR_ABORTED'
       && r.url().startsWith(base) && /\/(?:js\/app\.js|api\/(?:session|state))(?:\?|$)/.test(r.url());
+    requestFailureContexts.push({ detail, navigating, expected,
+      startedGeneration: requestStarts.get(r)?.generation ?? null,
+      failedGeneration: navigationGeneration, pageUrl: page.url() });
     (expected ? navigationCancellations : requestFailures).push(detail);
   });
   await page.setRequestInterception(true);
   page.on('request', (r) => {
+    requestStarts.set(r, { generation: navigationGeneration });
     const url = new URL(r.url());
     if (url.origin !== base) return r.continue();
     if (url.pathname === '/api/web-search') {
@@ -250,6 +257,7 @@ try {
       await page.evaluate(() => window.__ctx?.memoryIdle?.());
     }
     navigating = true;
+    navigationGeneration++;
     await page.goto(`${base}/?open=${encodeURIComponent(filename)}`);
     await page.waitForFunction((filename) => window.__viewer?.pdf && window.__state?.doc?.name === filename
       && window.__state.viewerDocId === window.__state.doc.docId && window.__ctx, { timeout: 20000 }, filename);
@@ -382,10 +390,14 @@ try {
   await send('他是谁', '', 1, 'current');
   check('换论文不会继承旧论文对象', !lastText().includes(AUTHOR) && !lastText().includes('SqueezeNet'));
   check('操作期间没有页面错误', pageErrors.length === 0);
-  if (requestFailures.length) console.log('REQUEST_FAILURES', requestFailures);
+  if (requestFailures.length) {
+    console.log('REQUEST_FAILURES', requestFailureContexts);
+    fs.writeFileSync(path.join(scratch, 'request-failures.json'), JSON.stringify(requestFailureContexts, null, 2), 'utf8');
+    console.log(`REQUEST_FAILURE_EVIDENCE ${scratch}`);
+  }
   check('操作期间没有意外请求失败', requestFailures.length === 0);
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ backend, pid: reader.pid, base, count,
-    requests: bodies, searches, refLookups, pageErrors, requestFailures, navigationCancellations }, null, 2), 'utf8');
+    requests: bodies, searches, refLookups, pageErrors, requestFailures, navigationCancellations, requestFailureContexts }, null, 2), 'utf8');
   console.log(`QA ${backend}: ${count}/${count} passed; evidence: ${scratch}`);
 } finally {
   if (browser) { if (backend === 'exe') browser.disconnect(); else await browser.close(); }

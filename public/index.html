@@ -200,6 +200,11 @@
     <div class="sess-history hidden" id="sessHistory" role="dialog" aria-label="会话历史"></div>
     <div class="ai" id="aiArea"></div>
     <form class="composer" id="composer">
+      <div class="translation-batch hidden" id="translationBatch">
+        <span id="translationBatchStatus" role="status" aria-live="polite"></span>
+        <button type="button" id="translationBatchResume">继续未完成</button>
+        <button type="button" id="translationBatchReturn">放回草稿</button>
+      </div>
       <div class="composer-row">
         <div class="attach-row" id="attachRow"></div>
         <textarea id="chatInput" rows="1" placeholder="问点什么…（Enter 发送）"></textarea>

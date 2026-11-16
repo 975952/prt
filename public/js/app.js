@@ -2,6 +2,8 @@ import { windowStorage as localStorage, storageKey, windowId, startWindows, fini
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
 import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
+import { createComposerDraftStore } from './composer-drafts.js';
+import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage } from './pdfview.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
@@ -461,7 +463,8 @@ function capturePanelMove(nodes) {
   return {
     scrolls,
     active: active && active !== document.body && nodes.some((n) => n.contains(active)) ? active : null,
-    input: input ? { value: input.value, start: input.selectionStart, end: input.selectionEnd } : null,
+    input: input ? { value: input.value, start: input.selectionStart, end: input.selectionEnd,
+      owner: composerOwner, revision: composerRevision } : null,
     msgCount: document.querySelectorAll('#aiArea .msg').length,
   };
 }
@@ -488,7 +491,8 @@ function restorePanelMove(snap) {
       snap.active.focus?.({ preventScroll: true });
     }
     const input = $('#chatInput');
-    if (input && snap.input && input.value !== snap.input.value) {
+    if (input && snap.input && snap.input.owner === composerOwner && snap.input.revision === composerRevision
+      && input.value !== snap.input.value) {
       input.value = snap.input.value;
       try { input.setSelectionRange(snap.input.start, snap.input.end); } catch { /* 忽略 */ }
     }
@@ -663,6 +667,12 @@ const TEXT_COL_MAX = 1600;
 const uiFontSizePx = (v) => clamp(Number(v) || DEFAULT_UI_STYLE.uiFontSize, 12, 17);
 /** 控件大小：存档里是百分比（80–130），CSS 里是缩放系数（0.8–1.3） */
 const ctlScaleOf = (v) => clamp(Number(v) || DEFAULT_UI_STYLE.controlSize, 80, 130) / 100;
+
+const composerDrafts = createComposerDraftStore();
+let composerOwner = null;
+let composerRevision = 0;
+const translationBatches = new Map();
+let activeTranslationBatch = null;
 
 const state = {
   doc: null,
@@ -3244,6 +3254,7 @@ async function deletePaper(p) {
 function closeDeletedDoc() {
   abortStream('paper-deleted');
   state.doc = null;
+  syncComposerMode();
   state.viewerDocId = null;
   document.title = 'prt';
   const nameEl = $('#docName');
@@ -3690,8 +3701,7 @@ async function openDocColdSwitch({ name, url, docId, path }) {
   // 加载失败要能退回首页，中间过程也不该先露出一个空白正文区。
   // 换论文：只清译文块（每篇各自一份）；问答块是全局会话共用的，保留 DOM 不重绘
   clearTranslateBlock();
-  state.attachments = [];
-  renderAttachments();
+  syncComposerMode();
   viewer.paintSelection(null);
   // 换论文后上一篇的「释 / 译 / ＋对话」浮动气泡作废：否则会拿着上一篇的选区提问
   hideBubble();
@@ -5102,6 +5112,42 @@ function rightPanelInCol(n) {
 
 function composerMode() { return rightPanelInCol(1) === 'translate' ? 'translate' : 'chat'; }
 
+function sameComposerOwner(a, b) { return !!a && !!b && a.docId === b.docId && a.mode === b.mode; }
+function currentComposerOwner(mode = composerMode()) { return { docId: state.doc?.docId || '', mode }; }
+function saveComposerDraft() {
+  if (!composerOwner) return;
+  composerDrafts.write(composerOwner, { text: $('#chatInput')?.value || '', attachments: state.attachments });
+}
+function resizeComposer() {
+  const input = $('#chatInput');
+  if (!input) return;
+  input.style.height = 'auto';
+  input.style.height = `${Math.min(130, input.scrollHeight)}px`;
+}
+function activateComposerDraft(mode) {
+  const owner = currentComposerOwner(mode);
+  if (sameComposerOwner(owner, composerOwner)) return;
+  saveComposerDraft();
+  composerOwner = owner;
+  composerRevision += 1;
+  const draft = composerDrafts.read(owner);
+  state.attachments = draft.attachments;
+  const input = $('#chatInput');
+  if (input) input.value = draft.text;
+  resizeComposer();
+  renderAttachments();
+}
+function changeDraftAttachments(owner, change) {
+  if (sameComposerOwner(owner, composerOwner)) saveComposerDraft();
+  const draft = composerDrafts.read(owner);
+  draft.attachments = change(draft.attachments);
+  composerDrafts.write(owner, draft);
+  if (sameComposerOwner(owner, composerOwner)) {
+    state.attachments = draft.attachments;
+    renderAttachments();
+  }
+}
+
 /** 「译成」选择的目标语言（中文 / English）。划词、文本、截图翻译共用这一份选择，默认中文。 */
 function selectedTranslateTarget() {
   const v = $('#translateTargetLang')?.value;
@@ -5115,6 +5161,7 @@ function resolveTranslateTarget(pref) {
 }
 function syncComposerMode(id = rightPanelInCol(1)) {
   const translating = id === 'translate';
+  activateComposerDraft(translating ? 'translate' : 'chat');
   const input = $('#chatInput');
   const clip = $('#clipBtn');
   const sendBtn = $('#sendBtn');
@@ -5138,6 +5185,7 @@ function syncComposerMode(id = rightPanelInCol(1)) {
     target.addEventListener('change', () => { try { localStorage.setItem('reader.translate.targetLang', target.value); } catch { /* 忽略 */ } });
     target.dataset.ready = '1';
   }
+  renderTranslationBatch();
 }
 
 /** 一列的结果区长什么样（只改 DOM，不改导航） */
@@ -5406,7 +5454,7 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
   // 精简层级：正文写完本身就是「完成」信号，不再单独占一行播报「回答完成」。
   // 只有在「被停止」或有实质元信息（已带全文 N 字 / 联网 N 条）时才渲染这一行，两者都空就整行不渲染。
   const stateParts = [];
-  if (status === 'stopped') stateParts.push('已停止 · 已保留当前回答');
+  if (status === 'stopped') stateParts.push(bare ? '已停止 · 已保留当前译文' : '已停止 · 已保留当前回答');
   if (stateParts.length) extra.push(el('div', { class: `entry-meta${status === 'stopped' ? ' stopped' : ''}`, text: stateParts.join(' · ') }));
   if (extra.length) entry.root.append(...extra);
   if (!restore) scheduleSessionSave();
@@ -6237,6 +6285,7 @@ function focusExistingResult(entry, label = '') {
 }
 
 function restoreComposerFallback(question, payload = null) {
+  revealPanel('chat');
   const ta = $('#chatInput');
   if (!ta) return;
   const text = String(payload?.inputValue || question || '').trim();
@@ -6248,12 +6297,14 @@ function restoreComposerFallback(question, payload = null) {
     state.useWeb = !!payload.useWeb;
     const textAttachments = (Array.isArray(payload.attachments) ? payload.attachments : [])
       .filter((a) => a?.kind === 'text' && String(a.text || '').trim())
-      .map((a) => ({ id: uid(), kind: 'text', page: a.page || null, text: String(a.text).slice(0, 3000) }));
+      .map((a) => ({ id: uid(), kind: 'text', page: a.from === 'right' ? null : a.page || null,
+        text: String(a.text).slice(0, 3000), from: a.from || '' }));
     state.attachments = textAttachments;
     renderAttachments();
     renderScopeMenu();
   }
   updateSendScope();
+  saveComposerDraft();
   ta.focus();
 }
 
@@ -6307,10 +6358,18 @@ function restoreRetryCallback(row, entry, priorUser) {
     const lostShots = imageRows.length > recoverable.length;
     const docId = state.doc?.docId || payload.docId || null;
     const sid = activeSidFor(docId);
+    const openSeq = state.openSeq;
+    const retryOwner = composerOwner;
+    const retryRevision = composerRevision;
     let imageAttachments = [];
     if (recoverable.length) {
       const urls = await Promise.all(recoverable.map((a) => fetchAttachmentDataUrl(a.id, docId, sid)));
+      if (!readingRequestCurrent({ docId, openSeq, sid })) return;
       if (urls.some((u) => !u)) {
+        if (retryOwner !== composerOwner || retryRevision !== composerRevision) {
+          toast('截图文件已不在；已保留当前草稿，请重新添加截图后发送', 'err', 4200);
+          return;
+        }
         // 图片文件被清掉了（比如另一个会话清空时 GC 掉了）：退回「重新添加」的老路
         restoreComposerFallback(payload.question || fallbackQuestion, payload);
         toast('截图文件已不在，问题和文字附件已恢复；请重新添加截图后再发送。', 'ok', 5200);
@@ -6330,7 +6389,8 @@ function restoreRetryCallback(row, entry, priorUser) {
     const attachments = [
       ...rawAttachments
         .filter((a) => a?.kind === 'text' && String(a.text || '').trim())
-        .map((a) => ({ id: uid(), kind: 'text', page: a.page || null, text: String(a.text).slice(0, 3000) })),
+        .map((a) => ({ id: uid(), kind: 'text', page: a.from === 'right' ? null : a.page || null,
+          text: String(a.text).slice(0, 3000), from: a.from || '' })),
       ...imageAttachments,
     ];
     const pending = {
@@ -6345,7 +6405,7 @@ function restoreRetryCallback(row, entry, priorUser) {
       docTitle: state.doc?.name || payload.docTitle || '',
       history: snapshotHistory(payload.history || state.history),
       reading: snapshotReadingRequest(payload.reading),
-      openSeq: state.openSeq, sid,
+      openSeq, sid,
       useFullText: !!payload.useFullText,
       useWeb: !!payload.useWeb,
       scopeRange: payload.scopeRange || Object.values(SCOPE_RANGES).find((r) => r.full === !!payload.useFullText && r.web === !!payload.useWeb)?.key,
@@ -6353,6 +6413,7 @@ function restoreRetryCallback(row, entry, priorUser) {
       userEntry: null,
     };
     if (!ensureReady()) {
+      if (retryOwner !== composerOwner || retryRevision !== composerRevision) return;
       restoreComposerFallback(pending.question, payload);
       toast('已恢复问题；先配置模型接口，再点发送。', 'ok', 4200);
       return;
@@ -6377,7 +6438,8 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     const savedTranslate = translateRes.ok ? await translateRes.json() : {};
     if (!readingRequestCurrent({ docId, openSeq, sid })) return;
     const keepChat = canApply && only === 'translate';
-    const keepTranslate = canApply && only === 'chat';
+    // 只恢复问答时，译文 DOM 保留，记录对象也必须保持同一份，否则续译只更新旧 DOM。
+    const keepTranslate = only === 'chat';
     const chatEntries = keepChat ? state.sessionEntries.filter((e) => e?.block !== 'translate')
       : (Array.isArray(savedChat.entries) ? savedChat.entries : []);
     const translateEntries = keepTranslate ? state.sessionEntries.filter((e) => e?.block === 'translate')
@@ -6391,7 +6453,9 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
         const refs = Array.isArray(row?.shots) ? row.shots.slice(0, 6) : [];
         if (!refs?.length || (only === 'chat' && row.block !== 'chat')
           || (only === 'translate' && row.block !== 'translate')) return;
-        remoteThumbs.set(row, await hydrateShotThumbs(refs, docId, sid));
+        const origin = row?.retry?.kind === 'translate-shot' ? row.retry : null;
+        remoteThumbs.set(row, await hydrateShotThumbs(refs, origin?.docId || docId,
+          typeof origin?.sid === 'string' ? origin.sid : sid));
       }));
       if (!canApply()) return;
     }
@@ -6486,7 +6550,9 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
       let shotsLost = false;
       if (row.screenshot || shotRefs.length) {
         if (shotRefs.length) {
-          const hydrated = canApply ? remoteHydrated : await hydrateShotThumbs(shotRefs, docId, sid);
+          const origin = row?.retry?.kind === 'translate-shot' ? row.retry : null;
+          const hydrated = canApply ? remoteHydrated : await hydrateShotThumbs(shotRefs, origin?.docId || docId,
+            typeof origin?.sid === 'string' ? origin.sid : sid);
           thumbs = hydrated.thumbs;
           shotsLost = hydrated.missing;
         } else {
@@ -7671,6 +7737,7 @@ function renderChips(entry, chips) {
 
 /** chip 的 prompt 走普通发送（继承对话历史与当前教学进度） */
 function sendTeachingPrompt(prompt) {
+  revealPanel('chat');
   const ta = $('#chatInput');
   if (!ta) return;
   ta.value = String(prompt || '').slice(0, 2000);
@@ -9590,6 +9657,7 @@ function makeController() {
 }
 
 function abortStream(reason = 'user') {
+  if (activeTranslationBatch) stopTranslationBatch(activeTranslationBatch, reason);
   const ctl = state.abort;
   if (ctl) {
     state.abortReason = reason;
@@ -9602,6 +9670,7 @@ function setBusy(on, hint = '') {
   if (!on) state.activeSendScope = '';
   if (!on) scheduleRemoteSession();
   $('#stopBtn')?.classList.toggle('hidden', !on || !state.abort);
+  if ($('#stopBtn')) $('#stopBtn').title = activeTranslationBatch ? '停止整批翻译' : '停止生成';
   $('#sendBtn').disabled = on;
   $('#clipBtn').disabled = on;
   if (on) setHint(hint);
@@ -9613,6 +9682,112 @@ function setBusy(on, hint = '') {
   if (clearBtn) clearBtn.disabled = on;
   updateSendScope();
   sessionsSetBusy(on);
+  renderTranslationBatch();
+}
+
+function renderTranslationBatch() {
+  const row = $('#translationBatch');
+  if (!row) return;
+  const batch = translationBatches.get(state.doc?.docId || '');
+  const visible = composerMode() === 'translate' && batch && batch.status !== 'complete';
+  row.classList.toggle('hidden', !visible);
+  if (!visible) return;
+  const done = batch.items.filter((item) => item.status === 'complete').length;
+  const running = batch.status === 'running';
+  const title = running ? '翻译中' : batch.status === 'failed' ? '翻译中断' : '已暂停';
+  $('#translationBatchStatus').textContent = `${title} · 已完成 ${done}/${batch.items.length} 项 · ${batch.targetLang}`;
+  const resume = $('#translationBatchResume');
+  const back = $('#translationBatchReturn');
+  resume.classList.toggle('hidden', running);
+  back.classList.toggle('hidden', running);
+  resume.disabled = state.busy;
+  back.disabled = state.busy;
+  resume.onclick = () => resumeTranslationBatch(batch);
+  back.onclick = () => returnTranslationBatchToDraft(batch);
+}
+
+function returnTranslationBatchToDraft(batch) {
+  if (state.busy || batch.status === 'running' || batch.docId !== (state.doc?.docId || '')) return;
+  const owner = { docId: batch.docId, mode: 'translate' };
+  saveComposerDraft();
+  const draft = composerDrafts.read(owner);
+  const remaining = batch.items.filter((item) => item.status !== 'complete');
+  const text = remaining.filter((item) => item.kind === 'text').map((item) => item.text).join('\n\n');
+  if (text) draft.text = draft.text ? `${text}\n\n${draft.text}` : text;
+  const ids = new Set(draft.attachments.map((a) => a.id));
+  draft.attachments = [...remaining.filter((item) => item.kind === 'image' && !ids.has(item.id))
+    // 新一轮发送可能已经换了会话；原图仍在内存，重新上传，不能复用旧 sid 的 ref。
+    .map(({ id, dataUrl, w, h, pages, page, label }) => ({ id, kind: 'image', dataUrl, w, h, pages, page, label })), ...draft.attachments];
+  composerDrafts.write(owner, draft);
+  if (sameComposerOwner(owner, composerOwner)) {
+    $('#chatInput').value = draft.text;
+    state.attachments = draft.attachments;
+    resizeComposer();
+    renderAttachments();
+  }
+  translationBatches.delete(batch.docId);
+  renderTranslationBatch();
+}
+
+async function resumeTranslationBatch(batch) {
+  if (state.busy || activeTranslationBatch || batch.docId !== (state.doc?.docId || '')) return;
+  if (!await allowEdit('译文') || !ensureReady()) return;
+  if (state.busy || batch.docId !== (state.doc?.docId || '')) return;
+  const openSeq = state.openSeq;
+  const isCurrent = () => batch.docId === (state.doc?.docId || '') && state.openSeq === openSeq;
+  activeTranslationBatch = batch;
+  try {
+    await runTranslationBatch(batch, {
+      isCurrent,
+      onChange: () => {
+        if (batch.status === 'running') {
+          state.abort = batch.controller;
+          state.abortReason = '';
+          setBusy(true, '翻译中…');
+        }
+        renderTranslationBatch();
+      },
+      runItem: async (item, { signal }) => {
+        if (!isCurrent() || signal.aborted) return { status: 'stopped' };
+        const task = { item, batch, controller: batch.controller, isCurrent };
+        if (item.kind === 'text') return doTranslateText({ text: item.text, targetLang: batch.targetLang, task });
+        return doTranslateShot({ shot: { dataUrl: item.dataUrl, width: item.w, height: item.h },
+          page: item.page, label: item.label, refId: item.ref || '', docId: batch.docId,
+          sid: batch.sid, targetLang: batch.targetLang, task });
+      },
+    });
+  } finally {
+    if (activeTranslationBatch === batch) {
+      activeTranslationBatch = null;
+      if (state.abort === batch.controller) { state.abort = null; state.abortReason = ''; }
+      setBusy(false);
+    }
+    if (batch.status === 'complete' && translationBatches.get(batch.docId) === batch) translationBatches.delete(batch.docId);
+    renderTranslationBatch();
+  }
+}
+
+function resetTranslationTaskEntry(entry) {
+  entry.body.replaceChildren();
+  entry.acts.replaceChildren();
+  entry.acts.classList.add('hidden');
+  entry.root.classList.remove('err', 'error');
+  entry.root.querySelectorAll('.entry-meta').forEach((node) => node.remove());
+  const record = entry.root.__sessionRecord;
+  if (record) { record.status = 'pending'; record.text = ''; record.meta = ''; }
+}
+
+function translationTaskEntry(task) {
+  const previous = task?.item.entry;
+  if (!previous) return null;
+  const id = previous.root.__sessionRecord?.id;
+  const root = [...(state.blockMeta.translate?.body?.children || [])].find((row) => row.__sessionRecord?.id === id);
+  if (!root) return null;
+  const liveRecord = state.sessionEntries.find((row) => row?.id === id);
+  if (liveRecord) root.__sessionRecord = liveRecord;
+  const entry = { root, body: root.querySelector('.text'), acts: root.querySelector('.acts'), role: root.querySelector('.role') };
+  resetTranslationTaskEntry(entry);
+  return entry;
 }
 
 /** 输入框旁边那句范围提示（`#composerHint`）：只讲这次会发什么，不再讲带了几轮历史。 */
@@ -9681,19 +9856,28 @@ function translationCacheScope({ page = null, context = '' } = {}) {
     cfg.activeProfile || '', cfg.baseURL || '', cfg.model || '', cfg.visionModel || '', cfg.temperature]));
 }
 
-async function doTranslateText({ text, targetLang = '', force = false } = {}) {
-  if (!await allowEdit('译文')) return;
+async function doTranslateText({ text, targetLang = '', force = false, task = null } = {}) {
+  if (!task && !await allowEdit('译文')) return;
   const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
-  if (!raw || state.busy) return;
+  if (!raw || (state.busy && !task)) return;
+  if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
   if (!ensureReady()) return;
+  const docId = state.doc?.docId || '';
+  const openSeq = state.openSeq;
+  const isCurrent = task?.isCurrent || (() => docId === (state.doc?.docId || '') && openSeq === state.openSeq);
   const body = raw.slice(0, 20000);
   const lang = resolveTranslateTarget(targetLang);
-  revealTranslatePanel();
+  if (!task) revealTranslatePanel();
   const retryOf = () => ({
-    kind: 'translate-text', docId: state.doc?.docId || null,
+    kind: 'translate-text', docId: docId || null,
     text: body, targetLang: lang,
   });
-  const retry = () => doTranslateText({ text: body, targetLang: lang, force: true });
+  const retry = () => {
+    if (docId !== (state.doc?.docId || '')) { toast('请切回原论文后重新翻译', 'err'); return; }
+    return doTranslateText({ text: body, targetLang: lang, force: true });
+  };
+  const retryUnfinished = task ? () => translationBatches.get(docId) === task.batch
+    ? resumeTranslationBatch(task.batch) : retry() : retry;
   const key = `translate.input@${PROMPT_SYSTEM_VERSION}::${lang}::${body.length}-${hashStr(body)}::${translationCacheScope()}`;
   const cached = force ? null : state.cache.get(key);
   if (cached) {
@@ -9704,21 +9888,22 @@ async function doTranslateText({ text, targetLang = '', force = false } = {}) {
       const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
       row?.scrollIntoView({ block: 'nearest' });
       toast('这段文字翻过，直接用原结果', 'ok', 1800);
-      return;
+      return { status: 'complete' };
     }
   }
   const quote = body.length > 400 ? `${body.slice(0, 400)}…` : body;
-  const entry = addEntry({ block: 'translate', tag: 'translation', page: null, quote,
-    retry: retryOf(), reveal: true });
+  const entry = translationTaskEntry(task) || addEntry({ block: 'translate', tag: 'translation', page: null, quote,
+    retry: retryOf(), reveal: !task });
+  if (task) task.item.entry = entry;
   entry.root.classList.add('msg-text-translate');
   if (cached) {
     entry.body.innerHTML = renderMarkdown(cached);
     finishEntry(entry, cached, { retryLabel: '重新翻译', onRetry: retry });
     toast('这段文字翻过，直接用缓存', 'ok', 1500);
-    return;
+    return { status: 'complete' };
   }
   const target = streamTarget(entry.body);
-  const ctl = makeController();
+  const ctl = task?.controller || makeController();
   if (!ctl) return;
   setBusy(true, '0s');
   let received = '';
@@ -9726,24 +9911,31 @@ async function doTranslateText({ text, targetLang = '', force = false } = {}) {
     const full = await chat({
       messages: translateMessages({ text: body, targetLang: lang, context: '', page: null, docTitle: state.doc?.name }),
       signal: ctl.signal,
-      onDelta: (piece, all) => { received = all; target.push(all); },
+      onDelta: (piece, all) => { if (isCurrent() && !ctl.signal.aborted) { received = all; target.push(all); } },
       onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
     });
+    if (ctl.signal.aborted || !isCurrent()) throw new DOMException('已停止', 'AbortError');
     const clean = full.trim();
     target.done(clean);
     state.cache.set(key, clean);
     // 成功时保持译文块「最纯净」的界面（不摆按钮）；失败/停止时 .acts 非空才显示重试
     finishEntry(entry, clean, { retryLabel: '重新翻译', onRetry: retry });
+    return { status: 'complete' };
   } catch (e) {
-    if (isAbort(e)) {
+    if (isAbort(e) || ctl.signal.aborted || !isCurrent()) {
       target.done(received);
-      finishEntry(entry, received, { status: 'stopped', retryLabel: '重新翻译', onRetry: retry });
+      const rec = entry.root.__sessionRecord;
+      if (rec) { rec.status = 'stopped'; rec.text = received; }
+      finishEntry(entry, received, { status: 'stopped', retryLabel: task ? '继续未完成' : '重新翻译',
+        onRetry: retryUnfinished, restore: !isCurrent() });
+      return { status: 'stopped' };
     } else {
       target.fail(errText(e));
-      addFailureRetry(entry, errText(e), retry);
+      addFailureRetry(entry, errText(e), retryUnfinished);
+      return { status: 'failed' };
     }
   } finally {
-    if (state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
+    if (!task && state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
   }
 }
 
@@ -9843,32 +10035,38 @@ function translateShotRetryPayload({ docId, sid, page, label, refId = '', target
  * 与划词翻译的区别：选区来自像素而不是文本层，所以图表、公式、扫描页也能翻。
  * 目标语言跟随输入框旁「译成」的选择（用户 m10802：之前写死中文，切 English 也出中文）。
  */
-async function doTranslateShot({ shot, page = null, label = '截图', refId = '', sid = '', docId = '', targetLang = '' } = {}) {
-  if (!await allowEdit('译文')) return;
+async function doTranslateShot({ shot, page = null, label = '截图', refId = '', sid = null, docId = '', targetLang = '', task = null } = {}) {
+  if (!task && !await allowEdit('译文')) return;
   const dataUrl = String(shot?.dataUrl || '');
-  if (!dataUrl || state.busy) return;
+  if (!dataUrl || (state.busy && !task)) return;
+  if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
   const curDocId = state.doc?.docId || null;
   const targetDoc = String(docId || '') || curDocId;
   if (!targetDoc) { toast('先打开一篇论文，再框选截图翻译', 'err'); return; }
   if (targetDoc !== curDocId) { toast('这张截图属于另一篇论文，请切回原论文后重试', 'err', 3200); return; }
   if (!ensureReady()) return;
-  revealTranslatePanel();
+  if (!task) revealTranslatePanel();
+  const openSeq = state.openSeq;
+  const isCurrent = task?.isCurrent || (() => targetDoc === (state.doc?.docId || '') && openSeq === state.openSeq);
   const lang = resolveTranslateTarget(targetLang);
   const pageNo = Number(page) > 0 ? Number(page) : null;
   const label0 = String(label || '截图').slice(0, 120);
-  const sessionSid = String(sid || '') || activeSidFor(targetDoc);
+  const sessionSid = task ? task.batch.sid : typeof sid === 'string' ? sid : activeSidFor(targetDoc);
   let finalRef = validAttachmentId(refId) ? refId : '';
   const retryOf = (rid) => translateShotRetryPayload({ docId: targetDoc, sid: sessionSid, page: pageNo, label: label0, refId: rid || '', targetLang: lang });
 
-  const entry = addEntry({
+  const entry = translationTaskEntry(task) || addEntry({
     block: 'translate', tag: 'translation', page: pageNo, quote: label0,
-    thumbs: [dataUrl], retry: retryOf(finalRef), reveal: true,
+    thumbs: [dataUrl], retry: retryOf(finalRef), reveal: !task,
   });
+  if (task) task.item.entry = entry;
+  const retryUnfinished = () => task && translationBatches.get(targetDoc) === task.batch
+    ? resumeTranslationBatch(task.batch) : retryTranslateShot(retryOf(finalRef));
   // 译文块默认隐藏 .acts（「最纯净的界面」）：截图翻译失败/被停止时要让重试按钮可见
   entry.root.classList.add('msg-shot-translate');
 
   const target = streamTarget(entry.body);
-  const ctl = makeController();
+  const ctl = task?.controller || makeController();
   if (!ctl) return;
   setBusy(true, '0s');
   let received = '';
@@ -9876,14 +10074,17 @@ async function doTranslateShot({ shot, page = null, label = '截图', refId = ''
     // 图片单独存：会话 JSON 只记 {id,w,h,label}，恢复/重试时按 id 取回原图
     if (!finalRef) {
       finalRef = await uploadAttachment(dataUrl, targetDoc, sessionSid);
-      const rec = entry.root.__sessionRecord;
-      if (finalRef && rec) {
-        rec.screenshot = true;
-        rec.shots = [{ id: finalRef, w: Number(shot?.width) || 0, h: Number(shot?.height) || 0, label: label0 }];
-        rec.retry = retryOf(finalRef);
-      }
-      if (rec) scheduleSessionSave();
+      if (task) task.item.ref = finalRef;
     }
+    // 复用已保存原图时，新建/恢复的结果条目也必须携带 shots，重启后才能显示缩略图。
+    const rec = entry.root.__sessionRecord;
+    if (finalRef && rec) {
+      rec.screenshot = true;
+      rec.shots = [{ id: finalRef, w: Number(shot?.width) || 0, h: Number(shot?.height) || 0, label: label0 }];
+      rec.retry = retryOf(finalRef);
+    }
+    if (rec && isCurrent()) scheduleSessionSave();
+    if (ctl.signal.aborted || !isCurrent()) throw new DOMException('已停止', 'AbortError');
     warnIfNoVisionModel(true);
     const messages = translateShotMessages({
       page: pageNo, docTitle: state.doc?.name || '', label: label0, targetLang: lang,
@@ -9898,29 +10099,29 @@ async function doTranslateShot({ shot, page = null, label = '截图', refId = ''
     const full = await chat({
       messages,
       signal: ctl.signal,
-      onDelta: (piece, all) => { received = all; target.push(all); },
+      onDelta: (piece, all) => { if (isCurrent() && !ctl.signal.aborted) { received = all; target.push(all); } },
       onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
     });
+    if (ctl.signal.aborted || !isCurrent()) throw new DOMException('已停止', 'AbortError');
     const clean = String(full || '').trim();
     target.done(clean);
     finishEntry(entry, clean, { page: pageNo, retryLabel: '重新翻译', onRetry: () => retryTranslateShot(retryOf(finalRef)) });
+    return { status: 'complete' };
   } catch (e) {
-    if (isAbort(e)) {
+    if (isAbort(e) || ctl.signal.aborted || !isCurrent()) {
       target.done(received);
-      finishEntry(entry, received, { page: pageNo, status: 'stopped', onRetry: () => retryTranslateShot(retryOf(finalRef)) });
-    } else {
       const rec = entry.root.__sessionRecord;
-      if (rec) { rec.status = 'failed'; rec.text = ''; rec.meta = ''; }
+      if (rec) { rec.status = 'stopped'; rec.text = received; }
+      finishEntry(entry, received, { page: pageNo, status: 'stopped', onRetry: retryUnfinished,
+        retryLabel: task ? '继续未完成' : '重新翻译', restore: !isCurrent() });
+      return { status: 'stopped' };
+    } else {
       target.fail(errText(e));
-      entry.root.classList.add('err');
-      entry.acts.replaceChildren(el('button', { text: '重试截图翻译', onclick: () => retryTranslateShot(retryOf(finalRef)) }));
-      entry.acts.classList.remove('hidden');
-      entry.root.querySelectorAll('.entry-meta').forEach((node) => node.remove());
-      entry.root.append(el('div', { class: 'entry-meta failed', text: `截图翻译失败：${errText(e)}` }));
-      scheduleSessionSave();
+      addFailureRetry(entry, errText(e), retryUnfinished);
+      return { status: 'failed' };
     }
   } finally {
-    if (state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
+    if (!task && state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
     scrollBody(entry.root.closest('.ai-body'));
   }
 }
@@ -9931,11 +10132,13 @@ function retryTranslateShot(payload) {
   const docId = p.docId || state.doc?.docId || '';
   if (!docId || docId !== state.doc?.docId) { toast('这张截图属于另一篇论文，请切回原论文后重试', 'err', 3200); return; }
   if (state.busy) { toast('正在生成中，先等它跑完或点停止再重试', 'err', 3200); return; }
-  const sid = p.sid || activeSidFor(docId);
+  const sid = typeof p.sid === 'string' ? p.sid : activeSidFor(docId);
+  const openSeq = state.openSeq;
   const refId = validAttachmentId(p.refId) ? p.refId : '';
   if (!refId) { toast('截图没有保存下来，请重新框选翻译', 'err', 4200); return; }
   (async () => {
     const dataUrl = await fetchAttachmentDataUrl(refId, docId, sid);
+    if (docId !== state.doc?.docId || openSeq !== state.openSeq) return;
     if (!dataUrl) { toast('截图文件已不在，请重新框选翻译', 'ok', 5200); return; }
     await doTranslateShot({ shot: { dataUrl, width: 0, height: 0 }, page: p.page || null, label: p.label || '截图',
       refId, sid, docId, targetLang: p.targetLang || '' });
@@ -10021,6 +10224,7 @@ function addToChat(sel) {
   if (!sel || state.busy) return;
   const text = sel.cleanText || cleanText(sel.text || '');
   if (!text) return;
+  revealPanel('chat');
   const fromRight = sel.source === 'right';
   state.attachments.push({
     id: uid(), kind: 'text',
@@ -10037,13 +10241,15 @@ function addToChat(sel) {
 }
 
 /** 把一张截图加进附件 */
-function addImageToChat(shot, page, label, { allowBusy = false } = {}) {
+function addImageToChat(shot, page, label, { allowBusy = false, owner = null } = {}) {
   if (state.busy && !allowBusy) return;
-  state.attachments.push({
+  const target = owner || currentComposerOwner();
+  if (!owner && composerMode() !== 'translate') revealPanel('chat');
+  changeDraftAttachments(target, (items) => [...items, {
     id: uid(), kind: 'image', page, dataUrl: shot.dataUrl,
     w: shot.width, h: shot.height, pages: shot.pages || 1, label,
-  });
-  renderAttachments();
+  }]);
+  if (!sameComposerOwner(target, composerOwner)) return;
   // 译文面板里框选的截图也留在下方输入框（截图先放框里、再按 Enter 翻译，和问答一致，用户 m05190）
   if (rightPanelInCol(1) !== 'translate') revealPanel('chat');
   $('#chatInput').focus();
@@ -10065,21 +10271,35 @@ function takeAttachments() {
 
 function dropSentAttachments(pending) {
   const ids = new Set((pending?.attachments || []).map((a) => a && a.id).filter(Boolean));
-  if (!ids.size || !state.attachments.some((a) => ids.has(a.id))) return;
-  state.attachments = state.attachments.filter((a) => !ids.has(a.id));
-  renderAttachments();
+  if (!ids.size) return;
+  const owner = pending.composerOwner || { docId: pending.docId || '', mode: 'chat' };
+  changeDraftAttachments(owner, (items) => items.filter((a) => !ids.has(a.id)));
 }
 
-/** 发送失败：把这条请求的附件放回输入区（截图不丢，改完问题可以直接再发）。 */
+/** 发送失败：回填原问答草稿；用户已写的下一条问题保持原样。 */
 function restoreSentAttachments(pending) {
-  const ids = new Set(state.attachments.map((a) => a.id));
-  const back = (pending?.attachments || []).filter((a) => a && a.id && !ids.has(a.id));
-  if (!back.length) return;
-  state.attachments = [...back, ...state.attachments];
-  renderAttachments();
+  const owner = pending.composerOwner || { docId: pending.docId || '', mode: 'chat' };
+  if (sameComposerOwner(owner, composerOwner)) saveComposerDraft();
+  const recoverable = (pending?.attachments || []).map((a) => {
+    const copy = { ...a };
+    // 草稿不属于某个会话；再发送时按当时的 sid 保存。原请求仍可复用自己的 ref 重试。
+    if (copy.kind === 'image') delete copy.ref;
+    return copy;
+  });
+  const draft = composerDrafts.restoreAttachments(owner, recoverable);
+  if (!draft.text) draft.text = String(pending.inputValue || '');
+  composerDrafts.write(owner, draft);
+  if (sameComposerOwner(owner, composerOwner)) {
+    $('#chatInput').value = draft.text;
+    state.attachments = draft.attachments;
+    resizeComposer();
+    renderAttachments();
+  }
 }
 
 function renderAttachments() {
+  composerRevision += 1;
+  saveComposerDraft();
   const row = $('#attachRow');
   if (!row) return;
   if (!state.attachments.length) {
@@ -10149,8 +10369,9 @@ function initComposer() {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   ta.addEventListener('input', () => {
-    ta.style.height = 'auto';
-    ta.style.height = `${Math.min(130, ta.scrollHeight)}px`;
+    composerRevision += 1;
+    saveComposerDraft();
+    resizeComposer();
     updateSendScope();
   });
 }
@@ -10698,8 +10919,20 @@ function translateOnlyAsk(text) {
   return true;
 }
 
+let sendPreparing = false;
 async function send(retryPending = null) {
+  if (sendPreparing) return;
+  sendPreparing = true;
+  try { return await sendWithDraft(retryPending); }
+  finally { sendPreparing = false; }
+}
+
+async function sendWithDraft(retryPending = null) {
+  const sendingOwner = composerOwner;
+  const sendingRevision = composerRevision;
+  const draftUnchanged = () => sendingOwner === composerOwner && sendingRevision === composerRevision;
   if (!await allowEdit('问答')) return;
+  if (!retryPending && !draftUnchanged()) return;
   const ta = $('#chatInput');
   if (state.busy) return;
   if (!retryPending && composerMode() === 'translate') {
@@ -10707,25 +10940,26 @@ async function send(retryPending = null) {
     const shots = state.attachments.filter((a) => a.kind === 'image');
     if (!text && !shots.length) return;
     if (text.length > 20000) { toast('最多翻译 20,000 字', 'err', 2400); return; }
+    const docId = state.doc?.docId || '';
+    if (shots.length && !docId) { toast('先打开一篇论文，再翻译截图', 'err'); return; }
+    if (docId && state.viewerDocId !== docId) { flashHint('论文正在打开，请稍候'); return; }
+    const existing = translationBatches.get(docId);
+    if (existing && existing.status !== 'complete') {
+      toast('这批翻译还有未完成项，请先继续，或将它放回草稿', 'err', 3500);
+      renderTranslationBatch();
+      return;
+    }
     const lang = selectedTranslateTarget();
     if (!ensureReady()) return;
+    const batch = createTranslationBatch({ docId, sid: activeSidFor(docId), targetLang: lang,
+      items: [...(text ? [{ kind: 'text', text }] : []), ...shots] });
+    translationBatches.set(docId, batch);
     ta.value = '';
     ta.style.height = 'auto';
-    // 截图先取下来：文字和截图都从这一份附件走，发送后输入框清空（和问答一致，用户 m05190）
-    if (shots.length) takeAttachments();
-    if (text) await doTranslateText({ text, targetLang: lang });
-    for (const a of shots) {
-      await doTranslateShot({
-        shot: { dataUrl: a.dataUrl, width: a.w || 0, height: a.h || 0 },
-        page: a.page || null,
-        label: a.label || '截图',
-        targetLang: lang,
-      });
-    }
-    if (text && !state.sessionEntries.some((e) => e?.retry?.kind === 'translate-text' && e.retry.text === text)) {
-      ta.value = text;
-      ta.dispatchEvent(new Event('input', { bubbles: true }));
-    }
+    const submitted = new Set(shots.map((a) => a.id));
+    state.attachments = state.attachments.filter((a) => !submitted.has(a.id));
+    renderAttachments();
+    await resumeTranslationBatch(batch);
     return;
   }
   let pending = retryPending;
@@ -10745,6 +10979,7 @@ async function send(retryPending = null) {
   if (!pending && sessionsIsEntryMode()) {
     const ok = await sessionsLeaveEntryForNewSession();
     if (!ok) return;
+    if (!draftUnchanged()) return;
   }
 
   if (!pending) {
@@ -10786,6 +11021,7 @@ async function send(retryPending = null) {
     reading.page = firstPage || reading.page;
     pending = {
       inputValue, question, attachments, quoteText, firstPage, pageRole: place.role, reading, screenPage, selectionSource,
+      composerOwner: { ...currentComposerOwner('chat') },
       docId: state.doc?.docId || null,
       docTitle: state.doc?.name || '',
       history, openSeq: state.openSeq, sid: activeSidFor(state.doc?.docId),
@@ -11358,6 +11594,9 @@ function locateDoc(docY, leftVp = null, rightVp = null) {
 
 /** 框选区域 → 截图；不碰 API Key、不决定去哪个面板，返回 { shot, page, label } 或 null */
 async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
+  const captureDocId = state.doc?.docId;
+  const captureSeq = state.openSeq;
+  const capturePdf = viewer.pdf;
   const a = locateDoc(topDoc, leftVp, rightVp);
   const b = locateDoc(bottomDoc, leftVp, rightVp);
   if (!viewer.pageEls[a.page] || !viewer.pageEls[b.page]) return null;
@@ -11416,6 +11655,8 @@ async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
     } else {
       shot = await viewer.captureRange({ slices: rangeSlices });
     }
+    // 长截图包含多次异步渲染；切文档后不得把旧页或混合页放回任何草稿。
+    if (captureDocId !== state.doc?.docId || captureSeq !== state.openSeq || capturePdf !== viewer.pdf) return null;
     const first = rangeSlices[0].page;
     const last = rangeSlices[rangeSlices.length - 1].page;
     const label = first === last ? `截图 p.${first}` : `长截图 p.${first}–p.${last}`;
@@ -11430,19 +11671,21 @@ async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
 
 async function captureToChat(topDoc, bottomDoc, leftVp, rightVp) {
   if (state.busy) return;
+  const owner = currentComposerOwner();
   // 注意：截图本身不需要 API Key（图只是先放进附件区），
   // 所以这里绝不能调 ensureReady()，否则没配密钥时截图会被静默拦掉
   const captured = await captureRegionShot(topDoc, bottomDoc, leftVp, rightVp);
   if (!captured) return;
-  addImageToChat(captured.shot, captured.page, captured.label, { allowBusy: true });
+  addImageToChat(captured.shot, captured.page, captured.label, { allowBusy: true, owner });
 }
 
 /** 截图翻译：截图先进下方输入框（和问答一样），再按 Enter / 发送翻译图中文字（2026-11-03 用户 m05190） */
 async function captureToTranslate(topDoc, bottomDoc, leftVp, rightVp) {
   if (state.busy) return;
+  const owner = currentComposerOwner('translate');
   const captured = await captureRegionShot(topDoc, bottomDoc, leftVp, rightVp);
   if (!captured) return;
-  addImageToChat(captured.shot, captured.page, captured.label, { allowBusy: true });
+  addImageToChat(captured.shot, captured.page, captured.label, { allowBusy: true, owner });
   flashHint('截图已放进输入框 · 按 Enter 翻译截图，可同时输入要翻译的文字');
 }
 
