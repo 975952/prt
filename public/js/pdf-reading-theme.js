@@ -5,22 +5,23 @@ export const NIGHT_PAPER = '#222426';
 const NIGHT_INK = [226, 228, 230];
 const NIGHT_BG = [34, 36, 38];
 
-function nightColor(color) {
+function nightColor(color, brightness = 90) {
   if (!/^#[0-9a-f]{6}$/i.test(color)) return color;
   const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
   // Preserve color coding in diagrams and links. Only neutral ink and paper
   // are reversed; photographs and raster figures never enter this function.
   if (Math.max(...rgb) - Math.min(...rgb) > 24) return color;
   const level = rgb.reduce((a, b) => a + b, 0) / (3 * 255);
-  return '#' + NIGHT_INK.map((ink, i) => Math.round(ink + (NIGHT_BG[i] - ink) * level).toString(16).padStart(2, '0')).join('');
+  const strength = Number.isFinite(Number(brightness)) ? Math.max(65, Math.min(100, Number(brightness))) / 100 : .9;
+  return '#' + NIGHT_INK.map((ink, i) => Math.round(ink * strength + (NIGHT_BG[i] - ink * strength) * level).toString(16).padStart(2, '0')).join('');
 }
 
 /** Keep text hue while bounding perceptual lightness and chroma. Images and
  * colored vector fills never pass through this text-only conversion. */
-export function nightTextColor(color, saturation = 50) {
+export function nightTextColor(color, saturation = 50, brightness = 90) {
   if (!/^#[0-9a-f]{6}$/i.test(color)) return color;
   const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
-  if (Math.max(...rgb) - Math.min(...rgb) <= 24) return nightColor(color);
+  if (Math.max(...rgb) - Math.min(...rgb) <= 24) return nightColor(color, brightness);
   const [r, g, b] = rgb.map(v => { const x = v / 255; return x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4; });
   const l = Math.cbrt(.4122214708 * r + .5363325363 * g + .0514459929 * b);
   const m = Math.cbrt(.2119034982 * r + .6806995451 * g + .1073969566 * b);
@@ -51,7 +52,7 @@ export function nightTextColor(color, saturation = 50) {
   }).join('');
 }
 
-export function applyNightReading(task, OPS, { saturation = 50 } = {}) {
+export function applyNightReading(task, OPS, { saturation = 50, brightness = 90 } = {}) {
   let installed = false;
   task.onContinue = resume => {
     if (!installed) {
@@ -64,7 +65,7 @@ export function applyNightReading(task, OPS, { saturation = 50 } = {}) {
       const originals = new Map();
       const raw = color => originals.get(color) || color;
       const convert = color => {
-        const mapped = nightColor(color);
+        const mapped = nightColor(color, brightness);
         originals.set(mapped, color);
         return mapped;
       };
@@ -82,7 +83,7 @@ export function applyNightReading(task, OPS, { saturation = 50 } = {}) {
       }
       const textColors = new Map();
       const textColor = color => {
-        if (!textColors.has(color)) textColors.set(color, nightTextColor(raw(color), saturation));
+        if (!textColors.has(color)) textColors.set(color, nightTextColor(raw(color), saturation, brightness));
         return textColors.get(color);
       };
       wrap('showText', original => function (...args) {

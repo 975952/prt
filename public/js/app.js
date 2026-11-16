@@ -646,7 +646,7 @@ const DEFAULT_UI_STYLE = Object.freeze({
   theme: 'glass', density: 'standard', fontSize: 14, lineHeight: 1.72,
   codeSize: 12, maxWidth: 760, opacity: 1,
   glassTransparency: 76, glassSurfaceTransparency: 80, glassFrost: 32, glassRadius: 24,
-  glassBrightness: 93, glassShadow: 35, nightSaturation: 50, motion: true,
+  glassBrightness: 93, glassShadow: 35, nightSaturation: 50, nightBrightness: 90, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
   paper: 'tint',
   // 界面尺度：uiFontSize = 界面字号 px（--ui-fs），controlSize = 控件大小 %（--ctl-scale）。
@@ -668,6 +668,7 @@ const GLASS_CONTROLS = Object.freeze({
   glassBrightness: { id: 'uiGlassBrightness', min: 60, max: 100, unit: '%' },
   glassShadow: { id: 'uiGlassShadow', min: 0, max: 100, unit: '%' },
   nightSaturation: { id: 'uiNightSaturation', min: 0, max: 100, unit: '%' },
+  nightBrightness: { id: 'uiNightBrightness', min: 65, max: 100, unit: '%' },
 });
 
 const READ_FS_MIN = 12;
@@ -1787,6 +1788,11 @@ function applyUiStyle() {
   root.style.setProperty('--appearance-bg', style.theme === 'glass' ? `rgb(${brightness} ${brightness} ${brightness})` : adjusted(palette[0]));
   root.style.setProperty('--appearance-bg-low', style.theme === 'glass' ? `rgb(${brightness - 4} ${brightness - 4} ${brightness - 4})` : adjusted(palette[1]));
   root.dataset.nightSaturation = String(glassValue('nightSaturation'));
+  root.dataset.nightBrightness = String(glassValue('nightBrightness'));
+  const nightInk = (rgb) => `rgb(${rgb.map(v => Math.round(v * glassValue('nightBrightness') / 100)).join(' ')})`;
+  root.style.setProperty('--night-ink', nightInk([226, 228, 230]));
+  root.style.setProperty('--night-ink-dim', nightInk([186, 189, 192]));
+  root.style.setProperty('--night-ink-faint', nightInk([156, 160, 164]));
   root.dataset.motion = style.motion === false ? 'off' : 'on';
   const paperMode = style.paper === 'white' ? 'white' : 'tint';
   const paperTint = getComputedStyle(root).getPropertyValue('--paper-tint').trim();
@@ -5374,7 +5380,8 @@ function syncComposerMode(id = rightPanelInCol(1)) {
   const clip = $('#clipBtn');
   const sendBtn = $('#sendBtn');
   if (input) {
-    input.placeholder = translating ? '粘贴需要翻译的文字…' : '关于这篇论文，你想了解什么？';
+    input.placeholder = translating ? '粘贴原文…' : '问点什么…';
+    input.setAttribute('aria-label', translating ? '翻译原文' : '问题');
     if (translating) input.maxLength = 20000;
     else input.removeAttribute('maxlength');
   }
@@ -5383,9 +5390,7 @@ function syncComposerMode(id = rightPanelInCol(1)) {
     clip.title = translating ? '截图翻译：框选后放进输入框，再按 Enter 翻译' : '截图 / 长截图，加进对话';
     clip.classList.remove('hidden');
   }
-  if (sendBtn) sendBtn.title = translating ? '翻译' : '发送';
-  const caption = document.querySelector('.glass-composer-caption');
-  if (caption) caption.textContent = translating ? 'Enter 翻译 · Shift+Enter 换行' : 'Enter 发送 · Shift+Enter 换行';
+  if (sendBtn) sendBtn.title = translating ? '翻译（Enter）· Shift+Enter 换行' : '发送（Enter）· Shift+Enter 换行';
   const target = $('#translateTargetLang');
   if (target && !target.dataset.ready) {
     try {
@@ -10765,8 +10770,8 @@ function updateComposerHint() {
     const segments = state.attachments.filter((a) => a.kind === 'text');
     const text = translationDraftText($('#chatInput')?.value || '', segments);
     const images = state.attachments.filter((a) => a.kind === 'image').length;
-    $('#sendBtn').title = segments.length ? '合并翻译' : '翻译';
-    $('#chatInput').placeholder = segments.length ? '继续补充原文…' : '粘贴需要翻译的文字…';
+    $('#sendBtn').title = `${segments.length ? '合并翻译' : '翻译'}（Enter）· Shift+Enter 换行`;
+    $('#chatInput').placeholder = segments.length ? '继续补充原文…' : '粘贴原文…';
     setHint(segments.length ? `将合并翻译 ${segments.length} 段选文${images ? ` · ${images} 张截图另译` : ''}`
       : images ? `${images} 张截图${text ? '与输入文字' : ''}将依次翻译` : '');
     return;
@@ -12564,6 +12569,7 @@ function glassValue(key, value = uiStyle[key]) {
 // 材质滑杆只更新 CSS；彩色文字鲜艳度合并快速拖动后重绘 PDF，保留阅读位置。
 function applyGlassSettingsFromControls() {
   const oldSaturation = uiStyle.nightSaturation;
+  const oldBrightness = uiStyle.nightBrightness;
   for (const [key, { id }] of Object.entries(GLASS_CONTROLS)) {
     const input = document.getElementById(id);
     if (input) uiStyle[key] = glassValue(key, input.value);
@@ -12572,7 +12578,7 @@ function applyGlassSettingsFromControls() {
   applyUiStyle();
   saveUi();
   updateUiRangeLabels();
-  if (oldSaturation !== uiStyle.nightSaturation && uiStyle.theme === 'dark') refreshNightInk();
+  if ((oldSaturation !== uiStyle.nightSaturation || oldBrightness !== uiStyle.nightBrightness) && uiStyle.theme === 'dark') refreshNightInk();
 }
 
 const refreshNightInk = debounce(() => viewer?.refreshPaper?.(), 160);

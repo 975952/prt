@@ -213,7 +213,7 @@ try {
         const data = ctx.getImageData(0, 0, c.width, c.height).data;
         let ink = 0, bg = 0;
         for (let i = 0; i < data.length; i += 4) {
-          if (data[i] === 226 && data[i + 1] === 228 && data[i + 2] === 230) ink++;
+          if (data[i] === 203 && data[i + 1] === 205 && data[i + 2] === 207) ink++;
           if (data[i + 3] === 0) bg++;
         }
         return { ink, bg };
@@ -276,7 +276,7 @@ try {
     for (let i = 0; i < d.length; i += 4) {
       if (d[i] === 200 && d[i + 1] === 108 && d[i + 2] === 62 && d[i + 3] === 255) orange++;
       if (d[i] === 250 && d[i + 1] === 246 && d[i + 2] === 232 && d[i + 3] === 255) white++;
-      if (d[i] === 226 && d[i + 1] === 228 && d[i + 2] === 230) ink++;
+      if (d[i] === 203 && d[i + 1] === 205 && d[i + 2] === 207) ink++;
     }
     return { orange, white, ink };
   });
@@ -292,7 +292,7 @@ try {
       repeated: sample(260, 490), masked: sample(260, 270), line: sample(100, 565) };
   });
   check('显式白色纸底与线条反色，重复图片和透明遮罩内的图片保持原色',
-    JSON.stringify(composited.background) === '[34,36,38,255]' && JSON.stringify(composited.line) === '[226,228,230,255]'
+    JSON.stringify(composited.background) === '[34,36,38,255]' && JSON.stringify(composited.line) === '[203,205,207,255]'
     && JSON.stringify(composited.orange) === '[200,108,62,255]' && JSON.stringify(composited.repeated) === '[200,108,62,255]'
     && JSON.stringify(composited.masked) === '[200,108,62,255]' && JSON.stringify(composited.white) === '[255,255,255,255]'
     && JSON.stringify(composited.black) === '[0,0,0,255]', JSON.stringify(composited));
@@ -308,7 +308,7 @@ try {
       }
       return [...colors].sort((a, b) => b[1] - a[1])[0]?.[0].split(',').map(Number);
     };
-    return { blue: dominantInk(28, 534, 150, 20), green: dominantInk(250, 534, 190, 20),
+    return { blue: dominantInk(28, 534, 150, 20), green: dominantInk(250, 534, 190, 20), neutral: dominantInk(28, 588, 420, 28),
       blueShape: sample(34, 520), greenShape: sample(256, 520), blueImage: sample(170, 490) };
   });
   const nightColors = await coloredText();
@@ -323,6 +323,15 @@ try {
     && JSON.stringify(nightColors.greenShape) === '[0,255,0,255]' && JSON.stringify(nightColors.blueImage) === '[0,0,128,255]');
   await nightImage.click('#settingsBtn'); await nightImage.waitForSelector('#settingsModal:not(.hidden)');
   await nightImage.click('#settingsNavAppearance');
+  const readingBeforeBrightness = await nightImage.evaluate(() => ({ page: window.__viewer.current, top: window.__viewer.container.scrollTop, scale: window.__viewer.scale }));
+  await nightImage.$eval('#uiNightBrightness', el => { el.value = 65; el.dispatchEvent(new Event('input', { bubbles: true })); });
+  await nightImage.waitForFunction(() => window.__viewer.rendered.get(1)?.nightBrightness === '65' && !window.__viewer.renderTasks.size);
+  const softInk = await coloredText();
+  check('正文亮度可降低，彩色文字、图片和阅读位置保持稳定', softInk.neutral
+    && luminance(softInk.neutral) < luminance(nightColors.neutral) && contrast(softInk.neutral) >= 4.5
+    && JSON.stringify(softInk.blue) === JSON.stringify(nightColors.blue) && JSON.stringify(softInk.blueImage) === '[0,0,128,255]'
+    && await nightImage.evaluate(before => window.__viewer.current === before.page && window.__viewer.scale === before.scale
+      && Math.abs(window.__viewer.container.scrollTop - before.top) < 1 && getComputedStyle(document.documentElement).getPropertyValue('--fg').trim() === 'rgb(147 148 150)', readingBeforeBrightness), JSON.stringify(softInk));
   await nightImage.$eval('#uiNightSaturation', el => { el.value = 0; el.dispatchEvent(new Event('input', { bubbles: true })); });
   await nightImage.waitForFunction(() => window.__viewer.rendered.get(1)?.nightSaturation === '0' && !window.__viewer.renderTasks.size);
   const grayText = await coloredText();
@@ -330,11 +339,11 @@ try {
     && Math.max(...grayText.blue) - Math.min(...grayText.blue) <= 1 && Math.max(...grayText.green) - Math.min(...grayText.green) <= 1
     && JSON.stringify(grayText.blueImage) === '[0,0,128,255]' && JSON.stringify(grayText.greenShape) === '[0,255,0,255]');
   await nightImage.reload({ waitUntil: 'domcontentloaded' });
-  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.nightSaturation === '0' && !window.__viewer.renderTasks.size);
-  check('重开恢复彩色文字鲜艳度', await nightImage.evaluate(() => document.documentElement.dataset.nightSaturation === '0'));
+  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.nightSaturation === '0' && window.__viewer.rendered.get(1)?.nightBrightness === '65' && !window.__viewer.renderTasks.size);
+  check('重开恢复正文亮度和彩色文字鲜艳度', await nightImage.evaluate(() => document.documentElement.dataset.nightSaturation === '0' && document.documentElement.dataset.nightBrightness === '65'));
   await nightImage.click('#settingsBtn'); await nightImage.waitForSelector('#settingsModal:not(.hidden)');
   await nightImage.click('#settingsNavAppearance'); await nightImage.click('#resetAppearanceEffects');
-  await nightImage.waitForFunction(() => window.__viewer.rendered.get(1)?.nightSaturation === '50' && !window.__viewer.renderTasks.size);
+  await nightImage.waitForFunction(() => window.__viewer.rendered.get(1)?.nightSaturation === '50' && window.__viewer.rendered.get(1)?.nightBrightness === '90' && !window.__viewer.renderTasks.size);
   await nightImage.click('#closeSettings');
   await nightImage.screenshot({ path: path.join(artifactDir, 'theme-dark-composite.png') });
   await nightImage.evaluate(() => window.__viewer.setScale(6));

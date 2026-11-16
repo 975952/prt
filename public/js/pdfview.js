@@ -1696,6 +1696,7 @@ export class PdfViewer {
       // PDF ink and image pixels opaque; only the empty canvas is transparent.
       const background = pageEl.dataset.imageOnly === 'true' ? paper : 'rgba(0, 0, 0, 0)';
       const nightSaturation = document.documentElement.dataset.nightSaturation || '50';
+      const nightBrightness = document.documentElement.dataset.nightBrightness || '90';
       const ctx = canvas.getContext('2d', { alpha: background === 'rgba(0, 0, 0, 0)' });
       ctx.fillStyle = background;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
@@ -1715,7 +1716,7 @@ export class PdfViewer {
       if (!reusePinLayer) pinLayer.style.transform = '';
 
       const entry = {
-        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null, paper, nightSaturation,
+        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null, paper, nightSaturation, nightBrightness,
         slice, ratio, cssW, cssH,
         renderScale: this.scale,   // 这张位图是按哪个比例画的（软缩放拉伸时要用）
         dirty: false,
@@ -1744,7 +1745,7 @@ export class PdfViewer {
         background,
       });
       entry.task = renderTask;
-      if (paper === NIGHT_PAPER) applyNightReading(renderTask, pdfjsLib.OPS, { saturation: Number(nightSaturation) });
+      if (paper === NIGHT_PAPER) applyNightReading(renderTask, pdfjsLib.OPS, { saturation: Number(nightSaturation), brightness: Number(nightBrightness) });
       try {
         await renderTask.promise;
       } catch (e) {
@@ -1838,7 +1839,8 @@ export class PdfViewer {
       // 切换主题时若旧帧正在绘制，完成后补画最新纸底，避免旧底色残留。
       const completed = this.rendered.get(i);
       if (!stale() && completed && (completed.paper !== readingPaperColor(pageEl)
-        || (completed.paper === NIGHT_PAPER && completed.nightSaturation !== (document.documentElement.dataset.nightSaturation || '50')))) {
+        || (completed.paper === NIGHT_PAPER && (completed.nightSaturation !== (document.documentElement.dataset.nightSaturation || '50')
+          || completed.nightBrightness !== (document.documentElement.dataset.nightBrightness || '90'))))) {
         completed.dirty = true;
         this._scheduleRerender(0);
       }
