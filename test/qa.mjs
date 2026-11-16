@@ -113,12 +113,14 @@ const abstract = vm.runInNewContext(code.slice(start, end) + '; openAlexAbstract
 check('Node 摘要恢复词序及重复词', abstract({ abstract_inverted_index: { fast: [2], a: [0, 3], transform: [1], invalid: [-1, 10000] } }) === 'a transform fast a');
 
 const bodies = [];
-let failNext = false;
+let failAnswer = false;
+let readReferencePage = false;
+let referenceToolDecisions = 0;
 const mock = http.createServer(async (req, res) => {
   const chunks = []; for await (const c of req) chunks.push(c);
   const body = JSON.parse(Buffer.concat(chunks));
   const sys = String(body.messages[0]?.content || '');
-  // 后台请求不算「主回答」：学习记忆提取 + 会话滚动摘要都不记录、不参与断言
+  // 后台请求不算「主回答」：记忆、摘要、标题都不记录，也不消耗受控失败。
   if (sys.includes('后台学习记忆提取器')) {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: '[]' } }] })); return;
@@ -127,11 +129,29 @@ const mock = http.createServer(async (req, res) => {
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ choices: [{ message: { content: '会话摘要（后台）' } }] })); return;
   }
+  if (sys.includes('你在为prt的问答会话起标题')) {
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ choices: [{ message: { content: '阅读机制讨论' } }] })); return;
+  }
   bodies.push(body);
-  if (failNext) { failNext = false; res.writeHead(503, { 'Content-Type': 'application/json' }); res.end('{"error":{"message":"controlled failure"}}'); return; }
+  if (failAnswer) { res.writeHead(503, { 'Content-Type': 'application/json' }); res.end('{"error":{"message":"controlled failure"}}'); return; }
+  // 当前契约：先由模型选择读取参考文献页，再把真实 PDF 工具结果交还模型。
+  // 这里只模拟本地 read_page；没有伪造不存在的外部文献搜索工具。
+  const referenceResult = body.messages.find((m) => m.role === 'tool' && m.tool_call_id === 'qa_references_page3');
+  if (readReferencePage && body.tools && !referenceResult) {
+    referenceToolDecisions++;
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    const toolCalls = [{ index: 0, id: 'qa_references_page3', type: 'function',
+      function: { name: 'read_page', arguments: JSON.stringify({ page: 3 }) } }];
+    res.end(`data: ${JSON.stringify({ choices: [{ delta: { tool_calls: toolCalls } }] })}\n\n`
+      + `data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'tool_calls' }] })}\n\ndata: [DONE]\n\n`);
+    return;
+  }
   const last = String(body.messages.at(-1).content);
   const hasSources = last.includes('[来源2]');
-  const answer = `${last.includes(SELECTED) ? '两个方法的解释' : last.includes('SqueezeNet') ? 'SqueezeNet 的解释' : 'Andrew G. Howard 的解释'}${hasSources ? ' [来源2]' : ''}`;
+  const answer = readReferencePage && referenceResult
+    ? '根据刚读取的参考文献页解释两个方法。〔p.3〕'
+    : `${last.includes(SELECTED) ? '两个方法的解释' : last.includes('SqueezeNet') ? 'SqueezeNet 的解释' : 'Andrew G. Howard 的解释'}${hasSources ? ' [来源2]' : ''}`;
   res.writeHead(200, { 'Content-Type': 'text/event-stream' });
   res.end(`data: ${JSON.stringify({ choices: [{ delta: { content: answer } }] })}\n\ndata: [DONE]\n\n`);
 });
@@ -189,6 +209,12 @@ try {
       headless: true, args: ['--no-sandbox'], defaultViewport: { width: 1400, height: 900 } });
     page = await browser.newPage();
   }
+  // 本套件验收「恢复同一篇论文的上次会话」；默认 choose 会在直接发送时新建会话。
+  // 明确采用逐篇会话归属，让后面的换论文断言对应实际启用的产品策略。
+  await page.evaluateOnNewDocument(() => {
+    localStorage.setItem('reader.session.onEnter', 'resume');
+    localStorage.setItem('reader.session.scopeMode', 'paper');
+  });
   page.on('pageerror', (e) => pageErrors.push(String(e)));
   page.on('requestfailed', (r) => {
     const detail = `${r.url()} ${r.failure()?.errorText}`;
@@ -229,9 +255,36 @@ try {
       && window.__state.viewerDocId === window.__state.doc.docId && window.__ctx, { timeout: 20000 }, filename);
     navigating = false;
   };
+  const readingState = () => page.evaluate(() => ({
+    busy: window.__state?.busy,
+    activeSession: window.__ctx?.activeSession,
+    doc: window.__state?.doc,
+    viewerDocId: window.__state?.viewerDocId,
+    openSeq: window.__state?.openSeq,
+    historyLength: window.__state?.history?.length,
+    entryCount: window.__state?.sessionEntries?.length,
+    entries: window.__state?.sessionEntries?.slice(-3).map((e) => ({
+      seq: e.seq, status: e.status, block: e.block, sid: e.sid, text: e.text?.slice(0, 120),
+    })),
+    enterMode: localStorage.getItem('reader.session.onEnter'),
+    rightSide: { ...document.querySelector('#rightSide')?.dataset },
+    visibleEntryCard: [...document.querySelectorAll('[data-show="1"]')].map((e) => ({ id: e.id, className: e.className })),
+    sendDisabled: document.querySelector('#sendBtn')?.disabled,
+    input: document.querySelector('#chatInput')?.value,
+  }));
+  let lastSend = null;
   const settled = async (before) => {
-    await page.waitForFunction((n) => !window.__state.busy && window.__state.sessionEntries.length > n
-      && ['complete', 'failed'].includes(window.__state.sessionEntries.at(-1)?.status), { timeout: 20000 }, before);
+    try {
+      await page.waitForFunction((n) => !window.__state.busy && window.__state.sessionEntries.length > n
+        && ['complete', 'failed'].includes(window.__state.sessionEntries.at(-1)?.status), { timeout: 20000 }, before);
+    } catch (error) {
+      const evidence = { before, lastSend, state: await readingState(), requestCount: bodies.length,
+        latestMessages: bodies.at(-1)?.messages.map((m) => ({ role: m.role, content: String(m.content).slice(-200) })),
+        pageErrors, requestFailures };
+      fs.writeFileSync(path.join(scratch, 'failure.json'), JSON.stringify(evidence, null, 2), 'utf8');
+      console.log('QA_SETTLE_TIMEOUT', JSON.stringify(evidence));
+      throw error;
+    }
   };
   const explain = async (text, p) => {
     const before = await page.evaluate(() => window.__state.sessionEntries.length);
@@ -240,6 +293,7 @@ try {
   };
   const send = async (question = '', text = '', p = 1, range = 'web') => {
     const before = await page.evaluate(() => window.__state.sessionEntries.length);
+    lastSend = { question, requestCount: bodies.length, state: await readingState() };
     await page.evaluate((question, text, p, range) => {
       window.__ctx.setScopeRange(range);
       if (text) window.__ctx.addToChat({ text, page: p });
@@ -267,10 +321,25 @@ try {
   check('发给模型的历史只使用 role 和 content', bodies.every((b) => b.messages.every((m) => Object.keys(m).every((k) => ['role', 'content'].includes(k)))));
   const links = await page.evaluate(() => { const row = [...document.querySelectorAll('.msg.assistant[data-seq]')].sort((a, b) => Number(a.dataset.seq) - Number(b.dataset.seq)).at(-1); return [...row.querySelectorAll('.src-n')].map((n) => n.textContent); });
   check('只展示实际引用的来源并保留原始编号', links.length === 1 && links[0] === '[来源2]');
+  const beforeReferences = bodies.length;
+  const beforeRefLookups = refLookups.length;
+  readReferencePage = true;
   await send('', SELECTED);
-  check('新选区覆盖人名对象', lastText().includes(SELECTED));
-  check('参考文献按完整书目查询', refLookups.some((q) => q.includes('Structured transforms for small-footprint deep learning')) && refLookups.some((q) => q.includes('Deep fried convnets')));
-  check('被引方法的原论文摘要送入本轮材料', lastText().includes('STRUCTURED_ABSTRACT_MARKER') && lastText().includes('FASTFOOD_ABSTRACT_MARKER'));
+  readReferencePage = false;
+  const referenceRequests = bodies.slice(beforeReferences).filter((body) => Array.isArray(body.tools));
+  const referenceInput = String(referenceRequests[0]?.messages.at(-1)?.content || '');
+  check('新选区覆盖人名对象', referenceInput.includes(SELECTED));
+  check('发送前不预扫参考文献，首轮只有当前选区材料', !referenceInput.includes(REF28) && !referenceInput.includes(REF37));
+  check('模型明确请求一次 read_page(3) 并收到下一轮材料', referenceToolDecisions === 1 && referenceRequests.length === 2);
+  const referenceToolMessage = referenceRequests[1]?.messages.find((m) => m.role === 'tool' && m.tool_call_id === 'qa_references_page3');
+  const referencePage = JSON.parse(referenceToolMessage?.content || '{}');
+  check('参考文献页的两条完整书目真实进入工具材料', referencePage.page === 3
+    && String(referencePage.text || '').includes(REF28) && String(referencePage.text || '').includes(REF37));
+  check('本地参考页查阅不会自动触发外部书目检索', refLookups.length === beforeRefLookups);
+  check('模型按已读取的参考页完成回答', await page.evaluate(() => {
+    const entry = window.__state.sessionEntries.at(-1);
+    return entry?.status === 'complete' && entry.text.includes('根据刚读取的参考文献页') && entry.text.includes('〔p.3〕');
+  }));
   await send('为什么更快');
   check('普通问答发送后仍可追问原文', lastText().includes(SELECTED) && lastText().includes('本次追问沿用'));
   await explain('SqueezeNet', 2);
@@ -286,9 +355,14 @@ try {
   await open();
   await send('它怎么工作', '', 1, 'current');
   check('重启页面后恢复原文、页码及讲解偏好', lastText().includes('SqueezeNet') && lastText().includes('第 2 页') && bodies.at(-1).messages[0].content.includes(guidance));
-  failNext = true;
+  // 读取 Agent 失败后会回退普通回答；本次发送的两条路径都失败，才能验收重试恢复。
+  failAnswer = true;
   await send('他是谁', AUTHOR, 1, 'current');
-  check('失败请求保留原始阅读对象', await page.evaluate(() => window.__state.sessionEntries.at(-1).retry.reading.selection.includes('Andrew G. Howard')));
+  failAnswer = false;
+  check('失败请求保留失败状态和原始阅读对象', await page.evaluate(() => {
+    const entry = window.__state.sessionEntries.at(-1);
+    return entry.status === 'failed' && entry.retry.reading.selection.includes('Andrew G. Howard');
+  }));
   await explain('SqueezeNet', 2);
   await page.evaluate(() => window.__ctx.saveSessionNow());
   await open();

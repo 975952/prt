@@ -149,19 +149,22 @@ export function renderMathToString(tex, display = false) {
 }
 
 function isTableSep(line) {
-  const t = String(line || '').trim();
-  if (!t || !t.includes('-')) return false;
-  return /^\|?[\s:|-]*\|?$/.test(t);
+  const cells = splitTableRow(line);
+  return cells.length > 0 && cells.every((cell) => /^:?-{3,}:?$/.test(cell));
 }
 
 /** 拆一行单元格。`\|` 是转义过的竖线，不能当分隔符 */
 function splitTableRow(line) {
   const raw = String(line || '').trim();
-  const body = raw.replace(/^\|/, '').replace(/\|$/, '');
+  let body = raw.replace(/^\|/, '');
+  if (body.endsWith('|')) {
+    const slashes = /\\*$/.exec(body.slice(0, -1))[0].length;
+    if (slashes % 2 === 0) body = body.slice(0, -1);
+  }
   const cells = [];
   let cur = '';
   for (let i = 0; i < body.length; i++) {
-    if (body[i] === '\\' && body[i + 1] === '|') { cur += '|'; i++; continue; }
+    if (body[i] === '\\' && ['|', '\\'].includes(body[i + 1])) { cur += body[++i]; continue; }
     if (body[i] === '|') { cells.push(cur); cur = ''; continue; }
     cur += body[i];
   }
@@ -169,52 +172,89 @@ function splitTableRow(line) {
   return cells.map((c) => c.trim());
 }
 
-function renderTable(head, rows) {
-  const n = Math.max(1, head.length);
+function renderTable(head, rows, separators, inline) {
+  // A malformed model row may contain more cells than its header. Preserve every
+  // cell instead of silently truncating values to the header's column count.
+  const n = Math.max(1, head.length, ...rows.map((row) => row.length));
   const pad = (arr) => {
-    const out = arr.slice(0, n);
+    const out = arr.slice();
     while (out.length < n) out.push('');
     return out;
   };
-  const th = pad(head).map((c) => `<th>${c}</th>`).join('');
-  const tb = rows.map((r) => `<tr>${pad(r).map((c) => `<td>${c}</td>`).join('')}</tr>`).join('');
+  const align = (index) => {
+    const separator = separators[index] || '';
+    const value = separator.startsWith(':') && separator.endsWith(':') ? 'center'
+      : separator.endsWith(':') ? 'right' : separator.startsWith(':') ? 'left' : '';
+    return value ? ` style="text-align:${value}"` : '';
+  };
+  const th = pad(head).map((c, i) => `<th scope="col"${align(i)}>${inline(c)}</th>`).join('');
+  const tb = rows.map((r) => `<tr>${pad(r).map((c, i) => `<td${align(i)}>${inline(c)}</td>`).join('')}</tr>`).join('');
   // 外层 div 管横向滚动：侧栏很窄，宽表格不能把面板撑破
   return `<div class="md-table-wrap"><table class="md-table"><thead><tr>${th}</tr></thead><tbody>${tb}</tbody></table></div>`;
 }
 
 /**
- * 极简 Markdown 渲染：够用于模型输出（标题、列表、粗体、行内代码、公式、表格）。
- * 全程转义 HTML，避免模型输出注入。
+ * Local, dependency-free Markdown rendering for reading answers. Block parsing
+ * keeps paragraphs, nested lists, quotes and tables structurally separate;
+ * model HTML is always escaped. Code and math are protected before Markdown.
  */
 export function renderMarkdown(src) {
   if (!src) return '';
-  const blocks = [];
-  const hold = (html) => {
-    blocks.push(html);
-    return `\u0000${blocks.length - 1}\u0000`;
+  const protectedParts = [];
+  const hold = (html, block = false) => {
+    protectedParts.push({ html, block });
+    return `\u0000${protectedParts.length - 1}\u0000`;
   };
-
-  let text = String(src);
-
-  // 模型常把一个段落吐成三到六个空行；正文只保留一个段落间隔。
-  // 代码围栏内部必须原样保留，避免破坏示例代码的行号和缩进。
-  const markdownParts = text.split(/(```[\s\S]*?```)/g);
-  for (let i = 0; i < markdownParts.length; i += 2) {
-    markdownParts[i] = markdownParts[i].replace(/\n[ \t]*(?:\n[ \t]*){2,}/g, '\n\n');
+  const restore = (value) => {
+    let result = value;
+    for (let i = 0; i < 12 && /\u0000\d+\u0000/.test(result); i++) {
+      result = result.replace(/\u0000(\d+)\u0000/g, (_, n) => protectedParts[Number(n)]?.html || '');
+    }
+    return result;
+  };
+  // Input cannot forge one of the internal, already-escaped placeholders.
+  let text = String(src).replace(/\r\n?/g, '\n').replace(/\u0000/g, '');
+  const sourceLines = text.split('\n');
+  const prepared = [];
+  for (let i = 0; i < sourceLines.length; i++) {
+    const opening = /^([ \t]*(?:>[ \t]*)*)(`{3,}|~{3,})[ \t]*([^\n]*)$/.exec(sourceLines[i]);
+    if (!opening) { prepared.push(sourceLines[i]); continue; }
+    const marker = opening[2];
+    const close = new RegExp(`^[ \\t]*${marker[0]}{${marker.length},}[ \\t]*$`);
+    const prefix = opening[1];
+    const quoteDepth = (prefix.match(/>/g) || []).length;
+    const indent = quoteDepth ? prefix.slice(prefix.lastIndexOf('>') + 1).replace(/^[ \t]/, '') : prefix;
+    const unprefix = (line) => {
+      let content = line;
+      for (let q = 0; q < quoteDepth; q++) {
+        const head = /^[ \t]*>[ \t]?/.exec(content);
+        if (!head) return null;
+        content = content.slice(head[0].length);
+      }
+      return content.startsWith(indent) ? content.slice(indent.length) : content;
+    };
+    let end = i + 1;
+    while (end < sourceLines.length && unprefix(sourceLines[end]) !== null && !close.test(unprefix(sourceLines[end]))) end++;
+    const closed = end < sourceLines.length && unprefix(sourceLines[end]) !== null;
+    const code = sourceLines.slice(i + 1, end).map(unprefix).join('\n');
+    const language = opening[3].trim().split(/\s+/)[0];
+    const langClass = /^[\w#+.-]{1,40}$/.test(language) ? ` class="language-${escapeHtml(language)}"` : '';
+    prepared.push(prefix + hold(`<pre><code${langClass}>${escapeHtml(code)}</code></pre>`, true));
+    i = closed ? end : end - 1;
   }
-  text = markdownParts.join('');
-
-  // 1) 围栏代码块
-  text = text.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => (
-    hold(`<pre><code>${escapeHtml(code.replace(/\n$/, ''))}</code></pre>`)
-  ));
-  // 2) 行内代码先摘出来：里面的 $ 不该被当成公式
-  text = text.replace(/`([^`\n]+)`/g, (_, c) => hold(`<code>${escapeHtml(c)}</code>`));
+  text = prepared.join('\n');
+  // Inline code may contain dollar signs, table separators and Markdown markers.
+  text = text.replace(/(`+)([\s\S]*?)\1(?!`)/g, (_, ticks, c) => {
+    const code = c.replace(/\n/g, ' ');
+    return hold(`<code>${escapeHtml(/^ .* $/.test(code) && /\S/.test(code) ? code.slice(1, -1) : code)}</code>`);
+  });
   // 3) 公式。必须在 escapeHtml 之前 —— 否则 $ 和 \ 已经被转义，KaTeX 就认不出来了。
   //    $$ 要在 $ 之前处理，否则 $$x$$ 会被拆成两个行内公式。
   const math = (tex, display, raw) => {
     const html = renderMathToString(tex, display);
-    return html === null ? raw : hold(html);
+    // Failed formulas stay readable and cannot be reparsed as list/table syntax.
+    const fallback = display ? `<pre class="math-source">${escapeHtml(raw)}</pre>` : escapeHtml(raw);
+    return hold(html === null ? fallback : html, display);
   };
   text = text.replace(/\$\$([\s\S]+?)\$\$/g, (raw, tex) => math(tex, true, raw));
   text = text.replace(/\\\[([\s\S]+?)\\\]/g, (raw, tex) => math(tex, true, raw));
@@ -224,90 +264,132 @@ export function renderMarkdown(src) {
   // 把中间的汉字渲染进公式里、还把 $ 吃掉。
   text = text.replace(/\$(?![\s$])([^\n$]*?[^\s$])\$(?!\d)/g, (raw, tex) => math(tex, false, raw));
 
-  text = escapeHtml(text);
-
-  // 行内代码（兜底：第 2 步没摘走的）
-  text = text.replace(/`([^`\n]+)`/g, (_, c) => `<code>${c}</code>`);
-  // 粗体 / 斜体
-  text = text.replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>');
-  text = text.replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>');
-  // 列表 / 表格 / 标题
-  const lines = text.split('\n');
-  const out = [];
-  let inList = null;
-  const closeList = () => { if (inList) { out.push(`</${inList}>`); inList = null; } };
-  for (let li = 0; li < lines.length; li++) {
-    const line = lines[li].replace(/\s+$/, '');
-    let m;
-    // 引用原文（模型用 `> 原文` 写引用）：连续 `>` 行合成一个 blockquote。
-    // 注意这里 text 已经过 escapeHtml，行首的 `>` 已经变成 `&gt;`，两种写法都要认。
-    // 之前不支持这个语法，会把 `&gt; ...` 当普通段落显示（用户反馈「引用原文没有正确渲染」）。
-    if ((m = /^\s*(?:>|&gt;)\s?(.*)$/.exec(line))) {
-      closeList();
-      const quoteLines = [m[1]];
-      const isQuoteLine = (s) => /^\s*(?:>|&gt;)\s?/.test(s);
-      while (li + 1 < lines.length && isQuoteLine(lines[li + 1])) {
-        li += 1;
-        quoteLines.push(lines[li].replace(/^\s*(?:>|&gt;)\s?/, ''));
+  const inline = (value, links = true) => {
+    let raw = value;
+    if (links) {
+      raw = raw.replace(/(?<!!)\[([^\]\n]+)\]\(\s*(<[^<>\n]+>|[^\s()]+(?:\([^()\s]*\)[^\s()]*)*)(?:\s+["']([^"'\n]*)["'])?\s*\)/g,
+        (original, label, destination, title) => {
+          const url = destination.replace(/^<|>$/g, '');
+          if (/[\u0000-\u0020\u007f]/.test(url)) return original;
+          let parsed;
+          try { parsed = new URL(url); } catch { return original; }
+          if (!['http:', 'https:'].includes(parsed.protocol)) return original;
+          const tip = title ? ` title="${escapeHtml(title)}"` : '';
+          return hold(`<a href="${escapeHtml(parsed.href)}" target="_blank" rel="noopener noreferrer"${tip}>${inline(label, false)}</a>`);
+        });
+    }
+    raw = raw.replace(/\\([\\`*{}\[\]()#+\-.!_|>])/g, (_, char) => hold(escapeHtml(char)));
+    return restore(escapeHtml(raw)
+      .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
+      .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')
+      .replace(/(^|[\s(])\*([^*\n]+)\*/g, '$1<em>$2</em>')
+      .replace(/\n/g, '<br />'));
+  };
+  const markerOf = (line) => {
+    const match = /^( *)([-+*]|\d{1,9}[.)])([ \t]+)(.*)$/.exec(line || '');
+    if (!match) return null;
+    return { indent: match[1].length, kind: /^\d/.test(match[2]) ? 'ol' : 'ul',
+      number: parseInt(match[2], 10), content: match[4],
+      contentIndent: match[1].length + match[2].length + match[3].length };
+  };
+  const blockToken = (line) => {
+    const match = /^\s*\u0000(\d+)\u0000\s*$/.exec(line || '');
+    return match && protectedParts[Number(match[1])]?.block ? Number(match[1]) : null;
+  };
+  const heading = (line) => /^ {0,3}(#{1,6})\s+(.+?)\s*$/.exec(line || '');
+  const quote = (line) => /^ {0,3}>[ \t]?(.*)$/.exec(line || '');
+  const rule = (line) => /^ {0,3}(?:(?:-\s*){3,}|(?:\*\s*){3,}|(?:_\s*){3,})$/.test(line || '');
+  const tableAt = (lines, i) => lines[i]?.includes('|') && i + 1 < lines.length && isTableSep(lines[i + 1]);
+  const startsBlock = (lines, i) => !!(markerOf(lines[i]) || heading(lines[i]) || quote(lines[i])
+    || rule(lines[i]) || blockToken(lines[i]) !== null || tableAt(lines, i));
+  const paragraph = (lines) => {
+    // Display math in the middle of a sentence remains an independent block.
+    const segments = lines.join('\n').split(/(\u0000\d+\u0000)/);
+    const result = [];
+    let pending = '';
+    const flush = () => { if (pending.trim()) result.push(`<p>${inline(pending.trim())}</p>`); pending = ''; };
+    for (const part of segments) {
+      const token = blockToken(part);
+      if (token === null) pending += part;
+      else { flush(); result.push(protectedParts[token].html); }
+    }
+    flush();
+    return result.join('\n');
+  };
+  const parseBlocks = (lines, depth = 0) => {
+    if (depth > 24) return paragraph(lines); // bounded nesting for untrusted output
+    const out = [];
+    for (let i = 0; i < lines.length;) {
+      const line = lines[i];
+      if (!line.trim()) { i++; continue; }
+      const token = blockToken(line);
+      if (token !== null) { out.push(protectedParts[token].html); i++; continue; }
+      const title = heading(line);
+      if (title) {
+        const level = Math.min(6, title[1].length + 2);
+        out.push(`<h${level}>${inline(title[2].replace(/[ \t]+#+[ \t]*$/, ''))}</h${level}>`); i++; continue;
       }
-      out.push('', hold(`<blockquote class="md-quote">${quoteLines.join('<br />')}</blockquote>`), '');
-      continue;
-    }
-    // 表格：本行是 | a | b |，下一行是 |---|---|
-    if (line.includes('|') && li + 1 < lines.length && isTableSep(lines[li + 1])) {
-      const head = splitTableRow(line);
-      const rows = [];
-      let j = li + 2;
-      while (j < lines.length && lines[j].trim() && lines[j].includes('|')) {
-        rows.push(splitTableRow(lines[j]));
-        j++;
+      if (rule(line)) { out.push('<hr />'); i++; continue; }
+      if (quote(line)) {
+        const content = [];
+        while (i < lines.length && quote(lines[i])) content.push(quote(lines[i++])[1]);
+        out.push(`<blockquote class="md-quote">${parseBlocks(content, depth + 1)}</blockquote>`);
+        continue;
       }
-      closeList();
-      // 表格是块级元素，用占位符递出去（不然会被包进 <p> 里，浏览器会把 table 甩出去）
-      out.push('', hold(renderTable(head, rows)), '');
-      li = j - 1;
-      continue;
+      if (tableAt(lines, i)) {
+        const head = splitTableRow(line);
+        const separators = splitTableRow(lines[i + 1]);
+        const rows = [];
+        i += 2;
+        while (i < lines.length && lines[i].trim() && lines[i].includes('|') && !markerOf(lines[i]) && !quote(lines[i])) {
+          rows.push(splitTableRow(lines[i++]));
+        }
+        out.push(renderTable(head, rows, separators, inline));
+        continue;
+      }
+      const first = markerOf(line);
+      if (first) {
+        const items = [];
+        let expected = first.number;
+        while (i < lines.length) {
+          const item = markerOf(lines[i]);
+          if (!item || item.indent !== first.indent || item.kind !== first.kind) break;
+          const content = [item.content];
+          let blank = false;
+          i++;
+          while (i < lines.length) {
+            const next = lines[i];
+            const nextItem = markerOf(next);
+            if (nextItem && nextItem.indent <= first.indent) break;
+            if (!next.trim()) { content.push(''); blank = true; i++; continue; }
+            const indent = /^ */.exec(next)[0].length;
+            if (indent > first.indent) {
+              content.push(next.slice(Math.min(indent, item.contentIndent)));
+              blank = false; i++; continue;
+            }
+            // A non-indented line can continue the same list paragraph, but a
+            // blank line or a new block ends the item instead of swallowing it.
+            if (blank || startsBlock(lines, i)) break;
+            content.push(next); i++;
+          }
+          const body = parseBlocks(content, depth + 1).replace(/^<p>([\s\S]*?)<\/p>/, '$1');
+          const number = item.kind === 'ol' && item.number !== expected ? ` value="${item.number}"` : '';
+          items.push(`<li${number}>${body}</li>`);
+          expected = item.number + 1;
+          while (i < lines.length && !lines[i].trim()) i++;
+        }
+        const start = first.kind === 'ol' && first.number !== 1 ? ` start="${first.number}"` : '';
+        out.push(`<${first.kind}${start}>${items.join('\n')}</${first.kind}>`);
+        continue;
+      }
+      const content = [line];
+      i++;
+      while (i < lines.length && lines[i].trim() && !startsBlock(lines, i)) content.push(lines[i++]);
+      out.push(paragraph(content));
     }
-    if ((m = /^\s*[-*+]\s+(.*)$/.exec(line))) {
-      if (inList !== 'ul') { closeList(); out.push('<ul>'); inList = 'ul'; }
-      out.push(`<li>${m[1]}</li>`);
-    } else if ((m = /^\s*\d+[.)]\s+(.*)$/.exec(line))) {
-      if (inList !== 'ol') { closeList(); out.push('<ol>'); inList = 'ol'; }
-      out.push(`<li>${m[1]}</li>`);
-    } else if ((m = /^(#{1,6})\s+(.*)$/.exec(line))) {
-      closeList();
-      const lv = Math.min(6, m[1].length + 2);
-      out.push(`<h${lv}>${m[2]}</h${lv}>`);
-    } else if (!line.trim()) {
-      // 列表项目之间的空行仍属于同一个列表，避免完成渲染时拆成多个
-      // <ul>/<ol>，导致列表外边距叠加成明显的大空行。
-      if (inList) continue;
-      closeList();
-      out.push('');
-    } else {
-      closeList();
-      out.push(line);
-    }
-  }
-  closeList();
-  text = out.join('\n');
-  text = text.replace(/\n{2,}/g, '</p><p>');
-  text = text.replace(/\n/g, '<br />');
-  // 列表项之间的源码换行不应渲染成额外的可见换行。
-  text = text.replace(/<\/li>\s*<br \/>/g, '</li>');
-  text = text.replace(/<br \/>\s*<li>/g, '<li>');
-  text = `<p>${text}</p>`;
-  text = text.replace(/<p>\s*<\/p>/g, '');
-  // 独立成段的占位块（代码块 / 表格）先脱掉 <p>，再统一还原
-  text = text.replace(/<p>\s*(\u0000\d+\u0000)\s*<\/p>/g, '$1');
-  for (let k = 0; k < 8 && /\u0000\d+\u0000/.test(text); k++) {
-    text = text.replace(/\u0000(\d+)\u0000/g, (_, i) => blocks[Number(i)]);
-  }
-  // 代码块被包进 <p> 里了，去掉
-  text = text.replace(/<p>\s*(<pre>)/g, '$1').replace(/(<\/pre>)\s*<\/p>/g, '$1');
-  // 块级公式也是块，别被 <p> 裹着
-  text = text.replace(/<p>\s*(<span class="katex-display")/g, '$1');
-  return text;
+    return out.join('\n');
+  };
+  return parseBlocks(text.replace(/^\t+/gm, (tabs) => '    '.repeat(tabs.length)).split('\n'));
 }
 
 /**

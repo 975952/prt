@@ -8,10 +8,11 @@ export function stripPageLabels(text) {
 
 function cleanFocus(focus) {
   if (!focus || typeof focus !== 'object' || !String(focus.text || '').trim()) return null;
-  return { text: String(focus.text).slice(0, MAX_FOCUS), page: pageNumber(focus.page),
+  const fromRight = focus.source === 'right';
+  return { text: String(focus.text).slice(0, MAX_FOCUS), page: fromRight ? null : pageNumber(focus.page),
     kind: focus.kind === 'question' ? 'question' : 'selection',
     // 右栏回答/译文里划的词不是 PDF 原文，不能冒充某一页的原文
-    source: focus.source === 'right' ? 'right' : '' };
+    source: fromRight ? 'right' : '' };
 }
 
 export function snapshotHistory(history = []) {
@@ -93,7 +94,7 @@ export function resolveReadingRequest({ question, selection = '', page, history 
   const oldGuidance = [...history].reverse().find((m) => m?.role === 'user' && m.guidance)?.guidance || '';
   const guidance = intent === 'guidance' ? q.slice(0, 400) : String(oldGuidance).slice(0, 400);
   return { question: q, selection: selection ? String(selection) : focus.kind === 'selection' ? focus.text : '',
-    page: focus.page || (fromRight ? null : pageNumber(page)), focus, guidance, intent,
+    page: focus.page || (focus.source === 'right' ? null : pageNumber(page)), focus, guidance, intent,
     inherited: !selection && dependent && !!priorFocus,
     ...(newScreenshots ? { screenshotCount: newScreenshots, ...(priorFocus ? { previousFocus: priorFocus } : {}) } : {}) };
 }
@@ -106,9 +107,10 @@ export function readingTurn(request, answer) {
 
 export function snapshotReadingRequest(request) {
   if (!request || typeof request !== 'object') return null;
+  const focus = cleanFocus(request.focus);
   return { question: String(request.question || '').slice(0, 6000),
-    selection: String(request.selection || '').slice(0, MAX_FOCUS), page: pageNumber(request.page),
-    focus: cleanFocus(request.focus), guidance: String(request.guidance || '').slice(0, 400),
+    selection: String(request.selection || '').slice(0, MAX_FOCUS), page: focus?.source === 'right' ? null : pageNumber(request.page),
+    focus, guidance: String(request.guidance || '').slice(0, 400),
     intent: ['explain', 'followup', 'feedback', 'guidance', 'question'].includes(request.intent) ? request.intent : 'question',
     inherited: !!request.inherited,
     ...(request.screenshotCount > 0 ? { screenshotCount: Math.floor(request.screenshotCount),
@@ -125,13 +127,15 @@ export function restoreReadingHistory(history, entries = []) {
     if (!row || row.block !== 'chat') continue;
     if (row.kind === 'user') { user = row; continue; }
     if (!row.text || (row.status && row.status !== 'complete')) { user = null; continue; }
+    const selectionSource = row.retry?.source === 'right' || row.retry?.selectionSource === 'right'
+      || row.retry?.reading?.focus?.source === 'right' ? 'right' : '';
     if (row.tag === 'explanation' && row.quote) {
-      const request = resolveReadingRequest({ question: '请解释这段内容。', selection: row.quote, page: row.page, history: rebuilt });
+      const request = resolveReadingRequest({ question: '请解释这段内容。', selection: row.quote, selectionSource, page: row.page, history: rebuilt });
       rebuilt.push(...readingTurn(request, row.text));
       user = null;
     } else if (row.tag === 'answer' && user) {
       const request = resolveReadingRequest({ question: user.text, selection: user.quote || row.retry?.quoteText,
-        page: row.page || user.page, history: rebuilt });
+        selectionSource, page: row.page || user.page, history: rebuilt });
       rebuilt.push(...readingTurn(request, row.text));
       user = null;
     }
@@ -149,7 +153,9 @@ export function citedSources(answer, sources = []) {
 export function historyMessages(history) {
   return snapshotHistory(history).slice(-6).map((m) => {
     const focus = m.role === 'user' && m.focus?.kind === 'selection' ? m.focus : null;
+    const heading = focus?.source === 'right' ? '当轮引用 · 来自右栏回答/译文，非论文原文'
+      : `当轮原文${focus?.page ? ` · 第${focus.page}页` : ''}`;
     return { role: m.role, content: focus
-      ? `【当轮原文${focus.page ? ` · 第${focus.page}页` : ''}】\n${focus.text}\n\n【当轮问题】\n${m.content}` : m.content };
+      ? `【${heading}】\n${focus.text}\n\n【当轮问题】\n${m.content}` : m.content };
   });
 }

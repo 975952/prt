@@ -231,7 +231,10 @@ try {
   await page.evaluate(() => { delete window.__agentTestLimits; });
   console.log('PASS: active streaming refreshes idle timeout instead of aborting a healthy answer');
 
-  const six = '请查原文后逐题回答。\n' + Array.from({ length: 6 }, (_, i) => `${i + 1}. PERF_Q${i + 1} 请完整作答。`).join('\n');
+  // Parallel generation requires the user's explicit independence instruction;
+  // ordinary numbered derivation steps must remain one connected request.
+  assert.equal(await page.evaluate(() => window.__ctx.splitNumberedQuestions('1. 推导公式\n2. 代入上一步结果\n3. 解释结果')), null);
+  const six = '以下题目相互独立，请查原文后逐题回答。\n' + Array.from({ length: 6 }, (_, i) => `${i + 1}. PERF_Q${i + 1} 请完整作答。`).join('\n');
   mode = 'batch';
   await attachImage();
   const began = Date.now();

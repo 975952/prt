@@ -1,6 +1,7 @@
 import { windowStorage as localStorage, storageKey, windowId, startWindows, finishWindowBoot, windowReady, openReaderWindow, canWrite, allowEdit, isWindowClosed, releaseDocument, notifySessionSaved } from './windows.js';
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
+import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage } from './pdfview.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
@@ -5310,13 +5311,22 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
   if (block === 'translate' && tag === 'translation') {
     root.classList.add('msg-translation');
     const targetLang = retry?.targetLang || (retry?.kind === 'translate' ? targetLangFor(String(quote || '')) : '中文');
-    const sourceText = retry?.kind === 'translate-text' ? String(retry.text || '') : '';
+    const sourceText = retry?.kind === 'translate-text' || retry?.kind === 'translate'
+      ? String(retry.text || quote || '') : (!shots.length ? String(quote || '') : '');
     const originLang = sourceText && targetLang === 'English' && /[\u4e00-\u9fff]/.test(sourceText) ? '中文' : '原文';
     const direction = el('div', { class: 'translation-direction', text: `${retry?.kind === 'translate-text' ? '文本翻译' : '译文'} · ${originLang} → ${targetLang}` });
     root.insertBefore(direction, ref || shot || textEl);
     if (sourceText) {
       root.querySelector('.ref')?.remove();
-      root.insertBefore(el('div', { class: 'translation-source', text: sourceText }), textEl);
+      const original = el('details', { class: 'translation-original' },
+        el('summary', { text: '原文对照' }),
+        el('div', { class: 'translation-source', text: sourceText }),
+        page && retry?.kind !== 'translate-text' ? el('button', {
+          type: 'button', class: 'translation-locate', text: '定位原文',
+          onclick: () => jumpAndHighlight(page, sourceText),
+        }) : null,
+      );
+      root.insertBefore(original, textEl);
     }
   }
   // 全局序号：分块之后 DOM 顺序 ≠ 时间顺序，取「最新一条」要靠它
@@ -5405,12 +5415,13 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
 
 function addFailureRetry(entry, message, onRetry) {
   const rec = entry.root.__sessionRecord;
-  if (rec) { rec.status = 'failed'; rec.text = ''; rec.meta = ''; }
-  entry.root.classList.add('err');
+  const partial = entry.root.__partialText || '';
+  if (rec) { rec.status = 'failed'; rec.text = partial; rec.meta = ''; }
+  entry.root.classList.toggle('err', !partial);
   entry.acts.replaceChildren(el('button', { text: '重试这次发送', onclick: onRetry }));
   entry.acts.classList.remove('hidden');
   entry.root.querySelectorAll('.entry-meta').forEach((node) => node.remove());
-  entry.root.append(el('div', { class: 'entry-meta failed', text: `发送失败：${message} · 问题和附件仍保留在输入区` }));
+  entry.root.append(el('div', { class: 'entry-meta failed', text: `生成中断：${message}${partial ? ' · 已保留收到的内容' : ''} · 可重试本次请求` }));
   scheduleSessionSave();
 }
 
@@ -6264,7 +6275,7 @@ function restoreRetryCallback(row, entry, priorUser) {
       const sel = { page: payload.page || null, text: payload.text || '', cleanText: payload.text || '',
         source: payload.source === 'right' ? 'right' : '' };
       if (!sel.cleanText) { restoreComposerFallback(fallbackQuestion); return; }
-      if (payload.kind === 'translate') doTranslate(sel, { targetLang: payload.targetLang || '' });
+      if (payload.kind === 'translate') doTranslate(sel, { targetLang: payload.targetLang || '', force: true });
       else doExplain(sel);
       return;
     }
@@ -6274,7 +6285,7 @@ function restoreRetryCallback(row, entry, priorUser) {
     }
     if (payload.kind === 'translate-text') {
       // 文本输入翻译：原文存在 payload 里，直接原样再翻一次
-      doTranslateText({ text: payload.text || '', targetLang: payload.targetLang === 'English' ? 'English' : '中文' });
+      doTranslateText({ text: payload.text || '', targetLang: payload.targetLang === 'English' ? 'English' : '中文', force: true });
       return;
     }
     if (payload.kind === 'operation') {
@@ -6493,20 +6504,21 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
       if (row.kind !== 'user' && priorUser) entry.root.__question = String(priorUser.text || '').slice(0, 600);
       const retry = restoreRetryCallback(row, entry, priorUser);
       // 用户口径：恢复出来的回答下面也要有「重新生成」按钮（只要有当时的请求记录）
-      const canRegenerate = row.kind !== 'user' && row.block !== 'translate'
+      const canRegenerate = row.kind !== 'user'
         && row.retry && typeof row.retry === 'object';
-      if (row.kind !== 'user' && (row.text || row.status === 'stopped' || row.status === 'complete')) finishEntry(entry, row.text || '', {
+      if (row.kind !== 'user' && row.status !== 'failed' && row.status !== 'pending'
+        && (row.text || row.status === 'stopped' || row.status === 'complete')) finishEntry(entry, row.text || '', {
         page: row.page, sources: row.sources, meta: row.meta, basis: row.basis,
         status: row.status === 'stopped' ? 'stopped' : 'complete',
         onRetry: (row.status === 'stopped' || (row.status === 'complete' && canRegenerate)) ? retry : null,
-        retryLabel: '重新生成', restore: true,
+        retryLabel: row.block === 'translate' ? '重新翻译' : '重新生成', restore: true,
       });
       else if (row.kind !== 'user' && row.status === 'failed') {
-        entry.body.textContent = '上次发送失败。问题、文字附件和截图都保留在这次请求里，点「重试这次发送」即可。';
-        entry.root.classList.add('err');
+        if (!row.text) entry.body.textContent = '上次生成未完成。问题和附件保留在请求中，可以重试。';
+        entry.root.classList.toggle('err', !row.text);
         entry.acts.replaceChildren(el('button', { text: '重试这次发送', onclick: retry }));
         entry.acts.classList.remove('hidden');
-        entry.root.append(el('div', { class: 'entry-meta failed', text: '发送失败 · 问题和附件仍保留在请求里' }));
+        entry.root.append(el('div', { class: 'entry-meta failed', text: `上次生成中断${row.text ? ' · 已保留收到的内容' : ''} · 问题和附件仍保留在请求里` }));
       } else if (row.kind !== 'user' && row.status === 'pending') {
         entry.body.textContent = canApply ? '正在等待另一窗口的回答…' : '上次回答尚未完成。';
         if (canApply) continue;
@@ -9060,12 +9072,15 @@ function objectLabelFor(pending, reading) {
   return text.slice(0, 40);
 }
 
-/** Detect numbered independent questions without treating a single numbered list item as a batch. */
+/** Only explicit independent-question requests may be split into parallel calls.
+ * Ordinary numbered steps stay together so later steps can use earlier results. */
 function splitNumberedQuestions(input) {
   const text = String(input || '');
   const marks = [...text.matchAll(/(?:^|\n)[ \t]*(?:\(\s*(\d+)\s*\)|（\s*(\d+)\s*）|(\d+)[.、])[ \t]*/g)];
   if (marks.length < 2 || marks.some((m, i) => Number(m[1] || m[2] || m[3]) !== i + 1)) return null;
-  return { intro: text.slice(0, marks[0].index).trim(), questions: marks.map((m, i) => text.slice(m.index + m[0].length, marks[i + 1]?.index ?? text.length).trim()) };
+  const intro = text.slice(0, marks[0].index).trim();
+  if (!/(?:各题|每题|题目|问题).{0,6}(?:相互独立|互相独立|独立作答|独立回答)|(?:独立的|相互独立|互相独立).{0,6}(?:题目|问题)|\bindependent\s+(?:questions|problems)\b/i.test(intro)) return null;
+  return { intro, questions: marks.map((m, i) => text.slice(m.index + m[0].length, marks[i + 1]?.index ?? text.length).trim()) };
 }
 
 /** 本次发送范围（整篇 / 当前页 / 联网 / 截图） */
@@ -9226,23 +9241,52 @@ function decorateOtherPaperRefs(html) {
   });
 }
 
-function renderAnswerHTML(text) {
+function renderStreamingMarkdown(text) {
+  const mathStart = unfinishedDisplayMathStart(text);
+  return mathStart < 0 ? renderMarkdown(text)
+    : `${renderMarkdown(text.slice(0, mathStart))}<span class="thinking">公式生成中…</span>`;
+}
+
+function renderAnswerHTML(text, view = {}) {
   const split = splitPrtBlock(String(text || ''));
   const source = split.text || '';
-  const render = (s) => decorateOtherPaperRefs(decoratePageRefs(renderMarkdown(s)));
+  const render = (s) => decorateOtherPaperRefs(decoratePageRefs(view.streaming ? renderStreamingMarkdown(s) : renderMarkdown(s)));
   // Only the explicit multi-question heading contract activates cards; ordinary sections stay intact.
-  const matches = [...source.matchAll(/^#{2,4}\s+(?:第\s*(\d+)\s*题|[（(]\s*(\d+)\s*[）)])(?:[：: \t].*)?\s*$/gm)];
-  if (matches.length < 2 || matches.some((m, i) => Number(m[1] || m[2]) !== i + 1)) return render(source);
-  const intro = source.slice(0, matches[0].index);
-  const cards = matches.map((m, i) => {
-    const body = source.slice(m.index, matches[i + 1]?.index ?? source.length);
-    return `<section class="answer-card"${i ? ' hidden' : ''}>${render(body)}</section>`;
-  }).join('');
-  return `${render(intro)}<div class="answer-cards" data-mode="cards" data-index="0">${cards}`
-    + `<div class="answer-card-controls"><button type="button" data-card-action="prev" disabled>上一题</button>`
-    + `<span class="answer-card-count" aria-live="polite">1 / ${matches.length}</span>`
-    + `<button type="button" data-card-action="next">下一题</button>`
-    + `<button type="button" data-card-action="toggle">切换为连续模式</button></div></div>`;
+  const grouped = splitAnswerSections(source);
+  if (!grouped) return render(source);
+  const continuous = view.mode === 'continuous';
+  const index = Math.max(0, Math.min(grouped.sections.length - 1, Number(view.index) || 0));
+  const cards = grouped.sections.map((body, i) => `<section class="answer-card"${!continuous && i !== index ? ' hidden' : ''}>${render(body)}</section>`).join('');
+  return `${render(grouped.intro)}<div class="answer-cards" data-mode="${continuous ? 'continuous' : 'cards'}" data-index="${index}">${cards}`
+    + `<div class="answer-card-controls"><button type="button" data-card-action="prev"${continuous ? ' hidden' : ''}${index === 0 ? ' disabled' : ''}>上一题</button>`
+    + `<span class="answer-card-count" aria-live="polite"${continuous ? ' hidden' : ''}>${index + 1} / ${grouped.sections.length}</span>`
+    + `<button type="button" data-card-action="next"${continuous ? ' hidden' : ''}${index === grouped.sections.length - 1 ? ' disabled' : ''}>下一题</button>`
+    + `<button type="button" data-card-action="toggle">切换为${continuous ? '卡片' : '连续'}模式</button></div></div>`;
+}
+
+/** Keep unchanged rendered nodes in place so selection, focus and reading position survive updates. */
+function updateRenderedContent(node, html) {
+  const template = document.createElement('template');
+  template.innerHTML = html;
+  const sync = (parent, desired) => {
+    const wanted = [...desired.childNodes];
+    for (let i = 0; i < wanted.length; i++) {
+      const next = wanted[i];
+      const old = parent.childNodes[i];
+      if (!old) { parent.append(next.cloneNode(true)); continue; }
+      if (old.isEqualNode(next)) continue;
+      if (old.nodeType !== next.nodeType || old.nodeName !== next.nodeName) {
+        old.replaceWith(next.cloneNode(true)); continue;
+      }
+      if (old.nodeType === Node.TEXT_NODE) { old.nodeValue = next.nodeValue; continue; }
+      if (old.nodeType !== Node.ELEMENT_NODE) { old.replaceWith(next.cloneNode(true)); continue; }
+      for (const attr of [...old.attributes]) if (!next.hasAttribute(attr.name)) old.removeAttribute(attr.name);
+      for (const attr of [...next.attributes]) if (old.getAttribute(attr.name) !== attr.value) old.setAttribute(attr.name, attr.value);
+      sync(old, next);
+    }
+    while (parent.childNodes.length > wanted.length) parent.lastChild.remove();
+  };
+  sync(node, template.content);
 }
 
 /** 引用高亮的当前状态（点正文 / Esc / 再点同一引用 / 翻页 / 切文档时清空） */
@@ -9353,19 +9397,21 @@ function streamTarget(node) {
   let active = true;
   let following = true;
   let followEl = null;
-  const scan = { cursor: 0, safe: 0, fence: '', inMath: false };
+  let lastContent = '';
+  let cardsActive = false;
   let raf = 0;
   let timer = 0;
   const bodyEl = node.closest('.ai-body');
   const blockEl = node.closest('.ai-block');
   const entryEl = node.closest('.msg');
+  if (entryEl) delete entryEl.__partialText;
   const stopTimers = () => {
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
     if (timer) { clearTimeout(timer); timer = 0; }
   };
   const ensureTail = () => {
     if (rawNode?.parentNode === node) return;
-    rawNode = document.createTextNode('');
+    rawNode = el('div', { class: 'stream-tail' });
     node.append(rawNode);
   };
   const reversedBody = () => {
@@ -9422,28 +9468,37 @@ function streamTarget(node) {
       node.replaceChildren();
       rawNode = null;
       paintedText = '';
-      scan.cursor = 0; scan.safe = 0; scan.fence = ''; scan.inMath = false;
     } else if (!display.startsWith(paintedText)) {
       node.replaceChildren();
       rawNode = null;
       paintedText = '';
-      scan.cursor = 0; scan.safe = 0; scan.fence = ''; scan.inMath = false;
     }
+    if (splitAnswerSections(display)) {
+      const current = node.querySelector('.answer-cards');
+      updateRenderedContent(node, renderAnswerHTML(display, { ...current?.dataset, streaming: true }));
+      cardsActive = true;
+      rawNode = null;
+      paintedText = '';
+      if (following) requestAnimationFrame(() => { if (active) scrollFollow(); });
+      return;
+    }
+    if (cardsActive) { node.replaceChildren(); rawNode = null; paintedText = ''; cardsActive = false; }
     ensureTail();
-    const safeEnd = completedMarkdownEnd(display, scan);
+    const safeEnd = completedMarkdownEnd(display, paintedText.length);
     if (safeEnd > paintedText.length) {
       const template = document.createElement('template');
       template.innerHTML = renderMarkdown(display.slice(paintedText.length, safeEnd));
       node.insertBefore(template.content, rawNode);
       paintedText = display.slice(0, safeEnd);
     }
-    rawNode.data = display.slice(paintedText.length);
+    updateRenderedContent(rawNode, renderStreamingMarkdown(display.slice(paintedText.length)));
     if (following) requestAnimationFrame(() => { if (active) scrollFollow(); });
   };
   return {
     push(text) {
       // 工具调用标记（DSML / XML）绝不显示给用户：流式期间也实时剥离
       pending = stripAgentMarkup(text);
+      lastContent = pending;
       if (raf || timer) return;
       raf = requestAnimationFrame(paint);
       timer = setTimeout(paint, 120);   // rAF 被节流时的兜底
@@ -9453,7 +9508,8 @@ function streamTarget(node) {
       pending = null;
       const wasFollowing = following;
       active = false;
-      node.innerHTML = renderAnswerHTML(stripAgentMarkup(finalText));
+      const view = node.querySelector('.answer-cards')?.dataset || {};
+      updateRenderedContent(node, renderAnswerHTML(stripAgentMarkup(finalText), view));
       rawNode = null; paintedText = '';
       hideFollow();
       bodyEl?.removeEventListener('scroll', onBodyScroll);
@@ -9464,43 +9520,19 @@ function streamTarget(node) {
       stopTimers();
       pending = null;
       active = false;
-      node.innerHTML = `<span style="color:var(--err)">${esc(msg)}</span>`;
+      const partial = hideStreamTail(stripAgentMarkup(lastContent));
+      if (entryEl) {
+        entryEl.__partialText = partial;
+        if (entryEl.__sessionRecord) entryEl.__sessionRecord.text = partial;
+      }
+      const view = node.querySelector('.answer-cards')?.dataset || {};
+      updateRenderedContent(node, `${renderAnswerHTML(partial, view)}<p class="stream-error">${esc(msg)}</p>`);
       rawNode = null; paintedText = '';
       hideFollow();
       bodyEl?.removeEventListener('scroll', onBodyScroll);
-      scrollEntryToTop(node.closest('.ai-body'), node.closest('.msg'));
+      if (following) scrollBody(bodyEl);
     },
   };
-}
-
-/** Find a finished Markdown block boundary without interpreting an open fence or display formula. */
-function completedMarkdownEnd(text, scan) {
-  while (scan.cursor < text.length) {
-    const nl = text.indexOf('\n', scan.cursor);
-    if (nl < 0) break; // leave the unfinished final line as plain, stable tail text
-    const lineEnd = nl + 1;
-    const line = text.slice(scan.cursor, nl);
-    const trimmed = line.trim();
-    if (scan.fence) {
-      const close = trimmed.match(/^(`{3,}|~{3,})\s*$/);
-      if (close && close[1][0] === scan.fence[0] && close[1].length >= scan.fence.length) {
-        scan.fence = '';
-        scan.safe = lineEnd;
-      }
-    } else if (scan.inMath) {
-      if (trimmed.includes('$$')) { scan.inMath = false; scan.safe = lineEnd; }
-    } else {
-      const open = trimmed.match(/^(`{3,}|~{3,})/);
-      if (open) scan.fence = open[1];
-      else if (trimmed.startsWith('$$')) {
-        const count = (trimmed.match(/\$\$/g) || []).length;
-        if (count >= 2) scan.safe = lineEnd;
-        else scan.inMath = true;
-      } else if (!trimmed) scan.safe = lineEnd;
-    }
-    scan.cursor = lineEnd;
-  }
-  return scan.safe;
 }
 
 const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
@@ -9643,7 +9675,13 @@ function revealTranslatePanel() { revealPanel('translate'); }
  * 文本输入翻译（2026-11-03 用户要求）：粘贴/手输文字直接翻，不依赖 PDF 选区。
  * 与划词/截图翻译共用 translateMessages 与同一条流式管线，结果仍按时间堆在译文面板。
  */
-async function doTranslateText({ text, targetLang = '' } = {}) {
+function translationCacheScope({ page = null, context = '' } = {}) {
+  const cfg = Settings.data;
+  return hashStr(JSON.stringify([state.doc?.docId || '', page, context,
+    cfg.activeProfile || '', cfg.baseURL || '', cfg.model || '', cfg.visionModel || '', cfg.temperature]));
+}
+
+async function doTranslateText({ text, targetLang = '', force = false } = {}) {
   if (!await allowEdit('译文')) return;
   const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
   if (!raw || state.busy) return;
@@ -9655,15 +9693,16 @@ async function doTranslateText({ text, targetLang = '' } = {}) {
     kind: 'translate-text', docId: state.doc?.docId || null,
     text: body, targetLang: lang,
   });
-  const retry = () => doTranslateText({ text: body, targetLang: lang });
-  const key = `translate.input@${PROMPT_SYSTEM_VERSION}::${lang}::${body.length}-${hashStr(body)}`;
-  const cached = state.cache.get(key);
+  const retry = () => doTranslateText({ text: body, targetLang: lang, force: true });
+  const key = `translate.input@${PROMPT_SYSTEM_VERSION}::${lang}::${body.length}-${hashStr(body)}::${translationCacheScope()}`;
+  const cached = force ? null : state.cache.get(key);
   if (cached) {
     const existing = [...state.sessionEntries].reverse().find((x) => x?.block === 'translate'
       && x?.tag === 'translation' && x?.status === 'complete' && String(x?.text || '') === String(cached)
       && String(x?.retry?.kind || '') === 'translate-text');
     if (existing) {
-      existing.root?.scrollIntoView?.({ block: 'nearest' });
+      const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
+      row?.scrollIntoView({ block: 'nearest' });
       toast('这段文字翻过，直接用原结果', 'ok', 1800);
       return;
     }
@@ -9674,7 +9713,7 @@ async function doTranslateText({ text, targetLang = '' } = {}) {
   entry.root.classList.add('msg-text-translate');
   if (cached) {
     entry.body.innerHTML = renderMarkdown(cached);
-    finishEntry(entry, cached);
+    finishEntry(entry, cached, { retryLabel: '重新翻译', onRetry: retry });
     toast('这段文字翻过，直接用缓存', 'ok', 1500);
     return;
   }
@@ -9694,7 +9733,7 @@ async function doTranslateText({ text, targetLang = '' } = {}) {
     target.done(clean);
     state.cache.set(key, clean);
     // 成功时保持译文块「最纯净」的界面（不摆按钮）；失败/停止时 .acts 非空才显示重试
-    finishEntry(entry, clean);
+    finishEntry(entry, clean, { retryLabel: '重新翻译', onRetry: retry });
   } catch (e) {
     if (isAbort(e)) {
       target.done(received);
@@ -9708,7 +9747,7 @@ async function doTranslateText({ text, targetLang = '' } = {}) {
   }
 }
 
-async function doTranslate(sel, { targetLang = '' } = {}) {
+async function doTranslate(sel, { targetLang = '', force = false } = {}) {
   if (!await allowEdit('译文')) return;
   if (state.busy) return;
   const text = sel.cleanText || cleanText(sel.text);
@@ -9716,9 +9755,14 @@ async function doTranslate(sel, { targetLang = '' } = {}) {
   // 目标语言以输入框旁「译成」的选择为准；重试时沿用当时记录的目标语言
   // （用户 m10802：切了 English 仍出中文）
   const lang = resolveTranslateTarget(targetLang);
+  const docId = state.doc?.docId || null;
+  const openSeq = state.openSeq;
+  const context = sel.page ? await viewer.getContextAround(sel.page, text).catch(() => '') : '';
+  if (state.busy || docId !== (state.doc?.docId || null) || openSeq !== state.openSeq) return;
+  const retry = () => doTranslate(sel, { targetLang: lang, force: true });
   // A 线 P3：翻译缓存键带提示词版本（改翻译提示词 → 旧缓存不复用）
-  const key = `translate.selection@${PROMPT_SYSTEM_VERSION}::${lang}::${text.length}-${hashStr(text)}`;
-  const cached = state.cache.get(key);
+  const key = `translate.selection@${PROMPT_SYSTEM_VERSION}::${lang}::${text.length}-${hashStr(text)}::${translationCacheScope({ page: sel.page, context })}`;
+  const cached = force ? null : state.cache.get(key);
   const inCard = document.body.classList.contains('no-right') || document.body.classList.contains('right-empty');
   const cardBody = inCard ? showTranslationCard(sel) : null;
   if (!inCard) revealTranslatePanel();
@@ -9730,7 +9774,8 @@ async function doTranslate(sel, { targetLang = '' } = {}) {
     if (existing) {
       if (cardBody) cardBody.innerHTML = renderMarkdown(cached);
       else {
-        existing.root?.scrollIntoView?.({ block: 'nearest' });
+        const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
+        row?.scrollIntoView({ block: 'nearest' });
         toast('这段翻译已在结果区，直接使用原结果', 'ok', 1800);
       }
       return;
@@ -9741,7 +9786,7 @@ async function doTranslate(sel, { targetLang = '' } = {}) {
   if (cached) {
     entry.body.innerHTML = renderMarkdown(cached);
     if (cardBody) cardBody.innerHTML = renderMarkdown(cached);
-    finishEntry(entry, cached, { page: sel.page, onAsk: () => addToChat(sel) });
+    finishEntry(entry, cached, { page: sel.page, retryLabel: '重新翻译', onRetry: retry });
     toast('这段翻过，直接用缓存', 'ok', 1500);
     return;
   }
@@ -9753,7 +9798,6 @@ async function doTranslate(sel, { targetLang = '' } = {}) {
   setBusy(true, '0s');
   let received = '';
   try {
-    const context = sel.page ? await viewer.getContextAround(sel.page, text) : '';
     const full = await chat({
       messages: translateMessages({ text, targetLang: lang, context, page: sel.page, docTitle: state.doc?.name }),
       signal: ctl.signal,
@@ -9764,17 +9808,17 @@ async function doTranslate(sel, { targetLang = '' } = {}) {
     target.done(clean);
     cardTarget?.done(clean);
     state.cache.set(key, clean);
-    finishEntry(entry, clean, { page: sel.page, onAsk: () => addToChat(sel) });
+    finishEntry(entry, clean, { page: sel.page, retryLabel: '重新翻译', onRetry: retry });
   } catch (e) {
     if (isAbort(e)) {
       target.done(received);
       cardTarget?.done(received);
-      finishEntry(entry, received, { page: sel.page, status: 'stopped', onRetry: () => doTranslate(sel) });
+      finishEntry(entry, received, { page: sel.page, status: 'stopped', retryLabel: '重新翻译', onRetry: retry });
     }
     else {
       target.fail(errText(e));
       cardTarget?.fail(errText(e));
-      addFailureRetry(entry, errText(e), () => doTranslate(sel));
+      addFailureRetry(entry, errText(e), retry);
     }
   } finally {
     if (state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
@@ -9859,7 +9903,7 @@ async function doTranslateShot({ shot, page = null, label = '截图', refId = ''
     });
     const clean = String(full || '').trim();
     target.done(clean);
-    finishEntry(entry, clean, { page: pageNo });
+    finishEntry(entry, clean, { page: pageNo, retryLabel: '重新翻译', onRetry: () => retryTranslateShot(retryOf(finalRef)) });
   } catch (e) {
     if (isAbort(e)) {
       target.done(received);
@@ -10101,6 +10145,7 @@ function initComposer() {
 
   const ta = $('#chatInput');
   ta.addEventListener('keydown', (e) => {
+    if (e.isComposing || e.keyCode === 229) return;
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); send(); }
   });
   ta.addEventListener('input', () => {
