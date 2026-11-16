@@ -1772,6 +1772,25 @@ export class PdfViewer {
           textContent = await page.getTextContent({ includeMarkedContent: true });
         } catch { textContent = null; }
         if (stale()) return;
+        // A scan's white paper is baked into its bitmap. Giving the surrounding
+        // page a rounded glass surface makes alternating image margins look like
+        // alternating themes. Classify per page, retaining the result on its DOM
+        // shell across zoom, theme changes and virtualized bitmap replacement.
+        if (textContent && !pageEl.dataset.imageOnly) {
+          let imageOnly = false;
+          if (!textContent.items.some(item => typeof item.str === 'string' && item.str.trim())) {
+            const ops = await page.getOperatorList();
+            const imageOps = new Set([
+              pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintInlineImageXObject,
+              pdfjsLib.OPS.paintImageMaskXObject, pdfjsLib.OPS.paintImageXObjectRepeat,
+              pdfjsLib.OPS.paintInlineImageXObjectGroup, pdfjsLib.OPS.paintImageMaskXObjectGroup,
+              pdfjsLib.OPS.paintImageMaskXObjectRepeat,
+            ].filter(Number.isFinite));
+            imageOnly = ops.fnArray.some(op => imageOps.has(op));
+          }
+          if (stale()) return;
+          pageEl.dataset.imageOnly = String(imageOnly);
+        }
         const tl = new pdfjsLib.TextLayer({
           textContentSource: textContent
             ? { items: textContent.items, styles: textContent.styles, lang: textContent.lang }

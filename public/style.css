@@ -3065,6 +3065,15 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
   border-radius: var(--glass-radius, 24px);
   background: rgba(255, 255, 255, .06);
 }
+/* Pure image pages keep a continuous square paper surface. Bitmap margins may
+   differ on facing scans; they must not reveal a rounded glass frame. */
+.page[data-image-only="true"],
+.page[data-image-only="true"] canvas { border-radius: 0; }
+:root[data-theme="glass"] .page[data-image-only="true"] {
+  background: #fff; border-radius: 0; backdrop-filter: none; box-shadow: none;
+}
+:root[data-theme="glass"] .page[data-image-only="true"]::before { display: none; }
+:root[data-theme="glass"] .page[data-image-only="true"].placeholder::after { border-radius: 0; }
 :root[data-theme="glass"] .doc-tab.active {
   background: rgba(255, 255, 255, .4);
   border-color: transparent;
