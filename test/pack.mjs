@@ -14,6 +14,12 @@ const INCLUDE = [
   'model-profiles.js',
   'start.bat',
   'README.md',
+  'LICENSE',
+  'CHANGELOG.md',
+  'CONTRIBUTING.md',
+  'SECURITY.md',
+  '.github',
+  'design',
   'AGENTS.md',
   '.gitignore',
   '.gitattributes',
@@ -21,6 +27,7 @@ const INCLUDE = [
   'desktop/src',
   'desktop/Cargo.toml',
   'desktop/Cargo.lock',
+  'desktop/README.md',
   'desktop/build.bat',
   'desktop/build.rs',
   'desktop/tools',
@@ -41,7 +48,8 @@ const DENY = [
   /webview2/,
   /\.desktop-port$/,
   /(^|[\\/])internal([\\/]|$)/,
-  /(^|[\\/])archive([\\/]|$)/,
+  /^(?:archive|test[\\/]archive)([\\/]|$)/,
+  /(^|[\\/])\.env(?:\.|$)/,
   /(^|[\\/])profile-[^\\/]*([\\/]|$)/,
   /(^|[\\/])dump([\\/]|$)/,
 ];
@@ -84,7 +92,7 @@ if (forbidden.length) {
 }
 const leaked = [];
 for (const f of files) {
-  if (!/\.(js|mjs|json|html|css|md|rs|toml|bat|txt)$/i.test(f.rel)) continue;
+  if (!/\.(js|mjs|json|html|css|md|rs|toml|bat|txt|ya?ml)$/i.test(f.rel)) continue;
   const txt = fs.readFileSync(f.abs, 'utf8');
   // 真实 API Key 长这样：sk- 后面 30+ 位
   if (/sk-[A-Za-z0-9]{20,}/.test(txt)) leaked.push(f.rel);

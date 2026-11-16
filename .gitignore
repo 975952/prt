@@ -1,6 +1,8 @@
 # ⚠️ 绝对不要提交：data/ 里有你填的 API Key，papers/ 里是你的论文
 data/
 papers/
+.env
+.env.*
 
 # 构建产物
 desktop/target/

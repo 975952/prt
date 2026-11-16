@@ -1,34 +1,74 @@
+<div align="center">
+
 # prt
 
-prt 是面向论文阅读的 Windows PDF 阅读器。你可以同时打开多篇论文，边读边做笔记，也可以用自己配置的模型翻译、提问和理解图表。
+**在论文旁边，把问题读明白。**
 
-## 下载与使用
+面向 Windows 的本地 PDF 阅读器，将原文、翻译、问答与笔记放在同一个工作区。
 
-- [下载 prt.exe（Windows 10/11）](https://github.com/975952/prt/releases/latest/download/prt.exe)
-- [最新版本说明与 SHA256 校验文件](https://github.com/975952/prt/releases/latest)
-- [历史版本](https://github.com/975952/prt/releases)
+[![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square&label=release)](https://github.com/975952/prt/releases/latest)
+[![Checks](https://github.com/975952/prt/actions/workflows/checks.yml/badge.svg)](https://github.com/975952/prt/actions/workflows/checks.yml)
+[![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-586976?style=flat-square)](https://github.com/975952/prt/releases/latest)
+[![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
 
-免安装。把 `prt.exe` 放在一个可写文件夹，双击启动并导入 PDF。升级时先退出旧版，再用新版替换同一目录的 `prt.exe`。同目录的 `papers/` 和 `data/` 用于保存论文和阅读数据。
+[下载 Windows 版](https://github.com/975952/prt/releases/latest/download/prt.exe) · [使用指南](docs/使用说明书.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/975952/prt/issues/new/choose)
 
-阅读、全文搜索和笔记可直接使用。使用 AI 时，在设置中配置 OpenAI 兼容接口、模型名，以及该接口所需的 API Key。扫描件问答和截图解释需要支持图像的模型。
+</div>
 
-## 主要功能
+![prt 透光主题：左侧论文文件，中间 Transformer 原文，右侧问答与公式](docs/assets/reading-glass.png)
 
-- **多文档阅读**：多标签、独立窗口、窗口平铺和布局恢复。右键标签，或将标签拖出标签栏，即可移到新窗口。
-- **跨窗口会话**：在多个窗口打开同一会话，可同步消息、译文和笔记。也可在各窗口打开不同会话分别问答。
-- **论文问答与教学**：划词翻译、解释、截图提问。可选择当前内容、整篇论文或联网搜索作为范围，也可以逐步读论文、补前置知识、讲图表和公式。
-- **引用与笔记**：点击回答里的页码或原文引用返回 PDF，支持目录、全文搜索、高亮、笔记和参考文献检索。
-- **阅读布局**：支持缩放、适应宽度、双页、全屏和多种主题。阅读位置按窗口保存。
+<sub>当前主分支界面。论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。[截图来源与复现](docs/assets/README.md)</sub>
 
-## 数据与网络
+## 为阅读准备的工作区
 
-应用的本地服务只监听 `127.0.0.1`。论文文件、笔记、会话及 API Key 保存在本机。使用 AI 时，应用会按你选择的范围，将相关论文内容、截图及对话上下文发送给配置的模型接口。使用联网检索时，搜索词会发送给对应的检索服务。
+| 从阅读到理解 | 在 prt 中完成 |
+| --- | --- |
+| 对照多篇论文 | 多标签、独立窗口与窗口平铺，保留各自的阅读位置 |
+| 读懂一段原文 | 划词翻译、解释、原文对照，点击引用回到对应页面 |
+| 看图表与公式 | 框选截图、长截图、视觉模型问答，支持公式与表格排版 |
+| 连贯地追问 | 同文件夹会话、跨窗口同步、输入草稿与翻译任务恢复 |
+| 留下阅读线索 | 全文搜索、目录、高亮笔记与参考文献检索 |
+| 调整阅读观感 | 透光、米宣与深色主题，可调透明、磨砂、字号及夜读文字亮度 |
 
-## 文档与开发
+## 开始使用
 
-- [使用说明书](docs/使用说明书.md) · [多窗口阅读](docs/多窗口阅读.md)
-- [文档索引](docs/README.md) · [开发记录](docs/PROGRESS.md)
+1. 从 [Releases](https://github.com/975952/prt/releases/latest) 下载 **prt.exe**，放入一个可写文件夹。
+2. 双击启动，拖入 PDF 或点击导入，即可阅读、搜索和记笔记。
+3. 需要翻译或问答时，在设置中填写 **OpenAI 兼容接口地址、模型名和 API Key**。图表与扫描件需要支持图像的模型。
 
-桌面版使用 Rust、Tao 和 WebView2，前端为原生 ES modules。运行 `desktop\build.bat` 可重新构建 EXE，前端资源在构建时内嵌。浏览器开发模式可运行 `node server.js`，然后访问 `http://127.0.0.1:8787`。
+桌面版免安装，无需 Node.js。支持 Windows 10/11 x64，需要 [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（多数系统已安装）。模型服务由你自行配置，服务费用按对应提供商规则计算。
 
-安装测试依赖后，可在 `test/` 下运行 `node tabs.mjs` 或 `node multiwindow.mjs`。多窗口测试使用隔离的 EXE 副本及合成 PDF。
+**版本说明：** 当前下载版是 **v1.1.1**。上方截图与功能表展示 `main` 的最新实现，其中新主题、草稿恢复和阅读布局优化尚未打入正式 Release。想体验这些改动，可按 [开发指南](docs/开发指南.md) 从源码构建。
+
+升级时，退出旧版并替换同一目录的 `prt.exe`，保留 `papers/` 和 `data/`。下载页提供 `SHA256SUMS.txt` 校验文件。
+
+<details>
+<summary>查看米宣与深色主题</summary>
+
+### 米宣
+
+![prt 米宣主题与 Transformer 论文问答](docs/assets/reading-paper.png)
+
+### 深色
+
+![prt 深色主题，正文柔化反色，论文图像保留原色](docs/assets/reading-dark.png)
+
+</details>
+
+## 数据由你保管
+
+论文保存在程序旁的 `papers/`，配置、笔记、会话和 API Key 保存在 `data/`。备份或迁移时，将两个目录一起复制。API Key 作为本地配置保存，请妥善保管该目录。
+
+本地服务只监听 `127.0.0.1`。阅读、搜索和笔记不需要模型服务；使用 AI 时，相关原文、截图及对话上下文会发送到你配置的接口，联网检索会向检索服务发送查询。AI 输出可能有误，可通过引用回到原文核对。
+
+## 文档与参与
+
+- **使用：** [使用指南](docs/使用说明书.md) · [多窗口阅读](docs/多窗口阅读.md) · [常见问题](docs/使用说明书.md#常见问题)
+- **开发：** [本地运行与测试](docs/开发指南.md) · [贡献指南](CONTRIBUTING.md) · [文档索引](docs/README.md)
+- **反馈：** [报告问题或提出建议](https://github.com/975952/prt/issues/new/choose) · [安全问题](SECURITY.md)
+
+前端采用原生 JavaScript ES modules；PDF 渲染使用 PDF.js，公式排版使用 KaTeX。桌面端使用 Rust、Tao 与 Wry / WebView2，前端资源内嵌在单个 EXE 中；另提供零 npm 运行时依赖的 Node.js 服务供开发调试。
+
+## 许可证
+
+项目代码采用 [MIT License](LICENSE)。第三方组件、字体和论文分别遵循各自的授权；截图中的论文不属于本项目的 MIT 授权范围。参见 [第三方组件](docs/第三方组件.md)。

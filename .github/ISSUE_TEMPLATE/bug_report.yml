@@ -1,0 +1,41 @@
+name: 问题反馈
+description: 报告可以复现的阅读、翻译或界面问题
+title: "[Bug] "
+body:
+  - type: markdown
+    attributes:
+      value: "请勿上传 API Key、data/ 目录或私人论文。安全漏洞请使用仓库 Security 页的私密报告入口。"
+  - type: input
+    id: version
+    attributes:
+      label: prt 版本
+      placeholder: "例如 v1.1.1，或 main 的提交号"
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: 运行环境
+      placeholder: "例如 Windows 11 x64 / 桌面版；浏览器版请填写浏览器版本"
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: 复现步骤
+      description: "从打开软件开始，描述怎样触发问题。涉及 PDF 时可提供公开论文链接。"
+      placeholder: "1. 打开…\n2. 点击…\n3. 出现…"
+    validations:
+      required: true
+  - type: textarea
+    id: behavior
+    attributes:
+      label: 预期与实际结果
+      description: "原本希望发生什么，实际发生了什么？"
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: 截图或错误信息
+      description: "可选。请先遮住密钥、接口鉴权信息与个人资料。"

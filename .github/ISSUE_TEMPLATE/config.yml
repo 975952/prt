@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: 使用指南
+    url: https://github.com/975952/prt/blob/main/docs/使用说明书.md
+    about: 查看安装、模型配置、数据备份与常见问题
+  - name: 私密报告安全漏洞
+    url: https://github.com/975952/prt/security/advisories/new
+    about: 请勿在公开 Issue 中提交漏洞细节或真实凭据

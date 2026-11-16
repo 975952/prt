@@ -1,0 +1,13 @@
+/** Portable, dependency-free checks used by contributors and GitHub Actions. */
+import { spawnSync } from 'node:child_process';
+import path from 'node:path';
+
+const suites = ['agent-unit.mjs', 'output-flow.mjs', 'composer-drafts.mjs',
+  'translation-queue.mjs', 'selection-reading-order.mjs', 'prompts-manifest.mjs', 'repository-check.mjs'];
+for (const suite of suites) {
+  console.log(`\nRunning ${suite}`);
+  const result = spawnSync(process.execPath, [path.join(import.meta.dirname, suite)], { stdio: 'inherit' });
+  if (result.error) console.error(result.error.message);
+  if (result.status !== 0) process.exit(result.status || 1);
+}
+console.log(`\nPASS ${suites.length} check suites`);
