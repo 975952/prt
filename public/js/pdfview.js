@@ -1692,8 +1692,12 @@ export class PdfViewer {
       // 这里靠 DOM 顺序解决：新画布插在旧画布后面，天然在上层。
       if (prevCanvas) canvas.style.visibility = 'hidden';
       const paper = readingPaperColor(pageEl);
-      const ctx = canvas.getContext('2d', { alpha: paper === 'rgba(0, 0, 0, 0)' });
-      ctx.fillStyle = paper;
+      // CSS owns the adjustable paper surface in every theme. Keep original
+      // PDF ink and image pixels opaque; only the empty canvas is transparent.
+      const background = pageEl.dataset.imageOnly === 'true' ? paper : 'rgba(0, 0, 0, 0)';
+      const nightSaturation = document.documentElement.dataset.nightSaturation || '50';
+      const ctx = canvas.getContext('2d', { alpha: background === 'rgba(0, 0, 0, 0)' });
+      ctx.fillStyle = background;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       const textDiv = document.createElement('div');
@@ -1711,7 +1715,7 @@ export class PdfViewer {
       if (!reusePinLayer) pinLayer.style.transform = '';
 
       const entry = {
-        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null, paper,
+        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null, paper, nightSaturation,
         slice, ratio, cssW, cssH,
         renderScale: this.scale,   // 这张位图是按哪个比例画的（软缩放拉伸时要用）
         dirty: false,
@@ -1737,10 +1741,10 @@ export class PdfViewer {
         // pdf.js 会先应用这个 transform，再叠加 viewport 自己的变换。
         // 所以 [ratio,0,0,ratio,-ox*ratio,-oy*ratio] 就是「把 (ox,oy) 这块搬到画布原点，并放大 ratio 倍」
         transform: [ratio, 0, 0, ratio, -ox * ratio, -oy * ratio],
-        background: paper,
+        background,
       });
       entry.task = renderTask;
-      if (paper === NIGHT_PAPER) applyNightReading(renderTask, pdfjsLib.OPS);
+      if (paper === NIGHT_PAPER) applyNightReading(renderTask, pdfjsLib.OPS, { saturation: Number(nightSaturation) });
       try {
         await renderTask.promise;
       } catch (e) {
@@ -1833,7 +1837,8 @@ export class PdfViewer {
       this.renderTasks.delete(i);
       // 切换主题时若旧帧正在绘制，完成后补画最新纸底，避免旧底色残留。
       const completed = this.rendered.get(i);
-      if (!stale() && completed && completed.paper !== readingPaperColor(pageEl)) {
+      if (!stale() && completed && (completed.paper !== readingPaperColor(pageEl)
+        || (completed.paper === NIGHT_PAPER && completed.nightSaturation !== (document.documentElement.dataset.nightSaturation || '50')))) {
         completed.dirty = true;
         this._scheduleRerender(0);
       }

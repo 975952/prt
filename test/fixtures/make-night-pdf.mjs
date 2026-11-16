@@ -14,7 +14,7 @@ export function writeNightFixture(destination) {
   const pixels = Buffer.alloc(80 * 80 * 3, 255), mask = Buffer.alloc(80 * 80, 255);
   for (let y = 0; y < 80; y++) for (let x = 0; x < 80; x++) {
     if (x < 40 && y < 40) pixels.set([200, 108, 62], (y * 80 + x) * 3);
-    if (x >= 40 && y < 40) pixels.set([30, 120, 170], (y * 80 + x) * 3);
+    if (x >= 40 && y < 40) pixels.set([0, 0, 128], (y * 80 + x) * 3);
     if (x < 40 && y >= 40) pixels.set([0, 0, 0], (y * 80 + x) * 3);
     if (x > 70) mask[y * 80 + x] = 128;
   }
@@ -24,6 +24,10 @@ export function writeNightFixture(destination) {
   const commands = `1 g 0 0 480 640 re f
 0 g BT /F1 22 Tf 28 590 Td (Night reading: original images) Tj ET
 0 G 2 w 28 565 m 452 565 l S
+0 0 0.50196 rg BT /F1 18 Tf 28 536 Td (Deep blue link) Tj ET
+28 516 12 12 re f
+0 1 0 rg BT /F1 18 Tf 250 536 Td (Bright green text) Tj ET
+250 516 12 12 re f
 q 160 0 0 160 28 350 cm /Photo Do Q
 q 160 0 0 160 240 350 cm /Photo Do Q
 q 28 100 150 180 re W n 140 50 -50 140 60 120 cm /Photo Do Q

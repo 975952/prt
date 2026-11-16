@@ -645,7 +645,8 @@ function initPanels() {
 const DEFAULT_UI_STYLE = Object.freeze({
   theme: 'glass', density: 'standard', fontSize: 14, lineHeight: 1.72,
   codeSize: 12, maxWidth: 760, opacity: 1,
-  glassTransparency: 76, glassFrost: 32, glassRadius: 24, glassBrightness: 93, motion: true,
+  glassTransparency: 76, glassSurfaceTransparency: 80, glassFrost: 32, glassRadius: 24,
+  glassBrightness: 93, glassShadow: 35, nightSaturation: 50, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
   paper: 'tint',
   // 界面尺度：uiFontSize = 界面字号 px（--ui-fs），controlSize = 控件大小 %（--ctl-scale）。
@@ -660,10 +661,13 @@ const DEFAULT_UI_STYLE = Object.freeze({
 let uiStyle = { ...DEFAULT_UI_STYLE };
 
 const GLASS_CONTROLS = Object.freeze({
-  glassTransparency: { id: 'uiGlassTransparency', min: 35, max: 96, unit: '%' },
-  glassFrost: { id: 'uiGlassFrost', min: 0, max: 32, unit: 'px' },
-  glassRadius: { id: 'uiGlassRadius', min: 3, max: 24, unit: 'px' },
-  glassBrightness: { id: 'uiGlassBrightness', min: 80, max: 100, unit: '%' },
+  glassTransparency: { id: 'uiGlassTransparency', min: 0, max: 100, unit: '%' },
+  glassSurfaceTransparency: { id: 'uiGlassSurfaceTransparency', min: 0, max: 100, unit: '%' },
+  glassFrost: { id: 'uiGlassFrost', min: 0, max: 48, unit: 'px' },
+  glassRadius: { id: 'uiGlassRadius', min: 0, max: 32, unit: 'px' },
+  glassBrightness: { id: 'uiGlassBrightness', min: 60, max: 100, unit: '%' },
+  glassShadow: { id: 'uiGlassShadow', min: 0, max: 100, unit: '%' },
+  nightSaturation: { id: 'uiNightSaturation', min: 0, max: 100, unit: '%' },
 });
 
 const READ_FS_MIN = 12;
@@ -1770,18 +1774,25 @@ function applyUiStyle() {
   root.style.setProperty('--ui-fs', `${uiFontSizePx(style.uiFontSize)}px`);
   root.style.setProperty('--ctl-scale', `${ctlScaleOf(style.controlSize)}`);
   root.style.setProperty('--glass-paper-opacity', String(1 - glassValue('glassTransparency') / 100));
+  root.style.setProperty('--glass-surface-opacity', String(1 - glassValue('glassSurfaceTransparency') / 100));
+  root.style.setProperty('--glass-shadow-strength', String(glassValue('glassShadow') / 35));
   root.style.setProperty('--glass-frost', `${glassValue('glassFrost')}px`);
   root.style.setProperty('--glass-radius', `${glassValue('glassRadius')}px`);
   const brightness = Math.round(glassValue('glassBrightness') * 2.55);
   root.style.setProperty('--glass-bg', `rgb(${brightness} ${brightness} ${brightness})`);
   root.style.setProperty('--glass-bg-low', `rgb(${brightness - 4} ${brightness - 4} ${brightness - 4})`);
+  const palette = style.theme === 'dark' ? [[28, 30, 32], [24, 26, 28]] : [[248, 245, 235], [241, 237, 224]];
+  const adjusted = (rgb) => `rgb(${rgb.map(v => Math.round(clamp(style.theme === 'dark'
+    ? v + (glassValue('glassBrightness') - 93) * .6 : v * glassValue('glassBrightness') / 93, 0, 255))).join(' ')})`;
+  root.style.setProperty('--appearance-bg', style.theme === 'glass' ? `rgb(${brightness} ${brightness} ${brightness})` : adjusted(palette[0]));
+  root.style.setProperty('--appearance-bg-low', style.theme === 'glass' ? `rgb(${brightness - 4} ${brightness - 4} ${brightness - 4})` : adjusted(palette[1]));
+  root.dataset.nightSaturation = String(glassValue('nightSaturation'));
   root.dataset.motion = style.motion === false ? 'off' : 'on';
   const paperMode = style.paper === 'white' ? 'white' : 'tint';
   const paperTint = getComputedStyle(root).getPropertyValue('--paper-tint').trim();
   // 截图和导出仍用实色纸底；透明只在阅读画布和它独立的玻璃底层生效。
   root.style.setProperty('--paper', style.theme !== 'light' || paperMode === 'white' ? '#FFFFFF' : PAPER_TINT_LIGHT(paperTint));
-  const glassControls = $('#glassAppearanceControls');
-  if (glassControls) glassControls.disabled = style.theme !== 'glass';
+  $('#nightAppearanceControls')?.classList.toggle('hidden', style.theme !== 'dark');
   /* 双指缩放速度也得跟着 uiStyle 走。设置页改动那条路走 applyUiSettingsFromControls，
      但「恢复默认设置」是直接换 uiStyle 再 applyUiStyle() —— 两条路都要把值推给 viewer，
      否则点完「恢复默认」滑杆回到 1.0、实际手势还是旧速度。 */
@@ -12550,8 +12561,9 @@ function glassValue(key, value = uiStyle[key]) {
   return clamp(Number.isFinite(n) ? n : DEFAULT_UI_STYLE[key], min, max);
 }
 
-// 外观滑杆只更新样式，不重建消息、不重绘 PDF，保留阅读位置与输入光标。
+// 材质滑杆只更新 CSS；彩色文字鲜艳度合并快速拖动后重绘 PDF，保留阅读位置。
 function applyGlassSettingsFromControls() {
+  const oldSaturation = uiStyle.nightSaturation;
   for (const [key, { id }] of Object.entries(GLASS_CONTROLS)) {
     const input = document.getElementById(id);
     if (input) uiStyle[key] = glassValue(key, input.value);
@@ -12560,13 +12572,30 @@ function applyGlassSettingsFromControls() {
   applyUiStyle();
   saveUi();
   updateUiRangeLabels();
+  if (oldSaturation !== uiStyle.nightSaturation && uiStyle.theme === 'dark') refreshNightInk();
+}
+
+const refreshNightInk = debounce(() => viewer?.refreshPaper?.(), 160);
+
+function resetAppearanceEffects() {
+  for (const key of Object.keys(GLASS_CONTROLS)) uiStyle[key] = DEFAULT_UI_STYLE[key];
+  uiStyle.motion = DEFAULT_UI_STYLE.motion;
+  applyUiStyle();
+  saveUi();
+  fillUiSettings();
+  if (uiStyle.theme === 'dark') refreshNightInk();
+  toast('已恢复默认效果', 'ok');
 }
 
 function updateUiRangeLabels() {
   for (const { id, unit } of Object.values(GLASS_CONTROLS)) {
     const input = document.getElementById(id);
     const output = document.getElementById(`${id}Value`);
-    if (input && output) output.textContent = `${input.value}${unit}`;
+    if (input && output) {
+      const label = `${input.value}${unit}`;
+      output.textContent = label;
+      input.setAttribute('aria-valuetext', label);
+    }
   }
   const size = $('#uiFontSize');
   if (size && $('#uiFontSizeValue')) $('#uiFontSizeValue').textContent = `${size.value}px`;
@@ -12797,6 +12826,7 @@ function initSettings() {
     .forEach((id) => document.getElementById(id)?.addEventListener('input', applyUiSettingsFromControls));
   [...Object.values(GLASS_CONTROLS).map(({ id }) => id), 'uiMotion']
     .forEach((id) => document.getElementById(id)?.addEventListener('input', applyGlassSettingsFromControls));
+  $('#resetAppearanceEffects')?.addEventListener('click', resetAppearanceEffects);
   // 「会话」分类：四项都只影响本机行为，切换/勾选立刻生效。
   $('#settScopeMode')?.addEventListener('change', () => applySessionScopeMode($('#settScopeMode').value));
   $('#settAiTitle')?.addEventListener('change', () => {
