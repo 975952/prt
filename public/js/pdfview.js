@@ -56,6 +56,11 @@ function paperColor() {
   }
 }
 
+// 只有屏幕阅读画布透明；截图、OCR、跨文档读取保留不透明背景。
+function readingPaperColor() {
+  return document.documentElement.dataset.theme === 'glass' ? 'rgba(0, 0, 0, 0)' : paperColor();
+}
+
 /** 切片向外多渲染多少像素（CSS px，上限）。滚动时不至于一屏就重画一次；
  *  实际边距由 `_renderPlan()` 按**剩余预算**反解，屏幕越密边距越小。 */
 const SLICE_MARGIN = 600;
@@ -1647,8 +1652,8 @@ export class PdfViewer {
       // 一旦给画布设了 z-index，它就会盖住文本层，鼠标点不到文字 —— 选取文字直接失效。
       // 这里靠 DOM 顺序解决：新画布插在旧画布后面，天然在上层。
       if (prevCanvas) canvas.style.visibility = 'hidden';
-      const ctx = canvas.getContext('2d', { alpha: false });
-      const paper = paperColor();
+      const paper = readingPaperColor();
+      const ctx = canvas.getContext('2d', { alpha: paper === 'rgba(0, 0, 0, 0)' });
       ctx.fillStyle = paper;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
@@ -1667,7 +1672,7 @@ export class PdfViewer {
       if (!reusePinLayer) pinLayer.style.transform = '';
 
       const entry = {
-        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null,
+        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null, paper,
         slice, ratio, cssW, cssH,
         renderScale: this.scale,   // 这张位图是按哪个比例画的（软缩放拉伸时要用）
         dirty: false,
@@ -1791,6 +1796,12 @@ export class PdfViewer {
 
     const p = run().finally(() => {
       this.renderTasks.delete(i);
+      // 切换主题时若旧帧正在绘制，完成后补画最新纸底，避免旧底色残留。
+      const completed = this.rendered.get(i);
+      if (!stale() && completed && completed.paper !== readingPaperColor()) {
+        completed.dirty = true;
+        this._scheduleRerender(0);
+      }
       if (this._perf) { this._perf.renders++; this._perf.renderMs += performance.now() - t0; }
       // 画完一页继续在后台补下一页（翻动时目标位置就先有画面了）
       this._schedulePrefetch(160);
@@ -1848,6 +1859,7 @@ export class PdfViewer {
   }
 
   async goToPage(n, { smooth = false } = {}) {
+    if (document.documentElement.dataset.motion === 'off' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) smooth = false;
     const target = clamp(Math.round(n), 1, this.numPages || 1);
     if (!this.pageEls[target]) return;
     // 大文件里目标页尺寸可能还没测过：先补目标附近，否则 scrollTop 会落错位置

@@ -643,8 +643,9 @@ function initPanels() {
 }
 
 const DEFAULT_UI_STYLE = Object.freeze({
-  theme: 'system', density: 'standard', fontSize: 14, lineHeight: 1.72,
+  theme: 'glass', density: 'standard', fontSize: 14, lineHeight: 1.72,
   codeSize: 12, maxWidth: 760, opacity: 1,
+  glassTransparency: 76, glassFrost: 32, glassRadius: 24, glassBrightness: 93, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
   paper: 'tint',
   // 界面尺度：uiFontSize = 界面字号 px（--ui-fs），controlSize = 控件大小 %（--ctl-scale）。
@@ -657,6 +658,13 @@ const DEFAULT_UI_STYLE = Object.freeze({
   twoUp: false,
 });
 let uiStyle = { ...DEFAULT_UI_STYLE };
+
+const GLASS_CONTROLS = Object.freeze({
+  glassTransparency: { id: 'uiGlassTransparency', min: 35, max: 96, unit: '%' },
+  glassFrost: { id: 'uiGlassFrost', min: 0, max: 32, unit: 'px' },
+  glassRadius: { id: 'uiGlassRadius', min: 3, max: 24, unit: 'px' },
+  glassBrightness: { id: 'uiGlassBrightness', min: 80, max: 100, unit: '%' },
+});
 
 const READ_FS_MIN = 12;
 const READ_FS_MAX = 30;
@@ -1745,7 +1753,7 @@ function applyUiStyle() {
       localStorage.setItem('reader.ui', JSON.stringify(saved));
     } catch { /* 存储不可用时仍应用对应主题 */ }
   }
-  if (style.theme === 'system' || !['light', 'dark', 'black', 'graphite', 'mist', 'sage'].includes(style.theme)) {
+  if (style.theme === 'system' || !['light', 'dark', 'black', 'graphite', 'mist', 'sage', 'glass'].includes(style.theme)) {
     delete root.dataset.theme;
   } else {
     root.dataset.theme = style.theme;
@@ -1763,9 +1771,19 @@ function applyUiStyle() {
   // --ctl-scale 只带控件尺寸（不影响界面文字，也不影响阅读字号）
   root.style.setProperty('--ui-fs', `${uiFontSizePx(style.uiFontSize)}px`);
   root.style.setProperty('--ctl-scale', `${ctlScaleOf(style.controlSize)}`);
+  root.style.setProperty('--glass-paper-opacity', String(1 - glassValue('glassTransparency') / 100));
+  root.style.setProperty('--glass-frost', `${glassValue('glassFrost')}px`);
+  root.style.setProperty('--glass-radius', `${glassValue('glassRadius')}px`);
+  const brightness = Math.round(glassValue('glassBrightness') * 2.55);
+  root.style.setProperty('--glass-bg', `rgb(${brightness} ${brightness} ${brightness})`);
+  root.style.setProperty('--glass-bg-low', `rgb(${brightness - 4} ${brightness - 4} ${brightness - 4})`);
+  root.dataset.motion = style.motion === false ? 'off' : 'on';
   const paperMode = style.paper === 'white' ? 'white' : 'tint';
   const paperTint = getComputedStyle(root).getPropertyValue('--paper-tint').trim();
-  root.style.setProperty('--paper', paperMode === 'white' ? '#FFFFFF' : PAPER_TINT_LIGHT(paperTint));
+  // 截图和导出仍用实色纸底；透明只在阅读画布和它独立的玻璃底层生效。
+  root.style.setProperty('--paper', style.theme === 'glass' || paperMode === 'white' ? '#FFFFFF' : PAPER_TINT_LIGHT(paperTint));
+  const glassControls = $('#glassAppearanceControls');
+  if (glassControls) glassControls.disabled = style.theme !== 'glass';
   /* 双指缩放速度也得跟着 uiStyle 走。设置页改动那条路走 applyUiSettingsFromControls，
      但「恢复默认设置」是直接换 uiStyle 再 applyUiStyle() —— 两条路都要把值推给 viewer，
      否则点完「恢复默认」滑杆回到 1.0、实际手势还是旧速度。 */
@@ -12419,6 +12437,11 @@ function fillUiSettings() {
   if (size) size.value = uiStyle.fontSize;
   const zoom = $('#uiZoomSpeed');
   if (zoom) zoom.value = String(clampZoomSpeed(uiStyle.zoomSpeed));
+  for (const [key, { id }] of Object.entries(GLASS_CONTROLS)) {
+    const input = document.getElementById(id);
+    if (input) input.value = String(glassValue(key));
+  }
+  if ($('#uiMotion')) $('#uiMotion').checked = uiStyle.motion !== false;
   // 发送范围两个开关：默认开着，存档里显式关掉才关（`!== false`，缺字段按默认 true）
   const full = $('#cfgUseFullText');
   if (full) full.checked = uiStyle.useFullText !== false;
@@ -12506,7 +12529,30 @@ async function applySessionScopeMode(mode) {
   });
 }
 
+function glassValue(key, value = uiStyle[key]) {
+  const { min, max } = GLASS_CONTROLS[key];
+  const n = Number(value);
+  return clamp(Number.isFinite(n) ? n : DEFAULT_UI_STYLE[key], min, max);
+}
+
+// 外观滑杆只更新样式，不重建消息、不重绘 PDF，保留阅读位置与输入光标。
+function applyGlassSettingsFromControls() {
+  for (const [key, { id }] of Object.entries(GLASS_CONTROLS)) {
+    const input = document.getElementById(id);
+    if (input) uiStyle[key] = glassValue(key, input.value);
+  }
+  if ($('#uiMotion')) uiStyle.motion = $('#uiMotion').checked;
+  applyUiStyle();
+  saveUi();
+  updateUiRangeLabels();
+}
+
 function updateUiRangeLabels() {
+  for (const { id, unit } of Object.values(GLASS_CONTROLS)) {
+    const input = document.getElementById(id);
+    const output = document.getElementById(`${id}Value`);
+    if (input && output) output.textContent = `${input.value}${unit}`;
+  }
   const size = $('#uiFontSize');
   if (size && $('#uiFontSizeValue')) $('#uiFontSizeValue').textContent = `${size.value}px`;
   const zoom = $('#uiZoomSpeed');
@@ -12533,8 +12579,7 @@ function setReadingFontSize(px) {
   toast(`阅读字号 ${next}px`, '', 1600);
 }
 
-/** 设置页里还剩两个「即时生效」的控件：主题、阅读字号。其余字段（密度 / 纸张 / 行高…）
- *  没有界面入口了，值一律沿用 uiStyle 里原有的，绝不因为控件消失就被重置成默认值。 */
+/** 通用设置即时生效；玻璃滑杆另走轻量样式更新。没有界面入口的旧字段保留原值。 */
 function applyUiSettingsFromControls() {
   const oldPaper = uiStyle.paper === 'white' ? 'white' : 'tint';
   const oldTheme = uiStyle.theme;
@@ -12735,6 +12780,8 @@ function initSettings() {
   //   勾选走 applyUiSettingsFromControls → syncScopePrefs → updateComposerHint）。
   ['uiTheme', 'uiFontSize', 'uiZoomSpeed', 'cfgUseFullText', 'cfgUseWeb', 'cfgFollowUpDirect']
     .forEach((id) => document.getElementById(id)?.addEventListener('input', applyUiSettingsFromControls));
+  [...Object.values(GLASS_CONTROLS).map(({ id }) => id), 'uiMotion']
+    .forEach((id) => document.getElementById(id)?.addEventListener('input', applyGlassSettingsFromControls));
   // 「会话」分类：四项都只影响本机行为，切换/勾选立刻生效。
   $('#settScopeMode')?.addEventListener('change', () => applySessionScopeMode($('#settScopeMode').value));
   $('#settAiTitle')?.addEventListener('change', () => {

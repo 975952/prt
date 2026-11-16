@@ -21,6 +21,7 @@ assertIsolatedDataDir(DATA);
 fs.mkdirSync(DATA);
 fs.mkdirSync(PAPERS);
 fs.copyFileSync(path.join(import.meta.dirname, 'fixtures', 'multipage-sample.pdf'), path.join(PAPERS, 'theme-paper.pdf'));
+fs.copyFileSync(path.join(import.meta.dirname, 'fixtures', 'image-sample.pdf'), path.join(PAPERS, 'theme-image.pdf'));
 
 const CHROME = process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe';
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -109,12 +110,112 @@ try {
   const options = await page.evaluate(() => [...document.querySelectorAll('#uiTheme option')].map((o) => [o.value, o.textContent.trim()]));
   check('主题命名统一，已移除三套重复配色',
     JSON.stringify(options) === JSON.stringify([
-      ['system', '跟随系统'], ['light', '米宣'], ['mist', '白瓷'], ['sage', '青瓷'],
+      ['glass', '透光'], ['system', '跟随系统'], ['light', '米宣'], ['mist', '白瓷'], ['sage', '青瓷'],
       ['dark', '乌木'], ['graphite', '石墨'], ['black', '玄墨'],
     ]), JSON.stringify(options));
 
+  /* 透明只影响纸底：验证真实像素、控件保存和不透明 AI 截图。 */
+  await setTheme('glass');
+  await page.waitForFunction(() => {
+    const entry = window.__viewer?.rendered.get(1);
+    return entry?.paper === 'rgba(0, 0, 0, 0)' && entry.textDiv?.childElementCount > 0;
+  });
+  const glass = await page.evaluate(() => {
+    const canvas = window.__viewer.rendered.get(1).canvas;
+    const data = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let empty = 0, ink = 0;
+    for (let i = 0; i < data.length; i += 4) {
+      if (data[i + 3] === 0) empty++;
+      if (data[i + 3] === 255 && data[i] < 80) ink++;
+    }
+    const cs = getComputedStyle(document.documentElement);
+    return { empty, ink, opacity: getComputedStyle(canvas).opacity,
+      radius: cs.getPropertyValue('--glass-radius').trim(), frost: cs.getPropertyValue('--glass-frost').trim(),
+      transparency: Number(cs.getPropertyValue('--glass-paper-opacity')), bg: getComputedStyle(document.body).backgroundColor };
+  });
+  check('玻璃纸底透明，文字像素保持不透明', glass.empty > 1000 && glass.ink > 100 && glass.opacity === '1', JSON.stringify(glass));
+  check('默认采用用户选定的 76% / 32px / 24px', Math.abs(glass.transparency - .24) < .001 && glass.frost === '32px' && glass.radius === '24px');
+  const shotPixel = await page.evaluate(async () => {
+    const shot = await window.__viewer.capturePageImage(1, { maxDim: 600 });
+    const img = new Image(); img.src = shot.dataUrl; await img.decode();
+    const c = document.createElement('canvas'); c.width = img.width; c.height = img.height;
+    const ctx = c.getContext('2d'); ctx.drawImage(img, 0, 0);
+    return [...ctx.getImageData(2, 2, 1, 1).data];
+  });
+  check('AI 截图保留白色实底', shotPixel.slice(0, 3).every(v => v > 248) && shotPixel[3] === 255, String(shotPixel));
+  await page.click('#settingsNavAppearance');
+  await page.screenshot({ path: path.join(artifactDir, 'theme-glass-settings.png') });
+  const stable = await page.evaluate(() => {
+    const viewer = window.__viewer;
+    const canvas = viewer.rendered.get(1).canvas;
+    const scroll = viewer.container.scrollTop;
+    for (const [id, value] of [['uiGlassTransparency', 81], ['uiGlassFrost', 0], ['uiGlassRadius', 18], ['uiGlassBrightness', 96]]) {
+      const input = document.getElementById(id); input.value = value;
+      input.dispatchEvent(new Event('input', { bubbles: true }));
+    }
+    const motion = document.getElementById('uiMotion'); motion.checked = false;
+    motion.dispatchEvent(new Event('input', { bubbles: true }));
+    return { sameCanvas: canvas === viewer.rendered.get(1).canvas, sameScroll: scroll === viewer.container.scrollTop,
+      saved: JSON.parse(localStorage.getItem('reader.ui')).style,
+      transition: getComputedStyle(document.querySelector('.side')).transitionDuration };
+  });
+  check('滑杆即时生效且不重建画布、不跳阅读位置', stable.sameCanvas && stable.sameScroll);
+  check('所有玻璃参数及动效开关均持久化，磨砂允许 0', stable.saved.glassTransparency === 81 && stable.saved.glassFrost === 0
+    && stable.saved.glassRadius === 18 && stable.saved.glassBrightness === 96 && stable.saved.motion === false && stable.transition === '0s');
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0);
+  const restoredGlass = await page.evaluate(() => {
+    const cs = getComputedStyle(document.documentElement);
+    return { theme: document.documentElement.dataset.theme, frost: cs.getPropertyValue('--glass-frost').trim(),
+      radius: cs.getPropertyValue('--glass-radius').trim(), opacity: Number(cs.getPropertyValue('--glass-paper-opacity')),
+      motion: document.documentElement.dataset.motion, bg: cs.getPropertyValue('--glass-bg').trim() };
+  });
+  check('重开恢复玻璃控件，亮度已提亮', restoredGlass.theme === 'glass' && restoredGlass.frost === '0px' && restoredGlass.radius === '18px'
+    && Math.abs(restoredGlass.opacity - .19) < .001 && restoredGlass.motion === 'off' && restoredGlass.bg === 'rgb(245 245 245)', JSON.stringify(restoredGlass));
+  const focusStyle = await page.evaluate(() => {
+    const input = document.querySelector('#chatInput'); input.focus();
+    const cs = getComputedStyle(input);
+    return { focused: document.activeElement === input, outline: cs.outlineStyle, border: cs.borderTopWidth, shadow: cs.boxShadow };
+  });
+  check('输入框聚焦没有黑框', focusStyle.focused && focusStyle.outline === 'none' && focusStyle.border === '0px' && focusStyle.shadow === 'none', JSON.stringify(focusStyle));
+  await page.screenshot({ path: path.join(artifactDir, 'theme-glass.png') });
+
+  const imagePage = await browser.newPage();
+  await imagePage.goto(`${BASE}/?open=theme-image.pdf`, { waitUntil: 'domcontentloaded' });
+  await imagePage.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0);
+  const imagePixels = await imagePage.evaluate(() => {
+    const canvas = window.__viewer.rendered.get(1).canvas;
+    const d = canvas.getContext('2d').getImageData(0, 0, canvas.width, canvas.height).data;
+    let orange = 0, white = 0;
+    for (let i = 0; i < d.length; i += 4) {
+      if (d[i] === 200 && d[i + 1] === 108 && d[i + 2] === 62 && d[i + 3] === 255) orange++;
+      if (d[i] === 250 && d[i + 1] === 246 && d[i + 2] === 232 && d[i + 3] === 255) white++;
+    }
+    return { orange, white };
+  });
+  check('彩图及图内白色像素保持原色', imagePixels.orange > 100 && imagePixels.white > 100, JSON.stringify(imagePixels));
+  await imagePage.close();
+  await page.evaluate(() => window.__viewer.setScale(2));
+  await page.waitForFunction(() => {
+    const viewer = window.__viewer;
+    const entry = viewer.rendered.get(viewer.current);
+    return entry?.paper === 'rgba(0, 0, 0, 0)' && Math.abs(entry.renderScale - 2) < .01
+      && entry.textDiv?.childElementCount > 0 && !viewer.renderTasks.size;
+  });
+  check('透明纸底放大后文字层仍完整', await page.evaluate(() => window.__viewer.rendered.get(window.__viewer.current).textDiv.textContent.includes('Synthetic')));
+  await page.evaluate(() => window.__viewer.goToPage(3));
+  await page.waitForFunction(() => window.__viewer.rendered.get(3)?.textDiv?.childElementCount > 0);
+  check('放大后翻页保持透明纸底', await page.evaluate(() => window.__viewer.current === 3 && window.__viewer.rendered.get(3).paper === 'rgba(0, 0, 0, 0)'));
+  await page.click('#settingsBtn');
+  await page.waitForSelector('#settingsModal:not(.hidden)');
+
   /* ── 纯黑：暗色表面纯黑、无阴影（不发光） ── */
   await setTheme('black');
+  await page.waitForFunction(() => {
+    const v = window.__viewer; const e = v.rendered.get(v.current);
+    return e && e.paper !== 'rgba(0, 0, 0, 0)' && e.canvas.getContext('2d').getImageData(2, 2, 1, 1).data[3] === 255;
+  });
+  check('离开玻璃主题后恢复不透明纸底', true);
   const black = await themeState();
   check('纯黑皮肤：根主题生效', black.theme === 'black', black.theme);
   check('纯黑皮肤：背景变量是 #000000', black.bg.toLowerCase() === '#000000' && black.bgElev.toLowerCase() === '#000000',

@@ -363,9 +363,20 @@
           <div class="settings-pane-sub">主题与阅读字号立即生效；Ctrl/⌘ + = / - 也能随时调阅读字号。</div>
     <div class="settings-section-title">阅读助手样式</div>
     <div class="settings-grid settings-core-grid">
-      <label class="field"><span>主题</span><select id="uiTheme"><option value="system">跟随系统</option><option value="light">米宣</option><option value="mist">白瓷</option><option value="sage">青瓷</option><option value="dark">乌木</option><option value="graphite">石墨</option><option value="black">玄墨</option></select></label>
+      <label class="field"><span>主题</span><select id="uiTheme"><option value="glass">透光</option><option value="system">跟随系统</option><option value="light">米宣</option><option value="mist">白瓷</option><option value="sage">青瓷</option><option value="dark">乌木</option><option value="graphite">石墨</option><option value="black">玄墨</option></select></label>
       <label class="field"><span>阅读字号 <output class="range-value" id="uiFontSizeValue"></output></span><input id="uiFontSize" type="range" min="12" max="30" step="1" /></label>
     </div>
+    <div class="settings-section-title">玻璃阅读</div>
+    <div class="modal-note">选择「透光」主题后可调整；文字保持清晰，文档自带的白底图片保留原样。</div>
+    <fieldset id="glassAppearanceControls" class="glass-appearance-controls" aria-label="玻璃阅读样式">
+      <div class="settings-grid settings-core-grid">
+        <label class="field"><span>纸面透明度 <output class="range-value" id="uiGlassTransparencyValue"></output></span><input id="uiGlassTransparency" type="range" min="35" max="96" step="1" /></label>
+        <label class="field"><span>磨砂程度 <output class="range-value" id="uiGlassFrostValue"></output></span><input id="uiGlassFrost" type="range" min="0" max="32" step="1" /></label>
+        <label class="field"><span>纸面圆角 <output class="range-value" id="uiGlassRadiusValue"></output></span><input id="uiGlassRadius" type="range" min="3" max="24" step="1" /></label>
+        <label class="field"><span>背景亮度 <output class="range-value" id="uiGlassBrightnessValue"></output></span><input id="uiGlassBrightness" type="range" min="80" max="100" step="1" /></label>
+      </div>
+    </fieldset>
+    <label class="field field-switch"><input id="uiMotion" type="checkbox" /><span>交互动效（遵循系统的减少动态效果设置）</span></label>
         </section>
         <section class="settings-pane hidden" id="settingsPaneBehavior" data-pane="behavior" role="tabpanel" aria-labelledby="settingsNavBehavior">
           <div class="settings-pane-title">交互与发送</div>
