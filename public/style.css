@@ -754,6 +754,10 @@ body.dragging .viewer { pointer-events: none; }
      和 pdfview.js 里自己算的锚点打架（缩放后位置会飘）。锚点一律由 JS 管。 */
   overflow-anchor: none; }
 .pages { display: flex; flex-direction: column; align-items: center; width: max-content; min-width: 100%; gap: 14px; padding: 14px 0 50px; }
+/* Old render-scale overlays may extend beyond the new paper while repainting.
+   Only the laid-out paper defines horizontal travel. Preview transforms retain
+   their own clipping at the viewer while the pointer gesture is in progress. */
+.pages:not(.zoom-preview):not(.two-up) { overflow-x: clip; }
 
 /* 双页显示（用户口径 2026-11-02）：两页一行、按行换行。页宽仍由 JS 布局按比例写死，
    这里只负责换成横向 flex 并留出页间距；间距值必须和 pdfview.js 的 TWO_UP_GAP 一致。 */
@@ -3019,15 +3023,19 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
 :root[data-theme="glass"] .modal { background: rgba(45, 45, 45, .22); }
 :root[data-theme="glass"] .brand img { filter: grayscale(1); }
 :root[data-theme="glass"] #main > .main-row {
-  padding: 18px 18px 10px;
+  padding: 8px 10px 0;
   background: transparent;
 }
 :root[data-theme="glass"] .main-row .viewer-wrap {
   background: transparent;
-  border-color: transparent;
+  border: 0;
+  border-radius: 0;
   box-shadow: none;
 }
 :root[data-theme="glass"] .viewer { background: transparent; }
+:root[data-theme="glass"] :is(.viewer, .ai-body) { scrollbar-color: auto; }
+:root[data-theme="glass"] :is(.viewer, .ai-body)::-webkit-scrollbar { width: 10px; height: 10px; }
+:root[data-theme="glass"] .pages { padding-top: 8px; padding-bottom: 24px; }
 :root[data-theme="glass"] .main-row .side {
   background: transparent;
   border: 0;
@@ -3110,19 +3118,19 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
 :root[data-theme="glass"] .send-plane { display: none; }
 :root[data-theme="glass"] .glass-send-arrow { display: block; }
 :root[data-theme="glass"] #composer {
-  padding: 15px 12px 6px; border: 0; position: relative; z-index: 6;
+  padding: 8px 10px 6px; border: 0; position: relative; z-index: 6;
 }
 :root[data-theme="glass"] .composer-opts { padding: 6px 5px 0; }
 /* 侧栏融入同一背景，只有纸面、提问与输入区保留玻璃表面。 */
 :root[data-theme="glass"] :is(.side-head, .sec-head, .aibar, .sessbar) { border-color: transparent; box-shadow: none; }
 :root[data-theme="glass"] :is(.side-head, .sec-head):hover { background: transparent; }
-:root[data-theme="glass"] .splitter { flex-basis: 14px; background: transparent; }
+:root[data-theme="glass"] .splitter { flex-basis: 8px; background: transparent; }
 :root[data-theme="glass"] .splitter::after {
-  content: ''; position: absolute; width: 2px; top: 16px; bottom: 16px; left: 6px;
+  content: ''; position: absolute; width: 2px; top: 12px; bottom: 12px; left: 3px;
   border-radius: 2px; background: #8c8c8c; opacity: 0; transition: opacity .15s;
 }
 :root[data-theme="glass"] .splitter:is(:hover, :focus-visible, .dragging)::after { opacity: .4; }
-:root[data-theme="glass"] .aibar { padding: 8px 12px 12px; gap: 14px; }
+:root[data-theme="glass"] .aibar { padding: 4px 10px 7px; gap: 14px; }
 :root[data-theme="glass"] .aibar-btn {
   border: 0; border-radius: 0; padding: 5px 0; min-height: 30px;
   color: #626262; background: transparent; box-shadow: none;
@@ -3132,34 +3140,118 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
   box-shadow: inset 0 -1px 0 rgba(0, 0, 0, .3); font-weight: 500;
 }
 :root[data-theme="glass"] .aibar-btn:hover:not(:disabled) { background: transparent; color: #292929; }
-:root[data-theme="glass"] .sessbar { padding: 0 12px 12px; }
+:root[data-theme="glass"] .sessbar { padding: 0 10px 7px; }
 :root[data-theme="glass"] .ai-block { background: transparent; border-radius: 0; }
 :root[data-theme="glass"] .ai > .entry-card { background: transparent; }
 :root[data-theme="glass"] .ai-block::after { display: none; }
-:root[data-theme="glass"] .ai-body { padding-bottom: 14px; }
-:root[data-theme="glass"] .ai-body > .msg { padding: 10px 17px; }
+:root[data-theme="glass"] .ai-body { padding-bottom: 8px; }
+:root[data-theme="glass"] .ai-body > .msg { flex-shrink: 0; min-width: 0; padding: 10px 14px; gap: 7px; }
 :root[data-theme="glass"] .msg + .msg { border-top: 0; }
 :root[data-theme="glass"] .ai-body > .msg.user {
-  margin: 7px 12px 18px; padding: 11px 13px;
+  width: calc(100% - 20px); margin: 6px auto 10px; padding: 10px 12px;
   border: 1px solid rgba(255, 255, 255, .44);
   border-radius: 13px 13px 3px 13px;
   background: rgba(255, 255, 255, .20); opacity: 1;
 }
 :root[data-theme="glass"] .ai-body .msg .text { line-height: 1.85; }
-:root[data-theme="glass"] .ai-body .msg .text p + p { margin-top: 12px !important; }
+:root[data-theme="glass"] .ai-body .msg.user .text { padding: 0; background: transparent; border-radius: 0; }
+:root[data-theme="glass"] .msg.user .role:not(:has(.pg)) { display: none; }
+:root[data-theme="glass"] .ai-body .msg .text p + p { margin-top: 10px !important; }
+/* Output hierarchy: open answer text, a single glass question, and quiet
+   surfaces only where a formula, table or code block benefits from separation. */
+:root[data-theme="glass"] .msg :is(.text, .shots, .shot-item) { min-width: 0; max-width: 100%; }
+:root[data-theme="glass"] .msg .text :is(h1, h2, h3, h4, h5, h6) {
+  margin: 18px 0 8px; font-size: 1.08em; line-height: 1.5;
+  font-weight: 600; letter-spacing: -.015em; color: #252525;
+}
+:root[data-theme="glass"] .msg .text :is(h1, h2, h3, h4, h5, h6):first-child { margin-top: 0; }
+:root[data-theme="glass"] .msg .text :is(ul, ol) { margin: 9px 0 12px !important; padding-left: 1.45em; }
+:root[data-theme="glass"] .msg .text li { margin: 5px 0 !important; line-height: 1.8; }
+:root[data-theme="glass"] .msg .text li::marker { color: #666; font-variant-numeric: tabular-nums; }
+:root[data-theme="glass"] .msg .text :is(.md-quote, pre, .md-table-wrap, .katex-display) {
+  background: rgba(255, 255, 255, .18);
+  border: 1px solid rgba(255, 255, 255, .54); border-radius: 10px;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, .3);
+  margin: 12px 0;
+}
+:root[data-theme="glass"] .msg .text blockquote.md-quote {
+  padding: 8px 11px; border-left: 2px solid rgba(90, 90, 90, .26);
+  color: #555; font-size: .94em; line-height: 1.8;
+}
+:root[data-theme="glass"] .msg .text pre { padding: 11px 12px; line-height: 1.65; tab-size: 4; }
+:root[data-theme="glass"] .msg .text code { background: rgba(255, 255, 255, .36); padding: 2px 5px; border-radius: 4px; }
+:root[data-theme="glass"] .msg .text pre code { background: transparent; padding: 0; }
+:root[data-theme="glass"] .msg .text .katex-display { padding: 12px 10px; }
+:root[data-theme="glass"] .msg .text .md-table-wrap { padding: 0; }
+:root[data-theme="glass"] .msg .text .md-table { margin: 0; border: 0; font-size: .9em; line-height: 1.65; }
+:root[data-theme="glass"] .msg .text .md-table :is(th, td) {
+  padding: 8px 10px; border: 0; border-bottom: 1px solid rgba(120, 120, 120, .12);
+}
+:root[data-theme="glass"] .msg .text .md-table th { background: rgba(255, 255, 255, .24); font-weight: 600; color: #494949; }
+:root[data-theme="glass"] .msg .text .md-table tr:last-child td { border-bottom: 0; }
+:root[data-theme="glass"] .msg .text .md-table tbody tr:nth-child(even) { background: rgba(255, 255, 255, .08); }
+:root[data-theme="glass"] .msg .text a { text-decoration-color: #999; text-underline-offset: .24em; }
+:root[data-theme="glass"] .msg .text a:hover { color: #111; text-decoration-color: #555; }
+:root[data-theme="glass"] .msg :is(.ref, .ref.ref-jump) {
+  padding: 5px 20px 5px 9px; border-left: 1px solid #bcbcbc;
+  color: #5b5b5b; background: transparent; font-size: var(--ui-fs-xs);
+}
+:root[data-theme="glass"] .msg .ref.ref-jump:hover { background: rgba(255, 255, 255, .2); border-left-color: #888; }
+:root[data-theme="glass"] .msg :is(.shot-img, .text img) { border-radius: 9px; border-color: rgba(255, 255, 255, .65); }
+:root[data-theme="glass"] .msg .shot-index { display: block; margin: 0 0 4px; color: #666; font: var(--ui-fs-2xs)/1.5 var(--font-ui); }
+:root[data-theme="glass"] .msg .acts { opacity: .78; gap: 4px; flex-wrap: wrap; margin-top: 6px; }
+:root[data-theme="glass"] .msg .acts button { min-height: 25px; color: #606060; border-radius: 7px; }
+:root[data-theme="glass"] .msg .acts button:hover { color: #222; background: rgba(255, 255, 255, .4); }
+:root[data-theme="glass"] .msg :is(.role, .entry-basis, .entry-meta) { color: #626262; font-family: var(--font-ui); }
+:root[data-theme="glass"] .msg .entry-basis { margin: 0 0 2px; letter-spacing: 0; line-height: 1.7; }
+:root[data-theme="glass"] .msg .source-details { margin-top: 2px; padding-top: 8px; border-top: 1px solid rgba(125, 125, 125, .13); }
+:root[data-theme="glass"] :is(.source-details, .translation-original) > summary {
+  color: #606060; font-size: var(--ui-fs-xs); line-height: 1.8; width: fit-content;
+}
+:root[data-theme="glass"] .msg .src-list { gap: 6px; margin-top: 7px; }
+:root[data-theme="glass"] .msg .src-list li { align-items: baseline; }
+:root[data-theme="glass"] .msg .src-list .src-n { font-weight: 400; color: #6b6b6b; }
+:root[data-theme="glass"] .msg .src-list a { white-space: normal; overflow-wrap: anywhere; line-height: 1.6; }
+:root[data-theme="glass"] .ai-block[data-block="translate"] .msg.msg-translation { gap: 8px; }
+:root[data-theme="glass"] .ai-block[data-block="translate"] .msg.msg-translation + .msg {
+  margin-top: 6px; border-top: 1px solid rgba(125, 125, 125, .12); padding-top: 16px;
+}
+:root[data-theme="glass"] .ai-block[data-block="translate"] .translation-direction {
+  color: #626262; font-family: var(--font-ui); letter-spacing: .02em;
+}
+:root[data-theme="glass"] .ai-block[data-block="translate"] .msg.msg-translation .translation-source {
+  margin: 8px 0 4px; padding: 8px 11px; border: 1px solid rgba(255, 255, 255, .45);
+  border-radius: 9px; background: rgba(255, 255, 255, .15); color: #606060; line-height: 1.8;
+}
+:root[data-theme="glass"] .translation-segment-sources { display: flex; flex-wrap: wrap; gap: 4px 12px; }
+:root[data-theme="glass"] .translation-locate { text-decoration: underline; text-decoration-color: #aaa; text-underline-offset: 3px; }
+:root[data-theme="glass"] .msg .agent-steps {
+  padding: 8px 10px; gap: 5px; border-radius: 9px; background: rgba(255, 255, 255, .16);
+  border: 1px solid rgba(255, 255, 255, .4); font-family: var(--font-ui);
+}
+:root[data-theme="glass"] .msg .thinking { display: inline-flex; align-items: center; gap: 7px; color: #666; }
+:root[data-theme="glass"] .msg .thinking::before { content: ''; width: 5px; height: 5px; border-radius: 50%; background: #898989; }
+:root[data-theme="glass"] .msg :is(.entry-meta.failed, .stream-error) {
+  color: var(--err-text); padding: 7px 10px; border-radius: 7px; background: rgba(143, 67, 55, .045);
+  border-left: 2px solid rgba(143, 67, 55, .25); line-height: 1.7;
+}
+:root[data-theme="glass"] .msg .entry-meta.stopped { padding: 5px 0; color: #666; }
+:root[data-theme="glass"] .msg .note-edit { background: rgba(255, 255, 255, .22); border: 1px solid rgba(255, 255, 255, .6); border-radius: 9px; }
+:root[data-theme="glass"] .answer-card-controls { padding-top: 8px; border-top: 1px solid rgba(125, 125, 125, .12); }
+:root[data-theme="glass"] .answer-card-controls button { background: rgba(255, 255, 255, .2); border-color: rgba(255, 255, 255, .5); border-radius: 7px; }
 :root[data-theme="glass"] .page::before {
   content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
   background: linear-gradient(125deg, rgba(255, 255, 255, .086), transparent 35% 80%, rgba(255, 255, 255, .063));
 }
 :root[data-theme="glass"] .viewer-foot .grp { background: transparent; border-color: transparent; box-shadow: none; }
-:root[data-theme="glass"] .viewer-foot { padding-inline: 22px; }
+:root[data-theme="glass"] .viewer-foot { height: 38px; padding-inline: 10px; }
 :root[data-theme="glass"] :is(.sess-quick, .sess-menu, .ctx-menu, .ops-menu, .bubble, .notebox, .translation-card) {
   background: rgba(249, 249, 249, .96); border-color: rgba(255, 255, 255, .8);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, .7), 0 12px 28px rgba(0, 0, 0, .10);
   backdrop-filter: blur(min(var(--glass-frost), 20px));
 }
 @media (max-width: 1100px) {
-  :root[data-theme="glass"] #main > .main-row { padding: 12px 10px 6px; }
+  :root[data-theme="glass"] #main > .main-row { padding: 6px 6px 0; }
   :root[data-theme="glass"] .splitter { flex-basis: 8px; }
   :root[data-theme="glass"] .splitter::after { left: 3px; }
   :root[data-theme="glass"] #composer { padding-inline: 6px; }

@@ -55,6 +55,16 @@ const secondPage = layout([run('Next page first', 40, 50, 220, 10, { page: 2 })]
 assert.equal(selectionTextOf([...ordered.slice(-1), ...secondPage]), 'R3 right third line\n\nNext page first');
 console.log('PASS column-aware hit testing stays within its flow and cross-page text has an explicit boundary');
 
+const staggered = layout(Array.from({ length: 6 }, (_, i) => [
+  run(`L${i + 1} staggered body line`, 40, 100 + i * 20),
+  run(`R${i + 1} staggered body line`, 330, 110 + i * 20),
+]).flat());
+assert.deepEqual(staggered.map(item => item.text[0]), [...Array(6).fill('L'), ...Array(6).fill('R')],
+  'columns with offset baselines must not become one alternating full-width flow');
+assert.equal(selectionRunAt(staggered, 80, 130).text, 'L2 staggered body line');
+assert.ok(clipSelectionRuns(staggered, { index: 0, offset: 0 }, { index: 2, offset: 12 }).every(run => run.text.startsWith('L')));
+console.log('PASS staggered column baselines retain independent selection flows');
+
 const mixed = layout([
   run('L1 body', 60, 200, 194), run('R1 body', 330, 200, 210),
   run('L2 body', 60, 212, 170), run('[1]', 233, 210, 15, 7), run('R2 body', 330, 212, 180), run('[2]', 513, 210, 15, 7),

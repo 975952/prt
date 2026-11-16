@@ -82,7 +82,13 @@ try {
   const load = async () => {
     await page.goto(`${BASE}/?open=${encodeURIComponent('note-fixture.pdf')}&topbar=static`, { waitUntil: 'domcontentloaded' });
     await page.waitForSelector('.page[data-page="1"] canvas', { timeout: 30000 });
-    await wait(500);
+    await page.waitForFunction(() => window.__state?.viewerDocId === window.__state?.doc?.docId && window.__ctx);
+    await page.evaluate(async () => {
+      const sessions = await import('/js/sessions.js');
+      await sessions.sessionsOpenLatestForOutput();
+      window.__ctx.setPanelVisible('chat', true); window.__ctx.applyPanels();
+    });
+    await wait(250);
   };
 
   /**
@@ -169,7 +175,8 @@ try {
     edit?.acts.join('|') === '保存笔记|取消保存笔记', edit?.acts.join(' | '));
   check('② 输入框自动获得焦点（可以直接改）', !!edit?.focused);
   check('② 是一行窄条，不是弹窗（高度 < 40px）', (edit?.rowHeight || 999) < 40, `${edit?.rowHeight}px`);
-  check('② 没有弹出任何大型弹窗', await page.evaluate(() => !document.querySelector('[role="dialog"]') && document.querySelector('#settingsModal')?.classList.contains('hidden') !== false), '');
+  check('② 没有弹出任何大型弹窗', await page.evaluate(() => ![...document.querySelectorAll('[role="dialog"]')]
+    .some(node => node.getBoundingClientRect().width > 0) && document.querySelector('#settingsModal')?.classList.contains('hidden') !== false), '');
 
   // 用户改标题
   await page.evaluate(() => {
@@ -191,7 +198,7 @@ try {
   check('③ 不弹大型成功提示（只有轻量 toast）', await page.evaluate(() => {
     const wrap = document.querySelector('#toastWrap');
     const toasts = [...(wrap?.children || [])];
-    return toasts.length <= 2 && !document.querySelector('[role="dialog"]');
+    return toasts.length <= 2 && ![...document.querySelectorAll('[role="dialog"]')].some(node => node.getBoundingClientRect().width > 0);
   }), '');
 
   /* ── 存储结构 ── */

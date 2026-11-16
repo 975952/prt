@@ -302,7 +302,28 @@ await page.evaluate(() => {
 await sleep(800);
 const gAll = await geometry();
 check('整页选中时方块仍然互不重叠（不会糊成一块深蓝）', gAll.overlaps === 0, `${gAll.count} 块，重叠 ${gAll.overlaps} 对`);
-check('整页选中时没有半页大的方块', gAll.maxH < 0.25, `最高一块占页高 ${(gAll.maxH * 100).toFixed(1)}%`);
+// Dense lines may have touching glyph rectangles, whose exact union is tall.
+// Check actual whitespace coverage instead of assuming every tall union is bad.
+const largeMarks = await page.evaluate(() => {
+  const host = document.querySelector('.page[data-page="1"]');
+  const pageRect = host.getBoundingClientRect();
+  const glyphs = [...host.querySelectorAll('.textLayer span:not(.markedContent)')].flatMap(span => {
+    if (!span.firstChild || span.firstChild.nodeType !== 3 || !span.textContent.trim()) return [];
+    const range = document.createRange(); range.selectNodeContents(span.firstChild);
+    return [...range.getClientRects()];
+  });
+  return [...host.querySelectorAll('.sel-mark')].map(mark => mark.getBoundingClientRect())
+    .filter(rect => rect.height > pageRect.height * .25).map(rect => {
+      let hit = 0;
+      for (let x = 0; x < 10; x++) for (let y = 0; y < 32; y++) {
+        const px = rect.left + (x + .5) * rect.width / 10, py = rect.top + (y + .5) * rect.height / 32;
+        if (glyphs.some(g => px >= g.left - 1 && px <= g.right + 1 && py >= g.top - 1 && py <= g.bottom + 1)) hit++;
+      }
+      return hit / 320;
+    });
+});
+check('整页选中时大块高亮只覆盖连续文字、不涂满空白', largeMarks.every(coverage => coverage >= .98),
+  `最高一块占页高 ${(gAll.maxH * 100).toFixed(1)}%，大块文字覆盖率 ${JSON.stringify(largeMarks)}`);
 check('整页选中时只覆盖正文行、不覆盖整页',
   gAll.covered < 0.55 && gAll.count > 10,
   `覆盖 ${(gAll.covered * 100).toFixed(1)}% 页面积 · ${gAll.count} 块`);

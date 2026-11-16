@@ -13,6 +13,7 @@ import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 import { selectionFixtureRows, writeSelectionFixture } from './fixtures/make-selection-pdf.mjs';
 
 const desktop = process.argv.includes('--desktop');
+const staggered = process.argv.includes('--staggered');
 const CHROME = [process.env.CHROME, 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find((file) => file && fs.existsSync(file));
@@ -21,7 +22,7 @@ fs.mkdirSync(SANDBOX, { recursive: true });
 const scratch = fs.mkdtempSync(path.join(SANDBOX, `selection-columns-${desktop ? 'desktop' : 'node'}-`));
 const data = assertIsolatedDataDir(path.join(scratch, 'data')), papers = path.join(scratch, 'papers');
 fs.mkdirSync(data); fs.mkdirSync(papers);
-writeSelectionFixture(path.join(papers, 'selection-columns.pdf'));
+writeSelectionFixture(path.join(papers, 'selection-columns.pdf'), { rightColumnOffset: staggered ? 8 : 0 });
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 const listen = (server) => new Promise((resolve) => server.listen(0, '127.0.0.1', resolve));
 const results = [], pageErrors = [], apiCalls = [], chatBodies = [];

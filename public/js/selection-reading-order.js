@@ -41,6 +41,7 @@ function columnGutter(rows, bounds) {
   const minimum = Math.max(height * 1.8, (bounds.right - bounds.left) * 0.025);
   const paragraphWidth = Math.max(height * 6, (bounds.right - bounds.left) * 0.22);
   const gaps = [];
+  const paragraphSegments = [];
   rows.forEach((row, rowIndex) => {
     const items = [...row.items].filter((run) => run.text.trim()).sort((a, b) => a.left - b.left);
     const segments = [];
@@ -49,6 +50,8 @@ function columnGutter(rows, bounds) {
       if (previous && item.left - previous.right < minimum) previous.right = Math.max(previous.right, right(item));
       else segments.push({ left: item.left, right: right(item) });
     }
+    paragraphSegments.push(...segments.filter(segment => segment.right - segment.left >= paragraphWidth)
+      .map(segment => ({ ...segment, rowIndex, top: row.top })));
     for (let index = 1; index < segments.length; index += 1) {
       const left = segments[index - 1], next = segments[index];
       // Narrow equation labels/table cells are not evidence of paragraph columns.
@@ -56,6 +59,16 @@ function columnGutter(rows, bounds) {
       gaps.push({ left: left.right, right: next.left, rowIndex });
     }
   });
+  // Independent columns rarely have exactly aligned baselines. Pair nearby
+  // paragraph lines as gutter evidence as well; requiring paragraph widths and
+  // repeated support below keeps table cells and equation labels out.
+  for (const left of paragraphSegments) {
+    for (const next of paragraphSegments) {
+      if (left.rowIndex === next.rowIndex || Math.abs(left.top - next.top) > height * 1.6) continue;
+      if (next.left - left.right < minimum) continue;
+      gaps.push({ left: left.right, right: next.left, rowIndex: left.rowIndex });
+    }
+  }
   let best = null;
   for (const gap of gaps) {
     const x = (gap.left + gap.right) / 2;

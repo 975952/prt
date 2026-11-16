@@ -21,13 +21,13 @@ for (let page = 1; page <= 2; page++) {
   );
 }
 
-export function writeSelectionFixture(destination) {
+export function writeSelectionFixture(destination, { rightColumnOffset = 0 } = {}) {
   const objects = [];
   const add = (value) => { objects.push(Buffer.from(value, 'ascii')); return objects.length; };
   const catalog = add(''), pages = add('');
   const font = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>');
   const ids = [];
-  const text = (row) => `BT /F1 ${row.size} Tf 1 0 0 1 ${row.x} ${row.y} Tm (${row.text.replace(/[\\()]/g, '\\$&')}) Tj ET`;
+  const text = (row) => `BT /F1 ${row.size} Tf 1 0 0 1 ${row.x} ${row.y - (row.column === 'R' ? rightColumnOffset : 0)} Tm (${row.text.replace(/[\\()]/g, '\\$&')}) Tj ET`;
   for (let page = 1; page <= 2; page++) {
     const rows = selectionFixtureRows.filter((row) => row.page === page);
     const commands = [text({ x: 54, y: 760, size: 14, text: `Synthetic two-column selection fixture - page ${page}` }),

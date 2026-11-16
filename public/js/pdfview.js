@@ -1242,6 +1242,11 @@ export class PdfViewer {
     const tf = Math.abs(k - 1) < 0.0005 ? '' : `scale(${k})`;
     for (const layer of [entry.textDiv, entry.hlLayer, entry.hitLayer, entry.quoteLayer, entry.pinLayer]) {
       if (!layer) continue;
+      // These layers contain coordinates from the bitmap's render scale. With
+      // inset:0 alone they grow with the new page and are then scaled a second
+      // time, creating a blank scrollable area beyond the paper.
+      layer.style.width = `${entry.cssW}px`;
+      layer.style.height = `${entry.cssH}px`;
       layer.style.transformOrigin = '0 0';
       layer.style.transform = tf;
     }
@@ -1399,11 +1404,19 @@ export class PdfViewer {
     const next = clamp(scale, 0.15, 6);
     if (Math.abs(next - this.scale) < 0.0005) return;
     const anchor = keepCenter ? this._captureAnchor() : null;
+    const anchorPage = keepCenter ? this.pageEls[anchor?.page || this.current || 1] : null;
+    const oldRect = anchorPage?.getBoundingClientRect();
+    const centerX = this.container.getBoundingClientRect().left + this.container.clientLeft + this.container.clientWidth / 2;
+    const fractionX = oldRect?.width ? (centerX - oldRect.left) / oldRect.width : .5;
     this.scale = next;
     this._fitMode = false;
     this._softRescale();          // 先拉伸预览：不拆 DOM，就不会露灰条
     this.layout();
     if (anchor) this._restoreAnchor(anchor);
+    if (anchorPage) {
+      const rect = anchorPage.getBoundingClientRect();
+      this.container.scrollLeft += rect.left + fractionX * rect.width - centerX;
+    }
     this._scheduleRerender();     // 停下后再重画出清晰版
     this.opts.onScale?.(this.scale);
     this.opts.onStatus?.(`缩放 ${Math.round(this.scale * 100)}%`);
@@ -1433,6 +1446,9 @@ export class PdfViewer {
     this._softRescale();
     this.layout();
     this._restoreAnchor(anchor);
+    // Fit is also a reset of horizontal panning, including a previous zoom
+    // preview. Use the final layout's range rather than the old scroll offset.
+    this.container.scrollLeft = Math.max(0, (this.container.scrollWidth - this.container.clientWidth) / 2);
     this._scheduleRerender(80);
     this.opts.onScale?.(this.scale);
     this.opts.onStatus?.(`适应宽度 ${Math.round(this.scale * 100)}%`);

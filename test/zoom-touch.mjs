@@ -596,10 +596,11 @@ const inflated = await page.evaluate(async () => {
   c.scrollTop = 0;
   c.scrollLeft = 0;
   await new Promise((r) => setTimeout(r, 400));
-  // 把它撑大：真实内容只有一页宽，但横向滚动范围多出 2600px
+  // Inject outside .pages: page overlays are now clipped to the paper's layout
+  // width. This separate stress case still verifies defensive commit clamping.
   const junk = document.createElement('div');
   junk.style.cssText = 'position:absolute;left:2600px;top:0;width:40px;height:40px;pointer-events:none';
-  v.pageEls[1].appendChild(junk);
+  c.appendChild(junk);
   await new Promise((r) => setTimeout(r, 200));
   const natMaxX = Math.max(0, c.scrollWidth - c.clientWidth);
   const base = v.scale;
