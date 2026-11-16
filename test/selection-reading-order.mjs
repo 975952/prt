@@ -21,6 +21,13 @@ console.log('PASS interleaved columns use visual order, character clipping is di
 const withHeading = layout([run('Shared heading', 40, 65, 500, 18), ...body]);
 assert.equal(withHeading[0].text, 'Shared heading');
 assert.deepEqual(withHeading.slice(1).map((item) => item.text), ordered.map((item) => item.text));
+const withAuthors = layout([run('First author', 40, 65, 125), run('Second author', 170, 65, 125),
+  run('Third author', 300, 65, 125), run('Fourth author', 430, 65, 110), ...body]);
+assert.deepEqual(withAuthors.slice(0, 4).map((item) => item.text), ['First author', 'Second author', 'Third author', 'Fourth author']);
+assert.deepEqual(withAuthors.slice(4).map((item) => item.text), ordered.map((item) => item.text));
+const centeredHeading = layout([run('Centered heading', 250, 65, 100, 18), ...body]);
+assert.equal(centeredHeading[0].text, 'Centered heading');
+assert.deepEqual(centeredHeading.slice(1).map((item) => item.text), ordered.map((item) => item.text));
 const bands = layout([...body.filter((item) => !item.text.startsWith('note')),
   run('Shared mid-page heading', 40, 200, 500, 18),
   run('L4 lower left body', 40, 240), run('R4 lower right body', 330, 240),
@@ -47,3 +54,20 @@ assert.equal(selectionRunAt(uneven, 370, 135).text, 'R2 paragraph line');
 const secondPage = layout([run('Next page first', 40, 50, 220, 10, { page: 2 })]);
 assert.equal(selectionTextOf([...ordered.slice(-1), ...secondPage]), 'R3 right third line\n\nNext page first');
 console.log('PASS column-aware hit testing stays within its flow and cross-page text has an explicit boundary');
+
+const mixed = layout([
+  run('L1 body', 60, 200, 194), run('R1 body', 330, 200, 210),
+  run('L2 body', 60, 212, 170), run('[1]', 233, 210, 15, 7), run('R2 body', 330, 212, 180), run('[2]', 513, 210, 15, 7),
+  run('L3 body', 60, 224, 194), run('R3 body', 330, 224, 210),
+  run('Margin identifier', 12, 202, 16, 360, { rotation: 90 }),
+  run('L4 wider paragraph', 40, 260, 268), run('R4 body', 330, 260, 210),
+  run('L5 wider paragraph', 40, 272, 268), run('R5 body', 330, 272, 210),
+]);
+assert.deepEqual(mixed.map((item) => item.text), ['L1 body', 'L2 body', '[1]', 'L3 body', 'L4 wider paragraph', 'L5 wider paragraph',
+  'R1 body', 'R2 body', '[2]', 'R3 body', 'R4 body', 'R5 body', 'Margin identifier']);
+assert.equal(new Set(mixed.filter((item) => /^R[1-5]/.test(item.text)).map((item) => item.line)).size, 5);
+assert.equal(selectionRunAt(mixed, 307, 265).text, 'L4 wider paragraph', 'a wider lower paragraph remains inside the left flow');
+const marginIndex = mixed.findIndex((item) => item.text === 'Margin identifier');
+assert.equal(selectionTextOf(clipSelectionRuns(mixed, { index: marginIndex, offset: 0 },
+  { index: marginIndex, offset: mixed[marginIndex].text.length })), 'Margin identifier');
+console.log('PASS rotated margin text and small citations cannot join body rows or split indented columns');

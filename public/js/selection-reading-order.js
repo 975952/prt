@@ -16,11 +16,16 @@ function linesOf(runs) {
     for (let index = rows.length - 1; index >= 0; index -= 1) {
       const row = rows[index];
       if (row.bottom < run.top - run.height) break;
-      const overlap = Math.min(row.bottom, bottom(run)) - Math.max(row.top, run.top);
-      const value = overlap / Math.min(row.height, run.height);
+      // Compare with one actual line, never its expanding union. A superscript or
+      // a neighbouring column can otherwise bridge several separate baselines.
+      const reference = row.reference;
+      const overlap = Math.min(bottom(reference), bottom(run)) - Math.max(reference.top, run.top);
+      const centerGap = Math.abs(reference.top + reference.height / 2 - run.top - run.height / 2);
+      const value = overlap / Math.min(reference.height, run.height);
+      if (centerGap > Math.max(reference.height, run.height) * 0.6) continue;
       if (value > 0.45 && value > score) { closest = row; score = value; }
     }
-    if (!closest) rows.push({ top: run.top, bottom: bottom(run), height: run.height, items: [run] });
+    if (!closest) rows.push({ top: run.top, bottom: bottom(run), height: run.height, reference: run, items: [run] });
     else {
       closest.items.push(run);
       closest.top = Math.min(closest.top, run.top);
@@ -65,7 +70,20 @@ function columnGutter(rows, bounds) {
     const score = rowIds.length * Math.max(minimum, sharedWidth);
     if (!best || score > best.score) best = { x, score };
   }
-  return best?.x ?? null;
+  if (!best) return null;
+  // Indented abstracts can suggest a gutter inside the wider body below them.
+  // Refine it using full paragraph runs on both sides, excluding shared headings
+  // and short author/citation fragments. The flow boundary must lie in real space.
+  const paragraphs = rows.flatMap((row) => row.items).filter((run) => run.text.trim()
+    && run.width >= paragraphWidth && run.width < (bounds.right - bounds.left) * 0.65);
+  const left = paragraphs.filter((run) => run.left + run.width / 2 < best.x);
+  const rightRuns = paragraphs.filter((run) => run.left + run.width / 2 >= best.x);
+  if (left.length && rightRuns.length) {
+    const leftEdge = Math.max(...left.map(right));
+    const rightEdge = Math.min(...rightRuns.map((run) => run.left));
+    if (leftEdge < rightEdge) return (leftEdge + rightEdge) / 2;
+  }
+  return best.x;
 }
 
 /**
@@ -79,6 +97,13 @@ export function orderSelectionRuns(input, { width = 0, height = 0 } = {}) {
       && run.width >= 0 && run.height > 0);
   if (!runs.length) return [];
   const pageBounds = { left: 0, right: width || Math.max(...runs.map(right)), top: 0, bottom: height || Math.max(...runs.map(bottom)) };
+  const typicalHeight = median(runs.map((run) => run.height));
+  const isPeripheral = (run) => Math.abs(Math.sin((Number(run.rotation) || 0) * Math.PI / 180)) > 0.25
+    || run.height > Math.max(typicalHeight * 4, pageBounds.bottom * 0.08);
+  // Keep rotated margin notes selectable, but give them their own flow after the
+  // horizontal text. Their tall boxes must never become a body-line reference.
+  const peripheral = runs.filter(isPeripheral);
+  const main = runs.filter((run) => !isPeripheral(run));
   const order = (items, bounds, path, depth = 0) => {
     if (!items.length) return [];
     const rows = linesOf(items);
@@ -102,8 +127,18 @@ export function orderSelectionRuns(input, { width = 0, height = 0 } = {}) {
       band = []; bandIndex += 1;
     };
     rows.forEach((row, index) => {
-      // A single run that spans the gutter is a shared line, not text to split in half.
-      if (row.items.some((run) => run.left < gutter && right(run) > gutter && run.text.trim())) {
+      // A shared heading must cover substantial text area in both columns. Merely
+      // crossing the estimated gutter by a few pixels is still a column-local line.
+      // Adjacent fragments can make one heading/author line; a real column gap
+      // stays open even when its two baselines happen to overlap vertically.
+      const segments = [];
+      for (const run of [...row.items].filter((item) => item.text.trim()).sort((a, b) => a.left - b.left)) {
+        const previous = segments.at(-1);
+        if (previous && run.left - previous.right <= row.reference.height * 0.8) previous.right = Math.max(previous.right, right(run));
+        else segments.push({ left: run.left, right: right(run) });
+      }
+      if (segments.some((segment) => segment.right - segment.left > Math.max(row.reference.height * 4, (bounds.right - bounds.left) * 0.12)
+        && segment.left < gutter - row.reference.height * 1.5 && segment.right > gutter + row.reference.height * 1.5)) {
         flush();
         const flow = { left: bounds.left, right: bounds.right, top: row.top, bottom: row.bottom };
         output.push(...[...row.items].sort((a, b) => rtl(row.items) ? b.left - a.left : a.left - b.left)
@@ -113,7 +148,9 @@ export function orderSelectionRuns(input, { width = 0, height = 0 } = {}) {
     flush();
     return output;
   };
-  return order(runs, pageBounds, 'p');
+  return [...order(main, pageBounds, 'p'), ...peripheral.sort((a, b) => a.top - b.top || a.left - b.left)
+    .map((run, index) => ({ ...run, line: `p.margin:${index}`,
+      flow: { left: run.left, right: right(run), top: run.top, bottom: bottom(run) } }))];
 }
 
 /** Clip to actual character endpoints in geometric order, including backwards selections. */

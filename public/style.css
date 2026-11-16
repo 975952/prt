@@ -851,7 +851,7 @@ body.dragging .viewer { pointer-events: none; }
    （正文里仍然保持透明，改由 .sel-mark 画不重叠的方块，见 pdfview.js） */
 ::selection { background: var(--sel); }
 .textLayer ::selection { background: transparent; }
-.sel-mark { position: absolute; background: var(--sel); border-radius: 2px; pointer-events: none; }
+.sel-mark { position: absolute; background: var(--sel); border-radius: 0; pointer-events: none; }
 
 .search-hit-layer { position: absolute; inset: 0; z-index: 1; pointer-events: none; }
 .search-hit { position: absolute; background: var(--hit); border-radius: 2px; mix-blend-mode: multiply; }

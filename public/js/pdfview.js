@@ -2454,19 +2454,19 @@ export class PdfViewer {
     const entry = this.rendered.get(page);
     if (!entry?.textDiv) return [];
     if (entry.selectionRuns) return entry.selectionRuns;
-    let boxes = entry.hitBoxes;
-    if (!boxes) {
-      const layer = entry.textDiv.getBoundingClientRect();
-      const scale = layerScale(entry.textDiv);
-      boxes = [...entry.textDiv.querySelectorAll('span:not(.markedContent)')].flatMap((span) => {
-        const node = span.firstChild;
-        if (span.getAttribute('role') === 'img' || node?.nodeType !== 3 || !node.textContent) return [];
-        const range = document.createRange(); range.selectNodeContents(node);
-        const rect = range.getBoundingClientRect();
-        return rect.height > 0 ? [{ span, node, l: (rect.left - layer.left) / scale, t: (rect.top - layer.top) / scale,
-          w: rect.width / scale, h: rect.height / scale }] : [];
-      });
-    }
+    // Reading order uses actual text bounds, independently of the span boxes
+    // used to make pointer hit targets. Keep all coordinates in the layer's scale.
+    const layer = entry.textDiv.getBoundingClientRect();
+    const scale = layerScale(entry.textDiv);
+    const boxes = [...entry.textDiv.querySelectorAll('span:not(.markedContent)')].flatMap((span) => {
+      const node = span.firstChild;
+      if (span.getAttribute('role') === 'img' || node?.nodeType !== 3 || !node.textContent) return [];
+      const range = document.createRange(); range.selectNodeContents(node);
+      const rect = range.getBoundingClientRect();
+      return rect.height > 0 ? [{ span, node, rotation: parseFloat(span.style.getPropertyValue('--rotate')) || 0,
+        l: (rect.left - layer.left) / scale, t: (rect.top - layer.top) / scale,
+        w: rect.width / scale, h: rect.height / scale }] : [];
+    });
     entry.selectionRuns = orderSelectionRuns(boxes.map((box) => ({
       ...box, text: box.node.textContent || '', left: box.l, top: box.t, width: box.w, height: box.h,
       direction: box.span.dir || '', page,
@@ -3327,7 +3327,8 @@ function destTop(dest) {
 }
 
 function mergeRectsByLine(list) {
-  let rs = list.filter((r) => r.w > 0.0005 && r.h > 0.0005);
+  let rs = (list || []).filter((r) => r && [r.x, r.y, r.w, r.h].every(Number.isFinite)
+    && r.w > 0.0005 && r.h > 0.0005).map((r) => ({ x: r.x, y: r.y, w: r.w, h: r.h }));
   if (!rs.length) return [];
 
   // 先按高度中位数砍掉「不可能是文字行」的怪矩形。
@@ -3339,49 +3340,61 @@ function mergeRectsByLine(list) {
   rs = rs.filter((r) => r.h <= maxH);
   if (!rs.length) return [];
 
-  // 行高容差取「高度中位数的一半」：同一个视觉行里的碎片中心线基本重合，
-  // 相邻行则差着整整一个行距，用中心线聚类比「有重叠就并入」稳得多。
-  const tol = Math.max(0.002, medH * 0.6);
-
-  const rows = [];
-  for (const r of [...rs].sort((a, b) => (a.y + a.h / 2) - (b.y + b.h / 2))) {
-    const cy = r.y + r.h / 2;
-    const row = rows.find((R) => Math.abs(cy - R.cy) <= tol);
-    if (!row) { rows.push({ cy, items: [r] }); continue; }
-    row.items.push(r);
-    // 中心取平均：个别碎片位置偏一点也不会把整行拽歪
-    row.cy = row.items.reduce((s, x) => s + x.y + x.h / 2, 0) / row.items.length;
+  // 只合并上下边界相同、横向真正相接的碎片。不能用中心线或字号推断
+  // 整行范围：那会把两栏的中缝涂满，或把带小字号引用的正文截成半高。
+  const merged = [];
+  for (const r of rs.sort((a, b) => a.y - b.y || a.h - b.h || a.x - b.x)) {
+    const previous = merged.at(-1);
+    if (previous && previous.y === r.y && previous.h === r.h && r.x <= previous.x + previous.w + 1e-10) {
+      previous.w = Math.max(previous.x + previous.w, r.x + r.w) - previous.x;
+    } else merged.push(r);
   }
-
-  return rows.map((R) => {
-    const x0 = Math.min(...R.items.map((r) => r.x));
-    const x1 = Math.max(...R.items.map((r) => r.x + r.w));
-    // 高度取中位数，不用 max-min：否则一个偏高的碎片会把整行撑成大方块
-    const hs = R.items.map((r) => r.h).sort((a, b) => a - b);
-    const h = hs[Math.floor(hs.length / 2)];
-    return { x: x0, w: x1 - x0, y: R.cy - h / 2, h };
-  }).sort((a, b) => a.y - b.y);
+  return merged;
 }
 
 /**
- * 选区方块的最终形状：一行一个、互不重叠。
- * （同一行里的多列仍然各算各的：先按行合并，再对垂直方向的重叠对半分。）
+ * 保留真实字符矩形的并集，并拆成互不重叠的方块，避免半透明高亮叠色。
+ * 上下标、不同字号和紧行距都沿用 Range 的边界，不补中缝，也不削掉已选文字。
  */
-function normalizeRects(list) {
-  const lines = mergeRectsByLine(list).sort((a, b) => (a.y - b.y) || (a.x - b.x));
-  for (let i = 1; i < lines.length; i++) {
-    const a = lines[i - 1];
-    const b = lines[i];
-    // 合并后两行可能贴到一起，接口处对半分，保证不再有叠加
-    const overlap = (a.y + a.h) - b.y;
-    if (overlap > 0.0005 && overlap < Math.min(a.h, b.h)) {
-      const half = overlap / 2;
-      a.h -= half;
-      b.y += half;
-      b.h -= half;
+export function normalizeRects(list) {
+  const events = new Map();
+  for (const rect of mergeRectsByLine(list)) {
+    for (const [y, add] of [[rect.y, true], [rect.y + rect.h, false]]) {
+      if (!events.has(y)) events.set(y, []);
+      events.get(y).push({ rect, add });
     }
   }
-  return lines.filter((r) => r.w > 0.0005 && r.h > 0.0005);
+  const ys = [...events.keys()].sort((a, b) => a - b);
+  const active = new Set();
+  const result = [];
+  let previous = new Map();
+  for (let index = 0; index < ys.length - 1; index += 1) {
+    const y = ys[index], bottom = ys[index + 1];
+    for (const event of events.get(y)) {
+      if (event.add) active.add(event.rect);
+      else active.delete(event.rect);
+    }
+    const intervals = [];
+    for (const rect of [...active].sort((a, b) => a.x - b.x)) {
+      const last = intervals.at(-1);
+      const right = rect.x + rect.w;
+      if (last && rect.x <= last.right + 1e-10) last.right = Math.max(last.right, right);
+      else intervals.push({ x: rect.x, right });
+    }
+    const current = new Map();
+    for (const interval of intervals) {
+      const key = `${interval.x}:${interval.right}`;
+      let rect = previous.get(key);
+      if (rect) rect.h = bottom - rect.y;
+      else {
+        rect = { x: interval.x, y, w: interval.right - interval.x, h: bottom - y };
+        result.push(rect);
+      }
+      current.set(key, rect);
+    }
+    previous = current;
+  }
+  return result.sort((a, b) => a.y - b.y || a.x - b.x);
 }
 
 function countOccurrences(haystack, needle) {
