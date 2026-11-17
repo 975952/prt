@@ -83,9 +83,20 @@ fn main() {
         res.set("FileDescription", "prt");
         res.set("ProductName", "prt");
         res.set("LegalCopyright", "");
-        // 版本号写死字符串，避免为它再引一个 crate
-        res.set_version_info(winres::VersionInfo::FILEVERSION, 0x0001_0000_0000_0000);
-        res.set_version_info(winres::VersionInfo::PRODUCTVERSION, 0x0001_0000_0000_0000);
+        let version = env::var("CARGO_PKG_VERSION").expect("package version");
+        let parts = ["MAJOR", "MINOR", "PATCH"].map(|part| {
+            env::var(format!("CARGO_PKG_VERSION_{part}"))
+                .expect("version component")
+                .parse::<u16>()
+                .expect("version component must fit in a Windows version field")
+        });
+        let packed_version = (u64::from(parts[0]) << 48)
+            | (u64::from(parts[1]) << 32)
+            | (u64::from(parts[2]) << 16);
+        res.set("FileVersion", &version);
+        res.set("ProductVersion", &version);
+        res.set_version_info(winres::VersionInfo::FILEVERSION, packed_version);
+        res.set_version_info(winres::VersionInfo::PRODUCTVERSION, packed_version);
         if let Err(e) = res.compile() {
             // 没有 rc.exe（缺 Windows SDK）时不要整个构建失败 —— 只是没有 exe 图标而已
             println!("cargo:warning=嵌入 exe 图标失败（不影响功能）：{}", e);

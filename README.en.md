@@ -40,7 +40,7 @@ A local PDF reader for Windows, with translation, paper chat, and notes beside t
 
 No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
 
-**Version note:** previews and features reflect the current source; some features are not yet released. See the [release notes](https://github.com/975952/prt/releases/latest) for what is included in the download.
+**Current release:** [v1.2.0](https://github.com/975952/prt/releases/tag/v1.2.0), including the three themes, bilingual interface, and draft recovery shown here.
 
 ## Your data
 

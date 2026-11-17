@@ -2,7 +2,7 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide describes `main`. Check the release notes for features included in a downloaded binary.
+This guide covers [v1.2.0](https://github.com/975952/prt/releases/tag/v1.2.0), including the new themes, bilingual interface, and draft recovery.
 
 ## Open a paper
 

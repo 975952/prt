@@ -42,7 +42,7 @@
 
 桌面版免安装，无需 Node.js。支持 Windows 10/11 x64，需要 [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（多数系统已安装）。模型服务由你自行配置，服务费用按对应提供商规则计算。
 
-**版本说明：** 预览与功能介绍对应当前源码，部分功能尚未发布；下载版功能以 [Release 说明](https://github.com/975952/prt/releases/latest) 为准。
+**当前版本：** [v1.2.0](https://github.com/975952/prt/releases/tag/v1.2.0)，包含上方展示的三种主题、双语界面与草稿恢复功能。
 
 升级时，退出旧版并替换同一目录的 `prt.exe`，保留 `papers/` 和 `data/`。下载页提供 `SHA256SUMS.txt` 校验文件。
 
