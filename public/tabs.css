@@ -146,9 +146,7 @@
 /* 有标签时正文高度要给标签条让 32px（#main 原本是 calc(100vh - 顶栏)） */
 body.tabs-open #main { height: calc(100vh - var(--topbar-h) - 32px); }
 
-/* 全屏时标签条隐藏（全屏是「专心读这篇」，不显示工作区），正文高度回到原口径 */
-body.window-fullscreen .tab-bar { display: none; }
-body.tabs-open.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
+/* 全屏仍保留标签导航，与普通窗口使用相同的正文高度。 */
 /* 窄窗：标签更短，关闭按钮常显，避免点不到 */
 @media (max-width: 900px) {
   .doc-tab { max-width: 130px; min-width: 64px; padding-left: 7px; }

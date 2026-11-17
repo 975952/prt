@@ -178,9 +178,12 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
         menu.classList.remove('hidden'); menuOpen = true;
         menu.querySelector('button')?.focus();
       };
-      el.tabIndex = tab.docId === activeId ? 0 : -1;
+      el.tabIndex = tab.docId === activeId || (!activeId && tab === list[0]) ? 0 : -1;
       el.addEventListener('contextmenu', (e) => { e.preventDefault(); showContext(e.clientX, e.clientY); });
       el.addEventListener('keydown', (e) => {
+        if (e.target === el && (e.key === 'Enter' || e.key === ' ')) {
+          e.preventDefault(); onActivate?.(tab.docId); return;
+        }
         if (e.key === 'ContextMenu' || (e.shiftKey && e.key === 'F10')) {
           e.preventDefault(); const r = el.getBoundingClientRect(); showContext(r.left, r.bottom);
         }

@@ -947,6 +947,8 @@ const sessionWrites = createSessionWriteQueue();
 const pendingSessionMutations = new Set();
 const deletedChatKeys = new Set();
 let sessionNavigationSeq = 0;
+// 视图导航与文档任务分开：首页/重选当前标签只作废迟到的打开，不停止生成。
+let documentViewSeq = 0;
 let displayedChatKey = '';
 let renderingChatJob = null;
 const chatOwnerKey = (scope, sid) => JSON.stringify([scope, sid || '']);
@@ -981,6 +983,7 @@ async function sessionWriteRequest(url, options, scope, sid) {
   return response;
 }
 function beginDocumentNavigation() {
+  documentViewSeq += 1;
   sessionNavigationSeq += 1;
   return (state.openSeq = (state.openSeq || 0) + 1);
 }
@@ -1107,7 +1110,7 @@ const currentChatSig = () => chatSigOf(
 
 /** 切走前：停放当前文档的右栏 DOM + 会话状态 + 目录/笔记 HTML + 滚动位置 */
 function parkDocView(docId) {
-  if (!docId || !state.doc || state.doc.docId !== docId) return;
+  if (!docId || !state.doc || state.doc.docId !== docId || state.viewerDocId !== docId) return;
   const blocks = {};
   for (const block of AI_BLOCKS) {
     // 问答块是全局会话共用的，切换论文时 DOM 原样保留（不参与停放/挂回，也就不会重绘）
@@ -1198,12 +1201,15 @@ function tabsPersist() {
 
 function syncHomeBtnVisibility() {
   const home = $('#homeBtn');
-  if (home) home.classList.toggle('hidden', tabsFeatureEnabled() && tabsStore.tabs.length > 0);
+  if (!home) return;
+  home.classList.remove('hidden');
+  if (document.body.classList.contains('reading')) home.removeAttribute('aria-current');
+  else home.setAttribute('aria-current', 'page');
 }
 
 function tabsSyncBar() {
   windowReady();
-  if (tabsStore.bar) tabsStore.bar.render(tabsStore.tabs, tabsStore.active);
+  if (tabsStore.bar) tabsStore.bar.render(tabsStore.tabs, document.body.classList.contains('reading') ? tabsStore.active : '');
   syncHomeBtnVisibility();
 }
 
@@ -1591,7 +1597,7 @@ function windowAction(type, extra) {
 
 /* ------------------------------------------------------------ 全屏
    桌面壳里走窗口 IPC（tao 真正无边框全屏，盖住任务栏；退出恢复原窗口大小）；
-   浏览器里降级用 Fullscreen API。进入后隐藏应用内顶栏与底栏（沉浸式），Esc 退出。 */
+   浏览器里降级用 Fullscreen API。只改变窗口大小，导航与阅读控件保持可用，Esc 退出。 */
 function fullscreenActive() {
   return !!(document.fullscreenElement || document.body.classList.contains('window-fullscreen'));
 }
@@ -1696,7 +1702,7 @@ function initTopbar() {
   document.body.classList.remove('topbar-auto', 'topbar-near');
   document.body.classList.add('topbar-static');
   const home = $('#homeBtn');
-  if (home) home.onclick = () => setView('home');
+  if (home) home.onclick = showHome;
   // 会话菜单（多会话）：点按钮开合，点外部/Esc 关掉
   const sessBtn = $('#sessBtn');
   if (sessBtn) {
@@ -2344,46 +2350,107 @@ async function loadServerState() {
   } catch { serverState = {}; }
 }
 
+let progressSaveChain = Promise.resolve();
+function queueProgressSave(payload) {
+  const pending = progressSaveChain.catch(() => {}).then(async () => {
+    const r = await runWithDeadline(signal => fetch('/api/state', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload), signal,
+    }), { timeoutMs: 15000 });
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+  });
+  progressSaveChain = pending;
+  return pending;
+}
+
 const saveProgress = debounce(async () => {
-  if (!state.doc || !viewer?.pdf || !document.body.classList.contains('reading')) return;
+  if (!state.doc || !viewer?.pdf || state.viewerDocId !== state.doc.docId || !document.body.classList.contains('reading')) return;
   const docs = { ...(serverState.docs || {}) };
   docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };
   serverState = { ...serverState, docs, lastDoc: state.doc.docId, lastUrl: state.doc.url, lastName: state.doc.name };
   try {
-    const r = await fetch('/api/state', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(serverState),
-    });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    await queueProgressSave(serverState);
   } catch (e) {
     toastAction(tr("阅读进度保存失败，当前进度仍在内存中。"), tr("重试"), () => saveProgressNow(), 'err', 10000);
   }
 }, 500);
 
 async function saveProgressNow({ silent = false } = {}) {
-  if (!state.doc || !viewer?.pdf || !document.body.classList.contains('reading')) return;
+  if (!state.doc || !viewer?.pdf || state.viewerDocId !== state.doc.docId || !document.body.classList.contains('reading')) return;
   const docs = { ...(serverState.docs || {}) };
   docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };
   const payload = { ...serverState, docs, lastDoc: state.doc.docId, lastUrl: state.doc.url, lastName: state.doc.name };
-  const r = await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-  if (!r.ok) throw new Error(`HTTP ${r.status}`);
   serverState = payload;
+  await queueProgressSave(payload);
   if (!silent) toast(tr("阅读进度已保存"), 'ok');
+}
+
+let homeReadingState = null;
+
+/** 首页只是工作区的另一视图：保留标签、PDF 与会话任务，作废迟到的打开回调。 */
+function showHome() {
+  if (document.body.classList.contains('reading') && viewer?.pdf && state.viewerDocId === state.doc?.docId) {
+    viewer.commitZoomPreview?.();
+    homeReadingState = {
+      docId: state.doc.docId, pdf: viewer.pdf, page: viewer.current,
+      ...viewer.capturePosition(), scrollLeft: viewer.container.scrollLeft,
+      fitMode: viewer._fitMode, anchor: viewer._captureAnchor(),
+      panels: AI_BLOCKS.map(block => {
+        const body = state.blockMeta?.[block.id]?.body;
+        return body ? { body, top: body.scrollTop, atEnd: body.scrollHeight - body.clientHeight - body.scrollTop < 60 } : null;
+      }).filter(Boolean),
+    };
+    // 在隐藏前取进度快照；首页不会停止当前会话的保存或生成。
+    void saveProgressNow({ silent: true }).catch(() => {
+      toast(tr("阅读进度保存失败，当前进度仍在内存中。"), 'err', 5000);
+    });
+  }
+  documentViewSeq += 1;
+  cancelSearch({ clearInput: true, close: true, focus: false });
+  hideDocLoading();
+  hideBubble();
+  hideTranslationCard();
+  hideOpsMenu();
+  tabsStore.bar?.closeMenu();
+  $('#citeBox')?.classList.add('hidden');
+  setView('home');
 }
 
 function setView(view) {
   const home = view === 'home';
   document.body.classList.toggle('reading', !home);
   $('#home')?.classList.toggle('hidden', !home);
+  tabsSyncBar();
   syncFootEnabled(!home);
   if (!home) {
+    if (state.doc) {
+      $('#docName').textContent = state.doc.name;
+      $('#docName').title = state.doc.name;
+      document.title = `${state.doc.name} · prt`;
+    }
     applyResponsiveLayout();
     refitViewer(0);
+    const saved = homeReadingState;
+    if (saved && saved.docId === state.doc?.docId && saved.pdf === viewer?.pdf) {
+      homeReadingState = null;
+      if (saved.fitMode) {
+        viewer.fitWidth();
+        viewer._restoreAnchor(saved.anchor);
+      } else {
+        viewer.setScale(saved.scale, { keepCenter: false });
+        viewer._fitMode = false;
+        viewer.layout();
+        viewer.container.scrollTop = saved.scrollTop;
+        viewer.container.scrollLeft = saved.scrollLeft;
+      }
+      viewer._handleScroll();
+      for (const panel of saved.panels) panel.body.scrollTop = panel.atEnd ? panel.body.scrollHeight : panel.top;
+    }
     return;
   }
   // 首页由样式临时隐藏阅读侧栏，不把首页布局保存成用户的阅读偏好。
   $('#docName').textContent = tr("书架");
+  $('#docName').title = '';
+  document.title = 'prt';
   state.homeReady = true;
   renderHome();
 }
@@ -3786,19 +3853,27 @@ async function importLocalFiles(files) {
  * 这里只维护「工作区标签列表 + 活动标签 + 持久化」。
  */
 async function openDoc(target = {}) {
-  const navigation = beginDocumentNavigation();
-  if (!tabsFeatureEnabled() || !tabsStore.booted) return openDocColdSwitch(target, { navigation });
+  // 回首页时保留的文档先恢复几何，随后切到别篇也能正确停放原阅读位置。
+  if (!document.body.classList.contains('reading') && homeReadingState
+      && state.viewerDocId === state.doc?.docId && viewer?.pdf === homeReadingState.pdf) setView('reading');
   const docId = String(target.docId || '');
+  if (docId && state.doc?.docId === docId && state.viewerDocId === docId && viewer?.pdf
+      && state.doc.path === (target.path || target.name)) {
+    documentViewSeq += 1;
+    if (tabsFeatureEnabled() && tabsStore.tabs.some(tab => tab.docId === docId)) tabsStore.active = docId;
+    if (!document.body.classList.contains('reading')) setView('reading');
+    tabsSyncBar();
+    tabsPersist();
+    return;
+  }
+  const navigation = beginDocumentNavigation();
+  const viewNavigation = documentViewSeq;
+  const current = () => state.openSeq === navigation && documentViewSeq === viewNavigation;
+  if (!tabsFeatureEnabled() || !tabsStore.booted) return openDocColdSwitch(target, { navigation });
   if (!docId) return openDocColdSwitch(target, { navigation });
   if (tabsStore.tabs.some((t) => t.docId === docId)) {
-    if (state.doc?.docId === docId && state.viewerDocId === docId && state.doc.path === (target.path || target.name)) {
-      tabsStore.active = docId;
-      tabsSyncBar();
-      tabsPersist();
-      return;
-    }
     await openDocColdSwitch(target, { navigation });
-    if (state.openSeq === navigation && state.doc?.docId === docId) {
+    if (current() && state.doc?.docId === docId) {
       const existing = tabsStore.tabs.find(tab => tab.docId === docId);
       if (existing) Object.assign(existing, tabFor(target));
       else tabsStore.tabs.push(tabFor(target));
@@ -3813,7 +3888,7 @@ async function openDoc(target = {}) {
     return;
   }
   await openDocColdSwitch(target, { navigation });
-  if (state.openSeq !== navigation || state.doc?.docId !== docId) return;
+  if (!current() || state.doc?.docId !== docId) return;
   if (!tabsStore.tabs.some(tab => tab.docId === docId)) tabsStore.tabs.push(tabFor(target));
   tabsStore.active = docId;
   tabsSyncBar();
@@ -3827,19 +3902,21 @@ async function closeTab(docId) {
   if (idx < 0) return;
   if (state.doc?.docId === id) {
     const navigation = beginDocumentNavigation();
+    const viewNavigation = documentViewSeq;
+    const superseded = () => state.openSeq !== navigation || documentViewSeq !== viewNavigation;
     parkChatSession();
     abortStream('tab-close', 'document');
     persistSession.cancel?.(); saveProgress.cancel?.();
     try {
       if (sessionSaveInFlight) await sessionSaveInFlight;
-      if (state.openSeq !== navigation) return;
+      if (superseded()) return;
       await saveSessionNow();
-      if (state.openSeq !== navigation) return;
+      if (superseded()) return;
       await saveProgressNow({ silent: true });
     } catch {
       toast(tr("保存失败，标签已保留，请重试"), 'err', 5000); return;
     }
-    if (state.openSeq !== navigation) return;
+    if (superseded()) return;
   }
   idx = tabsStore.tabs.findIndex(tab => tab.docId === id);
   if (idx < 0) return;
@@ -3900,14 +3977,16 @@ async function reopenClosedTab() {
 
 /** 关掉全部标签 → Welcome（现有 #home 书架页；文档对象保留，只是不在工作区里） */
 async function goWelcome({ skipSave = false } = {}) {
+  homeReadingState = null;
   const navigation = beginDocumentNavigation();
+  const viewNavigation = documentViewSeq;
   cancelSearch({ clearInput: true, close: true, focus: false });
   parkChatSession();
   abortStream('document-switch', 'document');
   hideDocLoading();
   // B 线 P2：回 Welcome 也把当前文档挂起（PDF 句柄 + 右栏 DOM），之后切回来是热切换
   if (state.doc?.docId) parkDocView(state.doc.docId);
-  if (state.doc?.docId && viewer?.pdf) {
+  if (state.doc?.docId && state.viewerDocId === state.doc.docId && viewer?.pdf) {
     try {
       const handle = viewer.detach();
       if (handle) {
@@ -3920,7 +3999,7 @@ async function goWelcome({ skipSave = false } = {}) {
   if (state.doc && !skipSave) {
     try { await saveSessionNow(); } catch { /* 保存失败不挡回首页 */ }
   }
-  if (state.openSeq !== navigation) return;
+  if (state.openSeq !== navigation || documentViewSeq !== viewNavigation) return;
   state.viewerDocId = null;
   displayedChatKey = '';
   refreshChatJobState();
@@ -3980,19 +4059,19 @@ function installTabsShortcuts() {
     }
     if (key === 't' && e.shiftKey) { e.preventDefault(); e.stopPropagation(); reopenClosedTab(); return; }
     if (key === 'tab' || e.key === 'PageDown' || e.key === 'PageUp') {
-      if (list.length < 2) return;
+      if (!list.length || (list.length < 2 && document.body.classList.contains('reading'))) return;
       e.preventDefault();
       e.stopPropagation();
       const cur = list.findIndex((t) => t.docId === (state.doc?.docId || tabsStore.active));
       const step = (e.shiftKey || e.key === 'PageUp') ? -1 : 1;
       const next = list[(cur + step + list.length) % list.length];
-      if (next && next.docId !== state.doc?.docId) activateTab(next.docId);
+      if (next && (next.docId !== state.doc?.docId || !document.body.classList.contains('reading'))) activateTab(next.docId);
       return;
     }
     if (/^[1-9]$/.test(e.key) && !e.shiftKey && !e.altKey) {
       const num = Number(e.key);
       const target = num === 9 ? list[list.length - 1] : list[num - 1];
-      if (target && target.docId !== state.doc?.docId) { e.preventDefault(); e.stopPropagation(); activateTab(target.docId); }
+      if (target && (target.docId !== state.doc?.docId || !document.body.classList.contains('reading'))) { e.preventDefault(); e.stopPropagation(); activateTab(target.docId); }
     }
   }, true);
 }
@@ -4046,7 +4125,8 @@ async function bootTabWorkspace() {
 
 async function openDocColdSwitch({ name, url, docId, path }, { navigation = beginDocumentNavigation() } = {}) {
   const myOpen = navigation;
-  const superseded = () => myOpen !== state.openSeq;
+  const viewNavigation = documentViewSeq;
+  const superseded = () => myOpen !== state.openSeq || viewNavigation !== documentViewSeq;
   if (superseded()) return;
   cancelSearch({ clearInput: true, close: true, focus: false });
   parkChatSession();
@@ -4069,6 +4149,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   if (superseded()) return;
   const prevDocId = state.doc?.docId || null;
   const prevPath = state.doc?.path || '';
+  const prevReady = state.viewerDocId === prevDocId;
   // B 线 P2：切走前把上一篇的右栏 DOM 与会话状态整体停放，切回来直接挂回（不重放渲染）
   if (prevDocId) parkDocView(prevDocId);
   // 用户口径：每次只处理一个文件夹；换到别的文件夹 = 关掉旧标签 + 开新会话
@@ -4145,7 +4226,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   if (!pdfHandles.get(docId)) showDocLoading(name);
   try {
     // B 线 P2：热切换 —— 先把上一篇挂起成句柄（同一篇下次切回来直接 attach）
-    if (prevDocId && prevDocId !== docId && viewer?.pdf) {
+    if (prevReady && prevDocId && prevDocId !== docId && viewer?.pdf) {
       try {
         const handle = viewer.detach();
         if (handle) {
@@ -4179,6 +4260,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
       }
       hotSwitch = false;
       await new Promise((res) => setTimeout(res, 300));
+      if (superseded()) return;
       r = await viewer.load(url, name, { size: paperSize });
     }
     hotMark('attach', tAttach);
@@ -4232,6 +4314,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   // 等一帧布局完成后重画第一页，避免出现「第一页糊、第二页清楚」的首屏差异。
   // （页面被隐藏时 rAF 不触发 —— 自动化 `--background` 窗口 —— 用定时器兜底。）
   await nextFrame();
+  if (superseded()) return;
   // B 线 P2：热切换时 attach 已经渲染了可见页，不再拆掉重画首屏（这是切换耗时的大头）
   if (!hotSwitch) await viewer.refreshPage?.(1);
   if (superseded()) return;
@@ -4292,6 +4375,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   // 换论文了：会话条要跟着换成这一篇的当前会话名（热切回直接用停放区的列表，不再请求）
   tStage = performance.now();
   if (!hotView) await loadSessionList();
+  if (superseded()) return;
   hotMark('sessionList', tStage);
   if (hotTrace) { hotTrace.hot = hotSwitch; window.__lastHotTrace = hotTrace; }
   renderSessionBar();

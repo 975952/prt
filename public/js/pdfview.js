@@ -609,7 +609,9 @@ export class PdfViewer {
   async attach(handle) {
     if (!handle || !handle.pdf) return { numPages: 0, stale: true };
     this._destroyed = false;
-    const gen = this._gen;
+    // A cached document can be restored while another PDF is still loading.
+    // Invalidate that load without destroying the cached PDF proxy.
+    const gen = ++this._gen;
     this.pdf = handle.pdf;
     this.url = handle.url || '';
     this.name = handle.name || '';
@@ -618,6 +620,7 @@ export class PdfViewer {
     this._sizeTasks = new Map();
     if (!this.baseSizes[1]) {
       const first = await this.pdf.getPage(1);
+      if (this._destroyed || gen !== this._gen) return { numPages: 0, stale: true };
       const vp1 = first.getViewport({ scale: 1 });
       this.baseSizes = new Array(this.numPages + 1);
       this.baseSizes[1] = { width: vp1.width, height: vp1.height, rotation: vp1.rotation };
@@ -658,6 +661,7 @@ export class PdfViewer {
     this._destroyed = false;
     const gen = this._gen;   // 本次加载的代际；任何异步回跳先比对它
     const lib = await initPdfjs();
+    if (this._destroyed || gen !== this._gen) return { numPages: 0, stale: true };
     // 几十 MB 以上的 PDF：只按需取需要的字节范围（disableAutoFetch/disableStream），
     // 不把整个 PDF 流式拉下来，也不让 pdf.js 后台把全文都载入内存。
     const big = Number(size) > 20 * 1024 * 1024;
@@ -895,7 +899,8 @@ export class PdfViewer {
 
   layout({ keepAnchor = false } = {}) {
     if (!this.pagesEl) return;
-    const anchor = keepAnchor ? this._captureAnchor() : null;
+    const visible = this.container.clientWidth > 0 && this.container.clientHeight > 0;
+    const anchor = keepAnchor && visible ? this._captureAnchor() : null;
     for (let i = 1; i <= this.numPages; i++) {
       const { width, height } = this._sizeOf(i);
       const page = this.pageEls[i];
@@ -905,6 +910,10 @@ export class PdfViewer {
       page.style.setProperty('--total-scale-factor', String(this.scale));
       page.style.setProperty('--scale-factor', String(this.scale));
     }
+    // Initial loads still need page dimensions while the bookshelf is shown.
+    // Hidden DOM measurements are zero; retain the last valid geometry until
+    // the reader is visible and can measure the pages again.
+    if (!visible) return;
     // 位置直接从 DOM 读，自动把 gap / padding 算进去，不会和 CSS 打架
     this.offsets = new Array(this.numPages + 1);
     this.heights = new Array(this.numPages + 1);
@@ -1497,6 +1506,7 @@ export class PdfViewer {
 
   fitWidth() {
     if (!this.pdf || !this.baseSizes[1]) return;
+    if (!(this.container.clientWidth > 0 && this.container.clientHeight > 0)) return;
     this.commitZoomPreview();
     const anchor = this._captureAnchor();
     this.scale = this._computeFitScale();

@@ -235,6 +235,8 @@ kbd { font-family: var(--mono); font-size: var(--ui-fs-xs); background: var(--bg
 .tbtn:hover { background: var(--bg-elev); color: var(--fg); box-shadow: var(--shadow-sm); }
 .tbtn.on { background: var(--accent); color: var(--accent-fg); }
 .tbtn[disabled] { opacity: .55; cursor: default; }
+#homeBtn { flex: 0 0 auto; gap: 5px; }
+#homeBtn[aria-current="page"] { background: var(--accent-soft); color: var(--accent); }
 .topbar-side-controls {
   display: flex; align-items: center; gap: 1px; margin-left: 2px; padding-left: 5px;
   border-left: 1px solid var(--border);
@@ -2891,7 +2893,7 @@ body.window-fullscreen #main { height: calc(100vh - var(--topbar-h)); }
 body:not(.reading) #main :is(#leftSide, #rightCols, #splitLeft, #railLeft, #railRight) { display: none; }
 :root body:not(.reading) #main > .main-row { padding: 0; }
 body:not(.reading) .viewer-foot,
-body:not(.reading) #topbar :is(#homeBtn, #opsBtn, #searchBtn, .topbar-side-controls) { display: none; }
+body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { display: none; }
 
 /* ── 应用内确认框（会话删除 / 清空） ────────────────────────────────────── */
 .sess-confirm-mask {

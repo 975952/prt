@@ -39,7 +39,7 @@ const SELF = [
 /** 会读外部 BASE、但没设置时自己起服务的套件：用 harness 服务跑 */
 const HYBRID = ['dnd'];
 /** 纯 Node 单元（不需要服务） */
-const NODE = ['memory-unit'];
+const NODE = ['memory-unit', 'viewer-visibility'];
 /** 需要外部 BASE 的旧套件 */
 const EXT = [
   'cjk', 'context', 'home', 'lab-leak', 'library', 'links', 'math', 'outline',

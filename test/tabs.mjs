@@ -1,11 +1,11 @@
 /**
  * B 线 P1：多标签工作区与 Welcome 验收（真浏览器 + 隔离服务，无真实 API）。
  *
- *   node test/tabs.mjs
+ *   node test/tabs.mjs [--desktop]
  *
  * 覆盖设计 §10.1 的 P1 范围：打开/激活/去重/顺序、关闭与 Welcome、快捷键、拖拽排序、
- * 溢出菜单、10 个上限、刷新恢复、全屏隐藏、首页按钮隐藏。
- * （热切换 / 文件夹会话 / 译文存档 / 后台任务属于 P2/P3，本套件不测。）
+ * 溢出菜单、10 个上限、刷新恢复、普通/全屏首页往返及晚加载保护。
+ * --desktop 使用隔离 exe 的真实内嵌资源；全屏调用使用桩，只验证页面状态和布局。
  */
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
@@ -13,7 +13,9 @@ import http from 'node:http';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, ROOT, SANDBOX } from './_env.mjs';
+import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 
+const desktop = process.argv.includes('--desktop');
 const scratch = fs.mkdtempSync(path.join(SANDBOX, 'tabs-'));
 const DATA = path.join(scratch, 'data');
 const PAPERS = path.join(scratch, 'papers');
@@ -28,6 +30,7 @@ for (let i = 1; i <= 8; i += 1) fs.copyFileSync(path.join(FIXTURES, 'cn-sample.p
 // 子文件夹里放一篇未打开文档，用来验溢出菜单的「当前文件夹」分组
 fs.mkdirSync(path.join(PAPERS, 'sub'), { recursive: true });
 fs.copyFileSync(path.join(FIXTURES, 'cn-sample.pdf'), path.join(PAPERS, 'sub', 'in-folder.pdf'));
+fs.copyFileSync(path.join(FIXTURES, 'multipage-sample.pdf'), path.join(PAPERS, 'slow-paper.pdf'));
 
 const CHROME = process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe';
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -51,12 +54,15 @@ let reader = null;
 let browser = null;
 try {
   const readerPort = await findPort();
-  reader = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+  const env = { PORT: String(readerPort), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS,
+    NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1' };
+  reader = desktop ? spawnReader(stageExe('tabs').exe, { args: ['--port', String(readerPort)], env })
+    : spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     env: {
       ...process.env, PORT: String(readerPort), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS,
       NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1',
     },
-    stdio: 'ignore',
+    stdio: 'ignore', windowsHide: true,
   });
   const BASE = `http://127.0.0.1:${readerPort}`;
   let ready = false;
@@ -66,6 +72,10 @@ try {
   }
   check('隔离服务启动', ready);
   if (!ready) throw new Error('isolated server failed to start');
+  for (const asset of ['style.css', 'js/app.js', 'js/tabs.js']) {
+    const actual = await fetch(`${BASE}/${asset}`).then(response => response.text());
+    check(`${desktop ? 'exe 内嵌' : '源码服务'} ${asset} 与当前文件一致`, actual === fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8'));
+  }
 
   browser = await puppeteer.launch({
     executablePath: CHROME,
@@ -76,6 +86,42 @@ try {
   const page = await browser.newPage();
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));
+  await page.evaluateOnNewDocument(() => {
+    localStorage.setItem('reader.locale', 'zh-CN');
+    localStorage.setItem('reader.session.onEnter', 'resume');
+    // The existing hot-switch assertions explicitly exercise one shared chat.
+    localStorage.setItem('reader.session.scopeMode', 'global');
+    Element.prototype.requestFullscreen = () => Promise.resolve();
+    document.exitFullscreen = () => Promise.resolve();
+    const originalFetch = window.fetch.bind(window);
+    window.fetch = async (input, init = {}) => {
+      const url = new URL(typeof input === 'string' ? input : input.url, location.href);
+      if (url.pathname === '/api/state' && init.method === 'POST') {
+        const payload = JSON.parse(init.body || '{}');
+        window.__progressRequests ||= []; window.__progressCompleted ||= [];
+        __progressRequests.push(payload);
+        if (window.__holdNextProgress) {
+          window.__holdNextProgress = false;
+          await new Promise(resolve => { window.__progressGate = { payload, release: resolve }; });
+        }
+        const response = await originalFetch(input, init); __progressCompleted.push(payload); return response;
+      }
+      if (url.pathname === '/api/config' && (!init.method || init.method === 'GET')) {
+        const data = await originalFetch(input, init).then(response => response.json());
+        return new Response(JSON.stringify({ ...data, hasApiKey: true, model: 'synthetic', autoTranslate: false }), { headers: { 'Content-Type': 'application/json' } });
+      }
+      if (url.pathname === '/api/chat') {
+        const body = JSON.parse(init.body || '{}');
+        if (/后台学习记忆提取器|滚动摘要|会话标题|起标题/.test(String(body.messages?.[0]?.content || ''))
+          || !JSON.stringify(body.messages || []).includes('HOME_RUNNING_TASK')) return new Response(JSON.stringify({ choices: [{ message: { content: '[]' } }] }), { headers: { 'Content-Type': 'application/json' } });
+        window.__homeModel = { aborted: false, body };
+        const stream = new ReadableStream({ start(controller) { __homeModel.controller = controller; }, cancel() { __homeModel.aborted = true; } });
+        init.signal?.addEventListener('abort', () => { __homeModel.aborted = true; try { __homeModel.controller.error(new DOMException('Stopped', 'AbortError')); } catch {} }, { once: true });
+        return new Response(stream, { headers: { 'Content-Type': 'text/event-stream' } });
+      }
+      return originalFetch(input, init);
+    };
+  });
 
   const settle = async () => {
     await page.waitForFunction(() => window.__state?.viewerDocId === window.__state?.doc?.docId
@@ -104,16 +150,18 @@ try {
     await settle();
   };
 
-  /* ── 1. 打开第一篇：标签条出现、首页按钮隐藏 ── */
+  /* ── 1. 打开第一篇：标签条和首页按钮可见 ── */
   await openFirst();
   let st = await tabs();
   check('打开一篇 → 1 个标签', st.length === 1 && st[0].name === 'paper-a.pdf', JSON.stringify(st));
   check('该标签是活动标签', (await page.evaluate(() => window.__ctx.activeTab)) === st[0].docId);
   check('标签条可见', await page.evaluate(() => !document.getElementById('tabBar').classList.contains('hidden')
     && !!document.querySelector('#tabStrip .doc-tab.active')));
-  check('有标签时顶栏首页按钮隐藏（DOM 保留）', await page.evaluate(() => {
+  check('有标签时顶栏首页按钮保持可见可点', await page.evaluate(() => {
     const btn = document.getElementById('homeBtn');
-    return !!btn && btn.classList.contains('hidden');
+    if (!btn) return false;
+    const r = btn.getBoundingClientRect(), hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+    return r.width > 0 && r.height > 0 && !btn.disabled && (hit === btn || btn.contains(hit));
   }));
 
   /* ── 2. 打开第二篇：2 个标签、第二个活动、顺序=打开顺序 ── */
@@ -130,6 +178,44 @@ try {
   check('重复打开不新增标签', dom.length === 2, String(dom.length));
   check('重复打开会激活已有标签', dom[0].active && !dom[1].active);
   check('冷切换后正文是 paper-a', await page.evaluate(() => window.__state.doc.name === 'paper-a.pdf'));
+
+  /* ── 3b. 首页是独立视图，普通和全屏都能回原标签或其他标签 ── */
+  for (const fullscreen of [false, true]) {
+    if (fullscreen) { await page.keyboard.press('F11'); await wait(300); }
+    await page.evaluate(() => __viewer.goToPage(5)); await wait(350);
+    const before = await page.evaluate(() => ({ tabs: __ctx.tabs.map(tab => tab.docId), id: __state.doc.docId,
+      page: __viewer.current, top: __viewer.container.scrollTop }));
+    await page.click('#homeBtn'); await page.waitForFunction(() => !document.body.classList.contains('reading'));
+    check(`${fullscreen ? '全屏' : '普通'}首页保留标签并清除文档活动态`, await page.evaluate(ids => __ctx.tabs.map(tab => tab.docId).join() === ids.join()
+      && document.querySelectorAll('#tabStrip .doc-tab.active').length === 0 && document.querySelector('#homeBtn').getAttribute('aria-current') === 'page'
+      && getComputedStyle(document.querySelector('#tabBar')).display !== 'none', before.tabs));
+    await page.click(`#tabStrip .doc-tab[data-doc="${before.id}"] .tab-title`); await settle();
+    check(`${fullscreen ? '全屏' : '普通'}首页点击同一标签恢复原阅读位置`, await page.evaluate(old => document.body.classList.contains('reading')
+      && __state.doc.docId === old.id && __viewer.current === old.page && Math.abs(__viewer.container.scrollTop - old.top) <= 3
+      && document.querySelector('#homeBtn').getAttribute('aria-current') !== 'page', before));
+    await page.click('#homeBtn'); await page.waitForFunction(() => !document.body.classList.contains('reading'));
+    const other = before.tabs.find(id => id !== before.id);
+    await page.click(`#tabStrip .doc-tab[data-doc="${other}"] .tab-title`); await settle();
+    check(`${fullscreen ? '全屏' : '普通'}首页点击另一标签恢复其文档`, await page.evaluate(id => document.body.classList.contains('reading') && __state.viewerDocId === id, other));
+    await page.click(`#tabStrip .doc-tab[data-doc="${before.id}"] .tab-title`); await settle();
+    await page.screenshot({ path: path.join(scratch, fullscreen ? 'tabs-fullscreen.png' : 'tabs-normal.png') });
+    if (fullscreen) { await page.keyboard.press('Escape'); await wait(300); }
+  }
+
+  /* 首页保留可达的键盘入口，Enter 和 Space 都能恢复文档。 */
+  for (const key of ['Enter', 'Space']) {
+    await page.click('#homeBtn'); await page.waitForFunction(() => !document.body.classList.contains('reading'));
+    const entry = await page.evaluate(() => {
+      const tabs = [...document.querySelectorAll('#tabStrip .doc-tab')];
+      return { id: tabs[0]?.dataset.doc, reachable: tabs.filter(tab => tab.tabIndex === 0).length,
+        firstReachable: tabs[0]?.tabIndex === 0 };
+    });
+    if (key === 'Enter') check('首页首个标签保留唯一键盘入口', entry.firstReachable && entry.reachable === 1, JSON.stringify(entry));
+    await page.focus('#tabStrip .doc-tab');
+    await page.keyboard.press(key); await settle();
+    check(`首页 ${key} 激活键盘聚焦标签`, await page.evaluate(id => document.body.classList.contains('reading')
+      && __state.viewerDocId === id && document.querySelector('#tabStrip .doc-tab.active')?.dataset.doc === id, entry.id));
+  }
 
   /* ── 4. 键盘切换：Ctrl+Tab / Ctrl+PageDown / Ctrl+1 ── */
   await page.keyboard.down('Control');
@@ -209,7 +295,7 @@ try {
     }));
     check('关掉全部标签 → 0 个标签', welcome.tabs === 0);
     check('Welcome：退出阅读态、书架页可见', !welcome.reading && welcome.homeVisible, JSON.stringify(welcome));
-    check('Welcome：标签条隐藏、文档名复位', welcome.tabBarHidden && /未打开文档/.test(welcome.docName));
+    check('Welcome：标签条隐藏、文档名复位', welcome.tabBarHidden && /未打开文档|书架/.test(welcome.docName));
     check('Welcome：底栏禁用', welcome.footDisabled);
     await page.goto(`${BASE}/?topbar=static`, { waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => typeof window.__ctx?.tabs !== 'undefined', { timeout: 40000 });
@@ -235,8 +321,9 @@ try {
     check('溢出菜单能打开', menu.visible);
     check('菜单列出全部标签', menu.items.some((t) => t.includes('paper-a.pdf')), JSON.stringify(menu.items.slice(0, 6)));
     check('菜单含「当前文件夹」或「书架」分组', menu.titles.some((t) => /当前文件夹|书架/.test(t)), JSON.stringify(menu.titles));
-    await page.evaluate(() => document.body.click());
-    await wait(200);
+    await page.click('#homeBtn');
+    await page.waitForFunction(() => !document.body.classList.contains('reading'));
+    check('返回首页同时关闭标签溢出菜单', await page.evaluate(() => document.querySelector('#tabMenu').classList.contains('hidden')));
   }
 
   /* ── 9. 上限 10 个 ── */
@@ -260,7 +347,7 @@ try {
     check('第 11 个被拒时有提示', await page.evaluate(() => [...document.querySelectorAll('.toast')].some((n) => /最多同时打开/.test(n.textContent))));
   }
 
-  /* ── 10. 刷新恢复工作区 + 全屏隐藏 ── */
+  /* ── 10. 刷新恢复工作区 + 全屏保留标签 ── */
   {
     const before = await tabs();
     const activeBefore = await page.evaluate(() => window.__ctx.activeTab);
@@ -277,7 +364,7 @@ try {
       document.body.classList.remove('window-fullscreen');
       return d;
     });
-    check('全屏时标签条隐藏', fsDisplay === 'none', fsDisplay);
+    check('全屏时标签条仍然可见', fsDisplay !== 'none', fsDisplay);
   }
 
   /* ── 11. 热切换（B 线 P2）：切回旧标签不重新下载/解析 PDF，页码/滚动保留，p95 < 350ms ── */
@@ -294,6 +381,7 @@ try {
       await openByDom('paper-a.pdf');
       await openByDom('paper-b.pdf');
     }
+    await settle();
     const activeFirst = await page.evaluate(() => window.__state.doc.name);
     const firstId = (await tabs()).find((t) => t.name === activeFirst)?.docId;
     // 在第一篇里造两条已渲染的回答并打标记：热切回时必须复用同一批 DOM（不重放渲染）
@@ -399,11 +487,69 @@ try {
     check('右侧问答栏没有闪烁光标节点', await page.evaluate(() => document.querySelectorAll('.cursor').length === 0));
   }
 
+  /* ── 12. 首页只是隐藏会话，生成继续；返回保留原消息节点 ── */
+  await page.evaluate(async () => { await __ctx.newSession({ silent: true }); __ctx.setAgentRead(false); __ctx.setScopeRange('current');
+    __ctx.setPanelVisible('chat', true); const input = document.querySelector('#chatInput'); input.value = 'HOME_RUNNING_TASK';
+    input.dispatchEvent(new Event('input', { bubbles: true })); window.__homeSend = __ctx.send(); });
+  await page.waitForFunction(() => window.__homeModel?.controller);
+  const liveDoc = await page.evaluate(() => {
+    const entry = __state.sessionEntries.find(e => e.status === 'pending' && e.retry?.question === 'HOME_RUNNING_TASK');
+    window.__homeAnswerNode = [...document.querySelectorAll('.msg.assistant')].find(node => node.__sessionRecord === entry);
+    if (!__homeAnswerNode) throw Error('Pending home answer node not found'); return __state.doc.docId;
+  });
+  await page.click('#homeBtn'); await page.waitForFunction(() => !document.body.classList.contains('reading'));
+  check('首页期间原会话的生成请求未取消', await page.evaluate(() => !__homeModel.aborted));
+  await page.evaluate(() => { __homeModel.controller.enqueue(new TextEncoder().encode('data: {"choices":[{"delta":{"content":"HOME_RUNNING_TASK completed while at home."}}]}\n\ndata: [DONE]\n\n')); __homeModel.controller.close(); });
+  await page.evaluate(() => window.__homeSend);
+  check('后台回答完成不会把首页强制切回阅读', await page.evaluate(() => !document.body.classList.contains('reading') && !__homeModel.aborted));
+  await page.click(`#tabStrip .doc-tab[data-doc="${liveDoc}"] .tab-title`); await settle();
+  const liveResult = await page.evaluate(() => ({ connected: __homeAnswerNode.isConnected, status: __homeAnswerNode.__sessionRecord?.status,
+    text: __homeAnswerNode.textContent, record: __homeAnswerNode.__sessionRecord?.text, aborted: __homeModel.aborted }));
+  check('回原标签显示已完成回答并复用原节点', liveResult.connected && liveResult.status === 'complete' && liveResult.text.includes('completed while at home.'), JSON.stringify(liveResult));
+
+  /* ── 12b. 旧进度保存延迟跨越 A→首页→B→首页，不能回滚新进度 ── */
+  await openByDom('paper-a.pdf'); await wait(700);
+  await page.evaluate(() => { window.__progressGate = null; window.__holdNextProgress = true; __viewer.goToPage(4); });
+  await wait(100); await page.click('#homeBtn');
+  await page.waitForFunction(() => !!window.__progressGate);
+  const progressStart = await page.evaluate(() => ({ count: __progressRequests.length, completed: __progressCompleted.length }));
+  await page.click(`#tabStrip .doc-tab[data-doc="${paperByName('paper-b.pdf').docId}"] .tab-title`); await settle();
+  await page.evaluate(() => __viewer.goToPage(2)); await wait(100); await page.click('#homeBtn');
+  await page.waitForFunction(() => !document.body.classList.contains('reading'));
+  check('旧保存等待期间新进度保持排队', await page.evaluate(start => __progressRequests.length === start.count, progressStart));
+  await page.evaluate(() => __progressGate.release());
+  const aId = paperByName('paper-a.pdf').docId, bId = paperByName('paper-b.pdf').docId;
+  await page.waitForFunction(({ aId, bId }) => __progressCompleted.some(payload => payload.docs?.[aId]?.page === 4
+    && payload.docs?.[bId]?.page === 2 && payload.lastDoc === bId), {}, { aId, bId });
+  const progress = await fetch(`${BASE}/api/state`).then(response => response.json());
+  check('延迟旧保存释放后A和B阅读页码都保留', progress.docs?.[aId]?.page === 4 && progress.docs?.[bId]?.page === 2 && progress.lastDoc === bId,
+    JSON.stringify({ a: progress.docs?.[aId], b: progress.docs?.[bId], last: progress.lastDoc }));
+  check('进度保存完成不改变首页视图', await page.evaluate(() => !document.body.classList.contains('reading')));
+
+  /* ── 13. PDF 下载晚于首页导航，旧加载不得把首页拉回去 ── */
+  let heldPdf = null, holdSlow = true;
+  await page.setRequestInterception(true);
+  page.on('request', request => {
+    if (holdSlow && !heldPdf && decodeURIComponent(request.url()).includes('slow-paper.pdf') && request.url().includes('/api/pdf')) { heldPdf = request; return; }
+    void request.continue();
+  });
+  await page.evaluate(doc => { window.__lateOpen = __ctx.openDoc(doc); }, paperByName('slow-paper.pdf'));
+  for (let i = 0; i < 100 && !heldPdf; i++) await wait(50);
+  check('晚加载测试确实截住目标PDF请求', !!heldPdf);
+  if (!heldPdf) throw new Error('late PDF request did not reach the gate');
+  await page.click('#homeBtn'); await page.waitForFunction(() => !document.body.classList.contains('reading'));
+  holdSlow = false; await heldPdf.continue(); await page.evaluate(() => window.__lateOpen); await wait(350);
+  check('首页期间迟到的PDF加载不改变可见视图或活动态', await page.evaluate(() => !document.body.classList.contains('reading')
+    && document.querySelectorAll('#tabStrip .doc-tab.active').length === 0 && document.querySelector('#homeBtn').getAttribute('aria-current') === 'page'));
+  await page.screenshot({ path: path.join(scratch, 'home-after-late-load.png') });
+
   check('操作期间没有页面错误', pageErrors.length === 0, pageErrors.join(' | '));
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n多标签 P1：${checks.length - failed.length}/${checks.length} 通过`);
+  fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop-assets' : 'source', fullscreenApi: 'stub', checks, pageErrors }, null, 2), 'utf8');
+  console.log(`证据：${scratch}`);
   process.exitCode = failed.length ? 1 : 0;
 } finally {
   try { await browser?.close(); } catch { /* ignore */ }
-  try { reader?.kill(); } catch { /* ignore */ }
+  await stopChild(reader);
 }
