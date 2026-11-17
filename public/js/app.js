@@ -938,6 +938,7 @@ let chatDomSig = '';
 // A conversation, rather than the visible PDF, owns its DOM and generation.
 const chatViews = new Map();
 const chatJobs = new Map();
+const retiredChatPdfs = new Set();
 let displayedChatKey = '';
 let renderingChatJob = null;
 const chatOwnerKey = (scope, sid) => JSON.stringify([scope, sid || '']);
@@ -948,13 +949,14 @@ function parkChatSession() {
   Object.assign(view, { nodes: [...(state.blockMeta.chat?.body?.children || [])],
     entries: state.sessionEntries.filter(row => row?.block !== 'translate'),
     history: state.history, summary: state.sessionSummary, summaryCovered: state.summaryCovered,
+    ops: [...state.opsCache.entries()].map(([id, value]) => ({ id, ...value })), teaching: serializeTeachingState(),
     scrollTop: state.blockMeta.chat?.body?.scrollTop || 0 });
   chatViews.set(displayedChatKey, view);
 }
 function mountChatSession(scope = sessionScopeKey(), sid = activeSidFor(state.doc?.docId)) {
   const key = chatOwnerKey(scope, sid), view = chatViews.get(key);
   displayedChatKey = key;
-  if (!view) return false;
+  if (!view) { clearChatBlock(); refreshChatJobState(); return false; }
   ensureBlock('chat');
   const body = state.blockMeta.chat.body;
   if (body.firstElementChild !== view.nodes[0] || body.children.length !== view.nodes.length) body.replaceChildren(...view.nodes);
@@ -969,6 +971,7 @@ function snapshotChatReader() {
   // when the visible viewer detaches it to display another tab.
   const reader = Object.assign(Object.create(Object.getPrototypeOf(viewer)), viewer);
   reader.textCache = new Map(viewer.textCache);
+  reader.scanCache = new Map(viewer.scanCache);
   reader._pageImageCache = new Map(viewer._pageImageCache);
   reader.currentVisiblePage = () => reader.current;
   return reader;
@@ -980,22 +983,52 @@ function refreshChatJobState() {
   else if (state.abort?.__chatJob) { state.abort = null; primaryBusy = false; }
   refreshBusyState();
 }
-async function saveChatJob(job) {
+function chatJobPayload(job) {
   const view = job.view;
-  const payload = { entries: view.entries, history: snapshotHistory(view.history),
+  const payload = { entries: view.entries.map(row => ({ ...row, retry: serialiseRetryPayload(row.retry) })), history: snapshotHistory(view.history),
+    ops: view.ops || [], teaching: view.teaching || null,
     summary: view.summary || '', summaryCovered: view.summaryCovered || 0, summaryPrompt: PROMPT_SYSTEM_VERSION,
     folderPath: job.folder, docIds: [...new Set(view.entries.map(row => row.docId).filter(Boolean))],
     docTitles: [...new Set(view.entries.map(row => row.docTitle).filter(Boolean))], updatedAt: Date.now() };
-  const response = await fetch(`/api/session?${sessionQuery(job.scope, job.sid)}&merge=1`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  let encoded = JSON.stringify(payload);
+  while (new TextEncoder().encode(encoded).byteLength > 350000 && payload.entries.length > 1) { payload.entries.shift(); encoded = JSON.stringify(payload); }
+  return encoded;
+}
+async function saveChatJob(job) {
+  if (job.discarded) return;
+  const response = await (job.writeInFlight = fetch(`/api/session?${sessionQuery(job.scope, job.sid)}&merge=1`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: chatJobPayload(job) }));
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   notifySessionSaved({ kind: 'chat', docId: job.docId, scope: job.scope, sid: job.sid });
 }
 function scheduleChatJobSave(job) {
+  if (job.discarded) return;
   clearTimeout(job.saveTimer);
-  job.saveTimer = setTimeout(() => { job.saveChain = (job.saveChain || Promise.resolve()).catch(() => {}).then(() => saveChatJob(job)).catch(error => {
+  job.saveTimer = setTimeout(() => { job.saveTimer = 0; job.saveChain = (job.saveChain || Promise.resolve()).catch(() => {}).then(() => saveChatJob(job)).catch(error => {
     toastAction(tr("会话保存失败，当前内容仍保留。"), tr("重试"), () => saveChatJob(job), 'err', 12000);
   }); }, 500);
+}
+function releaseRetiredChatPdfs() {
+  for (const pdf of retiredChatPdfs) {
+    if ([...chatJobs.values()].some(job => job.reader?.pdf === pdf)) continue;
+    retiredChatPdfs.delete(pdf);
+    if (viewer?.pdf === pdf || [...pdfHandles.values()].some(handle => handle.pdf === pdf)) continue;
+    try { Promise.resolve(pdf.destroy()).catch(() => {}); } catch { /* already released */ }
+  }
+}
+async function discardChatSession(scope, sid) {
+  const key = chatOwnerKey(scope, sid), job = chatJobs.get(key);
+  if (job) {
+    job.discarded = true;
+    clearTimeout(job.saveTimer);
+    job.controller.abort('session-delete');
+    await (job.saveChain || Promise.resolve()).catch(() => {});
+    await job.writeInFlight?.catch(() => {});
+    chatJobs.delete(key);
+  }
+  chatViews.delete(key);
+  releaseRetiredChatPdfs();
+  refreshChatJobState();
 }
 const currentChatSig = () => chatSigOf(
   state.doc ? activeSidFor(state.doc.docId) : '',
@@ -1082,6 +1115,7 @@ function dropPdfHandle(docId) {
   const handle = pdfHandles.get(docId);
   if (!handle) return;
   pdfHandles.delete(docId);
+  if ([...chatJobs.values()].some(job => job.reader?.pdf === handle.pdf)) { retiredChatPdfs.add(handle.pdf); return; }
   try { handle.pdf?.destroy?.(); } catch { /* 已经销毁 */ }
 }
 
@@ -3708,7 +3742,8 @@ async function closeTab(docId) {
   const idx = tabsStore.tabs.findIndex((t) => t.docId === id);
   if (idx < 0) return;
   if (state.doc?.docId === id) {
-    abortStream('tab-close');
+    parkChatSession();
+    abortStream('tab-close', 'document');
     persistSession.cancel?.(); saveProgress.cancel?.();
     try {
       if (sessionSaveInFlight) await sessionSaveInFlight;
@@ -6036,7 +6071,7 @@ function isScopeFileKey(fileKey) {
   const key = String(fileKey || '');
   if (!key) return false;
   if (key === sessionScopeKey()) return true;
-  return readSessionScopeMode() === 'global' && key === scopeDocIdOf('default');
+  return scopeDocIdOf(key) === scopeDocIdOf(sessionScopeKey());
 }
 /** 「当前会话」指针存哪一格：按文件夹 / 每篇论文 / 全局 */
 function activeSessionSlot(docId) {
@@ -6312,6 +6347,10 @@ function scheduleRemoteSession() {
 function onRemoteSessionSaved(data) {
   if (!data || data.sender === windowId) return;
   if (data.kind === 'translate') dropDocView(data.docId);
+  if (data.kind === 'chat') {
+    const key = chatOwnerKey(data.scope, data.sid);
+    if (key !== displayedChatKey && !chatJobs.has(key)) chatViews.delete(key);
+  }
   remoteSessionPending.push(data);
   scheduleRemoteSession();
 }
@@ -6531,9 +6570,12 @@ function ensureFolderForDoc(docId) {
 async function switchFolder(path) {
   const target = String(path || '');
   if (target === currentFolderPath()) return;
-  if (state.busy) { toast(tr("正在生成中，先等它跑完或点停止再换文件夹"), 'err', 3200); return; }
+  if (state.busy && !chatJobs.has(displayedChatKey)) { toast(tr("正在生成中，先等它跑完或点停止再换文件夹"), 'err', 3200); return; }
   // 先把旧文件夹会话存盘，再关旧标签、开新会话
   try { if (state.doc && state.sessionEntries.length) await saveSessionNow(); } catch { /* 存不下也允许切 */ }
+  parkChatSession();
+  displayedChatKey = '';
+  refreshChatJobState();
   state.currentFolder = target;
   state.folderClosed = false;
   persistCurrentFolder();
@@ -6821,7 +6863,10 @@ function restoreRetryCallback(row, entry, priorUser) {
 }
 
 async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, canApply = null } = {}) {
-  if (only !== 'translate' && mountChatSession(sessionScopeKey(), activeSidFor(docId))) return;
+  if (!canApply && only !== 'translate' && mountChatSession(sessionScopeKey(), activeSidFor(docId))) {
+    if (only === 'chat') return;
+    only = 'translate';
+  }
   try {
     // B 线 P3：首次打开旧数据 → 懒迁移（旧按文档会话 → 全局问答 + 文档译文，复制不删）
     if (!canApply) await migrateLegacySession(docId);
@@ -6999,6 +7044,8 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     }
     // 问答 DOM 已与磁盘上的全局会话对齐，记下指纹：下次切论文时不需要再重放
     if (replayChat) chatDomSig = sig;
+    if (!keepChat) parkChatSession();
+    refreshChatJobState();
     // AI 自动标题：只有「服务端自动标题」（首条问题）才升级；手动改名（user）绝不覆盖
     if (!canApply && String(savedChat.titleSource || 'auto') === 'auto') scheduleSessionTitle();
   } catch (e) { toast(tr("读取当前论文会话失败：{0}", e.message), 'err', 5000); }
@@ -7042,6 +7089,12 @@ function sessionsContext() {
     openSessionFromHistory: (row, opts) => openSessionFromHistory(row, opts || {}),
     startNewSession: (opts) => newSession(opts || {}),
     deleteSession: (sid) => deleteSession(sid, { confirm: false }),
+    discardSessionFile: async (scope, sid) => {
+      for (const key of [...chatViews.keys()]) {
+        const [ownerScope, ownerSid] = JSON.parse(key);
+        if (ownerSid === (sid || '') && (ownerScope === scope || scopeDocIdOf(ownerScope) === scopeDocIdOf(scope))) await discardChatSession(ownerScope, ownerSid);
+      }
+    },
     clearCurrentSession: () => clearCurrentSession({ confirm: false }),
     saveNow: () => saveSessionNow(),
     // 会话头/历史面板里的「会话设置」按钮：直接打开设置里的「会话」分类
@@ -7079,6 +7132,7 @@ async function clearCurrentSession({ confirm: askConfirm = true } = {}) {
   if (askConfirm && !confirm(tr("清空「{0}」的对话和 AI 结果？", state.doc.name))) return;
   closeSessionMenu();
   persistSession.cancel?.();
+  await discardChatSession(sessionScopeKey(), activeSidFor(state.doc.docId));
   // 只清问答；译文条目留在内存里（文档级，不属于任何会话），下次保存不会被覆盖成空
   state.sessionEntries = state.sessionEntries.filter((e) => e && e.block === 'translate');
   state.history = [];
@@ -7220,7 +7274,9 @@ async function switchSession(sid, { force = false } = {}) {
     return;
   }
   const docId = state.doc.docId;
-  if (!force && activeSidFor(docId) === (sid || '')) { closeSessionMenu(); return; }
+  if (activeSidFor(docId) === (sid || '') && (!force || chatViews.has(currentChatKey()))) {
+    mountChatSession(); closeSessionMenu(); renderSessionBar(); return;
+  }
   // force=true 来自「进文件夹选择卡片」：此时问答根本还没从磁盘装回来，
   // 先 saveSessionNow 会把当前空条目写进目标会话（实测会清空！）——必须跳过。
   // 空会话（只有译文条目）也不存，避免新建后没说话就留下一堆空会话文件。
@@ -7228,7 +7284,9 @@ async function switchSession(sid, { force = false } = {}) {
     persistSession.cancel?.();
     try { if (sessionSaveInFlight) await sessionSaveInFlight; await saveSessionNow(); } catch { /* 存不下也允许切 */ }
   }
-  parkChatSession();
+  // Forced startup/entry restoration has not loaded this conversation yet.
+  // Do not cache that empty placeholder over the session we are about to read.
+  if (!force || displayedChatKey !== chatOwnerKey(sessionScopeKey(), sid) || chatViews.has(displayedChatKey)) parkChatSession();
   setActiveSidFor(docId, sid || '');
   displayedChatKey = currentChatKey();
   refreshChatJobState();
@@ -7306,7 +7364,7 @@ async function adoptRowIntoScope(row) {
  *  论文已不在 papers/ 里时给提示（历史行仍保留，不会丢）。 */
 async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {}) {
   if (!row || !state.doc) return;
-  if (state.busy) {
+  if (state.busy && !chatJobs.has(displayedChatKey)) {
     toast(tr("正在生成中，先等它跑完或点停止再切换会话"), 'err', 3200);
     return;
   }
@@ -7326,7 +7384,6 @@ async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {
   const switchHere = async () => {
     if (!sid) return;
     if (!hasScopeCopy) await adoptRowIntoScope(row);
-    if (activeSidFor(currentId) !== sid) setActiveSidFor(currentId, sid);
     try {
       await switchSession(sid, { force: true });
     } catch {
@@ -7411,6 +7468,7 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   state.summaryCovered = 0;
   // 新会话 = 清掉 AI 功能记录（深入阅读/教学缓存），菜单里不再显示「已生成」
   resetFolderAiRecords();
+  parkChatSession();
   // 新会话先不落盘：首次发消息时 addEntry/finishEntry 会 scheduleSessionSave，
   // 那时才在服务端创建文件（设计 §3.5.3）。空会话不进列表，也就不会出现
   //「新建了几个空会话、继续上次却是空白」的问题。
@@ -7433,6 +7491,7 @@ async function deleteSession(sid, { confirm: askConfirm = true } = {}) {
   }
   const docId = state.doc.docId;
   if (askConfirm && !confirm(tr("删除这个会话？论文和笔记不受影响。"))) return;
+  await discardChatSession(sessionScopeKey(), sid);
   try {
     const r = await fetch(`/api/session?${sessionQuery(sessionScopeKey(), sid)}`, { method: 'DELETE' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -7831,12 +7890,12 @@ function sessionSummaryBlock() {
 }
 
 /** 所有问答 / 教学请求共用的「记忆块」：学习画像 + 长期记忆 + 论文讨论 + 会话摘要 */
-function askProfileBlock(docText = '', question = '', { docId = '' } = {}) {
+function askProfileBlock(docText = '', question = '', { docId = '', paperMemory = state.paperMemory, summary = state.sessionSummary } = {}) {
   return [
     buildProfileBlock(profileStore.data, docText, question, { docId }),
     longTermMemoryBlock(),
-    paperMemoryBlock(),
-    sessionSummaryBlock(),
+    paperMemory ? `【这篇论文之前的讨论摘要（由阅读器自动生成，不等于论文原文，不要当证据引用）】\n${String(paperMemory).trim()}` : '',
+    summary ? `【本次会话早先内容摘要（由阅读器自动生成，可能不完整；原文仍以最近几轮为准）】\n${String(summary).trim()}` : '',
   ].filter(Boolean).join('\n\n');
 }
 
@@ -7922,6 +7981,8 @@ function scheduleSessionSummary() {
       if (!clean) return;
       state.sessionSummary = clean;
       state.summaryCovered = target;
+      const view = chatViews.get(currentChatKey());
+      if (view) { view.summary = clean; view.summaryCovered = target; }
       scheduleSessionSave();
     } catch { /* 摘要失败静默：下一次轮次还会再试 */ }
     finally { sessionSummaryBusy = false; }
@@ -9098,9 +9159,9 @@ function followUpDirectEnabled() {
   return readFlag('reader.followUpDirect', FOLLOW_UP_DIRECT_DEFAULT);
 }
 /** 工具决策也流式接收：正文可以立即显示，工具参数等接收完整后再执行。 */
-async function agentModelCall({ messages, tools, timeoutMs = 60000, signal = null, onDelta }) {
+async function agentModelCall({ messages, tools, timeoutMs = 60000, signal = null, onDelta, onTick }) {
   return streamChat({ messages, tools, signal, onDelta, stream: true, rawResponse: true, idleMs: timeoutMs,
-    onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`) });
+    onTick: onTick || ((ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`)) });
 }
 
 /** 把图片直接放进首次用户消息，让模型自行决定回答还是查阅。 */
@@ -9262,6 +9323,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
       try {
         const result = await searchLibraryPages(query, scope, {
           papers: other.papers, maxHits: 60, timeBudgetMs: 18000,
+          folder: pending.chatJob?.folder ?? currentFolderPath(), activeId: pending.docId,
         });
         const hits = result.hits.slice(0, 24).map((h) => ({
           name: h.docName, folder: h.folder, page: h.page, snippet: String(h.snippet || '').slice(0, 420),
@@ -9423,7 +9485,8 @@ async function runAgentReadPath({ pending, reading, context, references, sources
     const run = await runAgentLoop({
       messages: base,
       runtime,
-      callModel: (req) => agentModelCall({ ...req, onDelta: deferAnswer ? null : onDelta }),
+      callModel: (req) => agentModelCall({ ...req, onDelta: deferAnswer ? null : onDelta,
+        onTick: ms => { if (!pending.chatJob || chatJobVisible(pending.chatJob)) setBusy(true, `${(ms / 1000).toFixed(0)}s`); } }),
       signal,
       onStep,
       totalTimeoutMs,
@@ -9461,7 +9524,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
   } catch {
     return null;
   } finally {
-    setHint('');
+    if (!pending.chatJob || chatJobVisible(pending.chatJob)) setHint('');
   }
 }
 
@@ -9556,11 +9619,11 @@ function citationMaterialsFor({ docCtx = null, context = '', references = [], sc
 }
 
 /** 引用核验：流式结束后算一次，渲染器按 raw 查表降级/拦截 */
-async function auditAnswerCitations(answer, { availablePages = null, scanned = false, reader = viewer } = {}) {
+async function auditAnswerCitations(answer, { availablePages = null, scanned = false, reader = viewer, scanDigest = state.scanDigest, publish = true } = {}) {
   try {
     const totalPages = Number(reader?.numPages) || 0;
     const pageTextFor = scanned
-      ? (p) => pageTextFromScanDigest(state.scanDigest, p)
+      ? (p) => pageTextFromScanDigest(scanDigest, p)
       : (p) => (reader?.getPageText ? reader.getPageText(p) : '');
     const result = await validateCitations(answer, {
       totalPages,
@@ -9568,12 +9631,10 @@ async function auditAnswerCitations(answer, { availablePages = null, scanned = f
       pageTextFor,
       scanned,
     });
-    activeCitationPlan = result.plan;
-    lastCitationStats = result.stats;
+    if (publish) { activeCitationPlan = result.plan; lastCitationStats = result.stats; }
     return result;
   } catch {
-    activeCitationPlan = null;
-    lastCitationStats = null;
+    if (publish) { activeCitationPlan = null; lastCitationStats = null; }
     return null;
   }
 }
@@ -9589,8 +9650,8 @@ async function auditForRenderedAnswer(answer, { docCtx = null, context = '', ref
 }
 
 function decoratePageRefs(html) {
-  const pages = Number(viewer?.numPages) || 0;
-  const plan = activeCitationPlan;
+  const pages = Number((renderingChatJob?.reader || viewer)?.numPages) || 0;
+  const plan = renderingChatJob ? renderingChatJob.citationPlan : activeCitationPlan;
   // 组合引用〔p.21–26, p.23, p.37〕：逐项渲染成页码按钮；任何一项越界/被核验拦截时整段保持原文，
   // 避免「一半可点一半是文字」的错位观感。必须在单条引用替换之前跑（单条正则不会误吃组合括号）。
   const listRe = /〔\s*p\s*\.\s*\d{1,4}(?:\s*[–\-—]\s*\d{1,4})?(?:\s*[,，、;；]\s*p\s*\.\s*\d{1,4}(?:\s*[–\-—]\s*\d{1,4})?)+\s*〕/g;
@@ -9810,6 +9871,11 @@ function initPageRefs() {
     if (!Number.isInteger(page) || page < 1) return;
     e.preventDefault();
     const fragment = btn.dataset.fragment || '';
+    const sourceDocId = btn.closest('.msg')?.__sessionRecord?.docId;
+    if (!btn.dataset.paper && sourceDocId && sourceDocId !== state.doc?.docId) {
+      const paper = state.papers.find(item => item.docId === sourceDocId);
+      if (paper) { openOtherPaperRef(paper.name, page, fragment); return; }
+    }
     // 其它论文的引用：自动打开那篇论文再跳页/高亮（当前论文的引用不会有 data-paper）
     if (btn.dataset.paper) { openOtherPaperRef(btn.dataset.paper, page, fragment); return; }
     if (fragment) { jumpToQuote(page, fragment, btn); return; }
@@ -9832,6 +9898,11 @@ function streamTarget(node) {
   const bodyEl = node.closest('.ai-body');
   const blockEl = node.closest('.ai-block');
   const entryEl = node.closest('.msg');
+  const renderForEntry = (text, view) => {
+    const previous = renderingChatJob;
+    renderingChatJob = entryEl?.__chatJob || null;
+    try { return renderAnswerHTML(text, view); } finally { renderingChatJob = previous; }
+  };
   if (entryEl) delete entryEl.__partialText;
   const stopTimers = () => {
     if (raf) { cancelAnimationFrame(raf); raf = 0; }
@@ -9857,7 +9928,9 @@ function streamTarget(node) {
     if (height <= visible) return Math.max(0, offset);
     return Math.max(0, offset + height - visible + 16);
   };
-  const ownsFollow = () => !entryEl?.classList.contains('msg-translation') || bodyEl?.firstElementChild === entryEl;
+  const ownsFollow = () => !!entryEl?.isConnected && bodyEl?.contains(entryEl)
+    && (!entryEl.__chatJob || chatJobVisible(entryEl.__chatJob))
+    && (!entryEl.classList.contains('msg-translation') || bodyEl?.firstElementChild === entryEl);
   const scrollFollow = () => { if (bodyEl && ownsFollow()) bodyEl.scrollTop = followTop(); };
   const ensureFollowBtn = () => {
     if (!blockEl) return null;
@@ -9881,7 +9954,7 @@ function streamTarget(node) {
   const hideFollow = () => { followEl?.classList.add('hidden'); };
   /* 用户向上滚（离开跟随位置）→ 停止自动跟随并出现悬浮的「↓」按钮；点按钮回来继续跟随 */
   const onBodyScroll = () => {
-    if (!active) return;
+    if (!active || !ownsFollow()) { hideFollow(); return; }
     following = Math.abs((bodyEl?.scrollTop || 0) - followTop()) < 90;
     if (following) hideFollow(); else showFollow();
   };
@@ -9904,7 +9977,7 @@ function streamTarget(node) {
     }
     if (splitAnswerSections(display)) {
       const current = node.querySelector('.answer-cards');
-      updateRenderedContent(node, renderAnswerHTML(display, { ...current?.dataset, streaming: true }));
+      updateRenderedContent(node, renderForEntry(display, { ...current?.dataset, streaming: true }));
       cardsActive = true;
       rawNode = null;
       paintedText = '';
@@ -9933,6 +10006,10 @@ function streamTarget(node) {
       // 工具调用标记（DSML / XML）绝不显示给用户：流式期间也实时剥离
       pending = stripAgentMarkup(text);
       lastContent = pending;
+      if (entryEl?.__chatJob && entryEl.__sessionRecord) {
+        entryEl.__sessionRecord.text = hideStreamTail(pending).slice(0, 48000);
+        if (!entryEl.__chatJob.saveTimer) scheduleChatJobSave(entryEl.__chatJob);
+      }
       if (raf || timer) return;
       raf = requestAnimationFrame(paint);
       timer = setTimeout(paint, 120);   // rAF 被节流时的兜底
@@ -9943,7 +10020,7 @@ function streamTarget(node) {
       const wasFollowing = following;
       active = false;
       const view = node.querySelector('.answer-cards')?.dataset || {};
-      updateRenderedContent(node, renderAnswerHTML(stripAgentMarkup(finalText), view));
+      updateRenderedContent(node, renderForEntry(stripAgentMarkup(finalText), view));
       rawNode = null; paintedText = '';
       hideFollow();
       bodyEl?.removeEventListener('scroll', onBodyScroll);
@@ -9960,7 +10037,7 @@ function streamTarget(node) {
         if (entryEl.__sessionRecord) entryEl.__sessionRecord.text = partial;
       }
       const view = node.querySelector('.answer-cards')?.dataset || {};
-      updateRenderedContent(node, `${renderAnswerHTML(partial, view)}<p class="stream-error">${esc(msg)}</p>`);
+      updateRenderedContent(node, `${renderForEntry(partial, view)}<p class="stream-error">${esc(msg)}</p>`);
       rawNode = null; paintedText = '';
       hideFollow();
       bodyEl?.removeEventListener('scroll', onBodyScroll);
@@ -11282,6 +11359,55 @@ let FULL_LIMIT = 100000;
 /** 索引模式下一次取几段原文 */
 const PICK_K = 6;
 
+async function renderChatJobPages(job, pages = []) {
+  const list = [...new Set(pages.map(Number))].filter(page => Number.isInteger(page) && page >= 1 && page <= job.reader.numPages);
+  const out = [];
+  let cursor = 0;
+  const worker = async () => {
+    while (cursor < list.length) {
+      if (job.controller.signal.aborted) throw new DOMException(tr("已停止"), 'AbortError');
+      const page = list[cursor++];
+      try { out.push({ page, ...await job.reader.capturePageImage(page, { maxDim: 1400 }) }); }
+      catch (error) { if (isAbort(error)) throw error; }
+    }
+  };
+  await Promise.all(Array.from({ length: Math.min(3, list.length) }, worker));
+  return out.sort((a, b) => a.page - b.page);
+}
+
+async function buildChatJobContext(job, question, selection, { page = null, whole = false } = {}) {
+  const reader = job.reader;
+  const check = () => { if (job.controller.signal.aborted) throw new DOMException(tr("已停止"), 'AbortError'); };
+  const hint = text => { if (chatJobVisible(job)) setHint(text); };
+  check();
+  const profile = await reader.scanDocProfile().catch(() => null);
+  check();
+  if (profile?.scanned || job.pending.scanned) {
+    hint(tr("扫描件：正在准备页面图片…"));
+    const pages = pickScanPages({ ...profile, numPages: reader.numPages }, {
+      question, page: page || job.pending.firstPage || reader.current || 1, whole,
+    });
+    const pageImages = await renderChatJobPages(job, pages);
+    check();
+    hint('');
+    return { text: '', mode: 'scan', chars: 0, profile, pageImages };
+  }
+  if (!job.docText) job.docText = await reader.getAllText((i, n) => { check(); hint(tr("正在读取整篇论文 {0}/{1} 页", i, n)); });
+  check();
+  const text = job.docText || '';
+  if (!text) { hint(''); return null; }
+  if (text.length <= FULL_LIMIT) { hint(''); return { text, mode: 'full', chars: text.length }; }
+  if (!job.docDigest) {
+    hint(tr("整篇论文较长，正在生成阅读索引（只做一次）…"));
+    job.docDigest = await chat({ messages: digestMessages({ text: text.slice(0, 240000), docTitle: job.docTitle }),
+      signal: job.controller.signal, onTick: () => hint(tr("正在生成阅读索引…")) });
+  }
+  check();
+  hint('');
+  return { text: `【阅读索引】\n${job.docDigest}\n\n【与本次问题最相关的原文段落】\n${pickRelevantPages(text, `${question}\n${selection || ''}`, PICK_K)}`,
+    mode: 'digest', chars: text.length };
+}
+
 async function buildDocContext(question, selection, { page = null, forTeaching = false, whole = false } = {}) {
   if (!state.doc) return null;
   const myDoc = state.doc.docId;
@@ -11414,7 +11540,7 @@ async function webSearch(query, signal) {
 }
 
 function readingRequestCurrent({ docId, openSeq, sid, chatJob }) {
-  if (chatJob) return chatJobs.get(chatJob.key) === chatJob || (chatJob.finished && displayedChatKey === chatJob.key);
+  if (chatJob) return !chatJob.discarded && (chatJobs.get(chatJob.key) === chatJob || (chatJob.finished && displayedChatKey === chatJob.key));
   return (state.doc?.docId || null) === docId && (openSeq == null || state.openSeq === openSeq)
     && (sid == null || activeSidFor(docId) === sid);
 }
@@ -11492,7 +11618,7 @@ function translateOnlyAsk(text) {
   return true;
 }
 
-let sendPreparing = false;
+const sendPreparing = new Set();
 function chatRetryPayload(pending) {
   return {
     kind: 'chat', docId: pending.docId, docTitle: pending.docTitle,
@@ -11503,11 +11629,12 @@ function chatRetryPayload(pending) {
   };
 }
 async function send(retryPending = null, retryDraft = null) {
-  if (sendPreparing) return;
-  sendPreparing = true;
+  const key = currentChatKey();
+  if (sendPreparing.has(key)) return;
+  sendPreparing.add(key);
   const guard = retryDraft || (retryPending ? captureRetryDraft(retryPending.entry, retryPending.docId) : null);
   try { return await sendWithDraft(retryPending, guard); }
-  finally { sendPreparing = false; }
+  finally { sendPreparing.delete(key); }
 }
 
 async function sendWithDraft(retryPending = null, retryDraft = null) {
@@ -11563,7 +11690,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     return;
   }
   if (!pending && !ta.value.trim() && !state.attachments.length) return;
-  if (pending && !pending.chatJob && pending.docId !== (state.doc?.docId || null)) {
+  if (pending && pending.docId !== (state.doc?.docId || null)) {
     flashHint(tr("这条请求属于另一篇论文，请切回原论文后重试"));
     return;
   }
@@ -11670,14 +11797,16 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
 
   const ctl = makeController();
   if (!ctl) return;
-  const reader = pending.chatReader || snapshotChatReader();
+  const reader = snapshotChatReader();
   pending.chatReader = reader;
   const scope = sessionScopeKey(), sid = activeSidFor(state.doc?.docId);
   displayedChatKey = chatOwnerKey(scope, sid);
   parkChatSession();
   const job = { key: displayedChatKey, scope, sid, folder: currentFolderPath(), docId: pending.docId,
     docTitle: pending.docTitle, reader, controller: ctl, view: chatViews.get(displayedChatKey), pending,
-    teaching: teachingProgressBlock(), summary: state.sessionSummary, finished: false };
+    teaching: teachingProgressBlock(), summary: state.sessionSummary, paperMemory: state.paperMemory,
+    scanDigest: state.scanDigestDoc === pending.docId ? state.scanDigest : '',
+    docText: state.docTextDoc === pending.docId ? state.docText : '', finished: false };
   ctl.__chatJob = job; pending.chatJob = job;
   pending.entry.root.__chatJob = job;
   if (pending.userEntry) pending.userEntry.root.__chatJob = job;
@@ -11821,7 +11950,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
           context, page: pending.firstPage, pageRole: pending.pageRole, docTitle: pending.docTitle,
           history: pending.history, reading, references, webResults: sources,
           availablePages: context && pending.firstPage ? [pending.firstPage] : [], pageImages: [], screenshotCount: images.length,
-          profileBlock: askProfileBlock(context || '', pending.question, { docId: pending.docId }),
+          profileBlock: askProfileBlock(context || '', pending.question, { docId: pending.docId, paperMemory: job.paperMemory, summary: job.summary }),
           teachingBlock: job.teaching,
         },
       });
@@ -11877,7 +12006,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // 记忆块：学习画像 + 用户手写长期记忆 + 本篇之前的讨论 + 本次会话滚动摘要。
     // 教学进度（「带我一步步读」）也在这里带上，避免自由追问时模型擅自推进下一步。
     const profileForAsk = askProfileBlock(context || '', pending.question,
-      { docId: pending.docId });
+      { docId: pending.docId, paperMemory: job.paperMemory, summary: job.summary });
     // P1.5：可用页码白名单 + 本轮要求（近因指令）+ 本次依据回执，全部由程序算好，不靠模型猜。
     citationMat = citationMaterialsFor({
       docCtx, context, references, scanned: scannedDoc, pending, sources, images, pageRole: pending.pageRole,
@@ -11929,7 +12058,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         // 同一页已经在 extraImages 里（read_scan_page 与 read_page_image 被同时调用）就不再渲染第二遍
         const attached = new Set(pageImages.map((im) => im.page).filter((n) => Number.isInteger(n)));
         const extraPages = agentRun.imagePages.filter((p) => !attached.has(p));
-        if (extraPages.length) pageImages = [...pageImages, ...await renderScanPages(extraPages.slice(0, 5))];
+        if (extraPages.length) pageImages = [...pageImages, ...await renderChatJobPages(job, extraPages.slice(0, 5))];
       } catch { /* 取页图失败不影响回答 */ }
     }
     if (!agentRun?.imagesProvided) attachAnswerImages(messages, images, pageImages, pending.question);
@@ -11985,7 +12114,8 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     const full = stripAgentMarkup(rawFull);
     if (!readingRequestCurrent(pending)) return;
     // 引用核验必须在最终渲染之前完成：不合格的片段降级成纯页码，编造的页码直接不渲染。
-    await auditAnswerCitations(full, { availablePages: citationMat.availablePages, scanned: scannedDoc, reader });
+    const audit = await auditAnswerCitations(full, { availablePages: citationMat.availablePages, scanned: scannedDoc, reader, scanDigest: job.scanDigest, publish: false });
+    job.citationPlan = audit?.plan || null;
     if (!readingRequestCurrent(pending)) return;
     target.done(full);
     job.view.history = snapshotHistory([...job.view.history, ...readingTurn(reading, full)]);
@@ -12021,7 +12151,8 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     clearTimeout(job.saveTimer);
     await (job.saveChain || Promise.resolve()).catch(() => {});
     await saveChatJob(job).catch(error => { toastAction(tr("会话保存失败，当前内容仍保留。"), tr("重试"), () => saveChatJob(job), 'err', 12000); });
-    chatJobs.delete(job.key);
+    if (chatJobs.get(job.key) === job) chatJobs.delete(job.key);
+    releaseRetiredChatPdfs();
     if (state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
     refreshChatJobState();
     // 「整篇」是单次发送范围：无论成功、失败还是用户停止，本次结束后复位。
@@ -12381,12 +12512,10 @@ function pageHitsInPaper(paper, entry, query, limit = 12) {
   return hits;
 }
 
-async function searchLibraryPages(query, scope = readSearchScope(), { onProgress, papers, maxHits = 120, timeBudgetMs = 0 } = {}) {
+async function searchLibraryPages(query, scope = readSearchScope(), { onProgress, papers, maxHits = 120, timeBudgetMs = 0, folder = currentFolderPath(), activeId = state.doc?.docId } = {}) {
   const q = String(query || '').trim();
   if (!q) return { hits: [], scanned: 0, total: 0, truncated: false };
   const all = (papers || state.papers || []).filter((p) => p && p.url);
-  const folder = currentFolderPath();
-  const activeId = state.doc?.docId;
   const targets = (scope === 'all' ? all : all.filter((p) => String(p.folder || '') === folder))
     .slice()
     .sort((a, b) => Number(b.docId === activeId) - Number(a.docId === activeId));
@@ -12784,6 +12913,7 @@ async function applySessionScopeMode(mode) {
   const prev = readSessionScopeMode();
   const want = mode === 'paper' || mode === 'global' ? mode : 'folder';
   if (prev === want) { updateSessionSettingHints(); return; }
+  if (chatJobs.has(displayedChatKey)) { toast(tr("正在生成中，先等它跑完或点停止再切换会话"), 'err', 3200); fillSessionSettings(); return; }
   persistSession.cancel?.();
   // ① 旧归属下先存一次：saveSessionNow 读 scope 键时还是旧模式
   if (docId) { try { await saveSessionNow(); } catch { /* 存不下也继续 */ } }
@@ -12801,6 +12931,7 @@ async function applySessionScopeMode(mode) {
     // 源文件不存在（例如刚启动还没落盘）时才退回按内存内容保存一次
     if (!copied) { try { await saveSessionNow(); } catch { /* 同上 */ } }
   }
+  if (docId) { displayedChatKey = chatOwnerKey(nextScopeKey, activeSidFor(docId)); parkChatSession(); }
   const label = next === 'global' ? tr("全局共用（所有论文接同一段对话）")
     : (next === 'paper' ? tr("按论文（每篇论文各接自己那一段）") : tr("按文件夹（同文件夹里的论文接同一段）"));
   toast(tr("换论文时对话怎么接：{0}", label), 'ok', 2600);
@@ -13388,6 +13519,9 @@ window.addEventListener('beforeunload', (event) => {
   // 不能只是 cancel：那样刚翻的那页进度就丢了。用 keepalive fetch 保证送达。
   saveProgress.cancel?.();
   persistSession.flush?.();
+  for (const job of chatJobs.values()) {
+    if (!job.discarded) saveOnUnload(`/api/session?${sessionQuery(job.scope, job.sid)}&merge=1`, chatJobPayload(job));
+  }
   if (state.doc) {
     try {
       // B 线 P3：unload 时分别保存全局问答与本文档译文（都走 keepalive）

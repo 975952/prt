@@ -53,6 +53,15 @@ try {
   page.on('requestfailed', r => { if (!r.failure()?.errorText.includes('ERR_ABORTED')) failed.push(r.url()); });
   await page.goto(`${base}/?open=${encodeURIComponent('新会话.pdf')}`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.numPages >= 2 && window.__state?.viewerDocId === window.__state.doc?.docId);
+  assert.equal(await page.evaluate(() => document.documentElement.lang), 'en', 'fresh profile starts in English');
+  assert.equal(await page.evaluate(() => localStorage.getItem('reader.locale')), null, 'fresh profile has no saved locale override');
+  await page.click('#settingsBtn'); await page.click('#settingsNavLanguage');
+  await page.select('#uiLanguage', 'zh-CN');
+  await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#applyLanguage')]);
+  await page.waitForFunction(() => window.__viewer?.numPages >= 2 && document.documentElement.lang === 'zh-CN'
+    && window.__state?.viewerDocId === window.__state.doc?.docId);
+  await page.click('#closeSettings');
+  console.log('Verified English default and explicit Chinese preference');
   console.log('Opened paper');
   await page.click('.aibar-btn[data-block="chat"]');
   await page.click('#sessNew');
@@ -64,7 +73,8 @@ try {
     ctx.finishEntry(e, '设置\n\n新会话\n\n原文内容不应改变。');
     await ctx.saveSessionNow();
     window.__viewer.goToPage(2);
-    return { sid:ctx.activeSession, docId:window.__state.doc.docId };
+    return { sid:ctx.activeSession, docId:window.__state.doc.docId,
+      targetLang:document.querySelector('#translateTargetLang').value };
   });
   await page.type('#chatInput', '设置 新会话 draft to keep');
   await page.click('#settingsBtn'); await page.click('#settingsNavLanguage');
@@ -78,7 +88,7 @@ try {
   failWrites = true;
   await page.click('#applyLanguage');
   await page.waitForFunction(() => document.querySelector('#toastWrap').textContent.includes('语言切换失败'));
-  assert.equal(await page.evaluate(()=>localStorage.getItem('reader.locale')), null, 'failed save does not commit locale');
+  assert.equal(await page.evaluate(()=>localStorage.getItem('reader.locale')), 'zh-CN', 'failed save retains the prior locale');
   assert.equal(await page.$eval('#chatInput', n=>n.value), '设置 新会话 draft to keep', 'failed save preserves draft');
   failWrites = false;
   await Promise.all([page.waitForNavigation({waitUntil:'domcontentloaded'}), page.click('#applyLanguage')]);
@@ -91,7 +101,7 @@ try {
   assert.equal(await page.$eval('#chatInput', n=>n.value), '设置 新会话 draft to keep', 'draft survives');
   assert.equal(await page.$eval('#docName', n=>n.textContent), '新会话.pdf', 'file name is not translated');
   assert.ok(await page.$eval('#aiArea', n=>n.textContent.includes('原文内容不应改变。')), 'existing answer stays unchanged');
-  assert.equal(await page.$eval('#translateTargetLang', n=>n.value), '中文', 'translation direction stays unchanged');
+  assert.equal(await page.$eval('#translateTargetLang', n=>n.value), prior.targetLang, 'translation direction stays unchanged');
   const allow = new Set(['语言 / Language','简体中文']);
   const scan = async () => page.evaluate(() => {
     const out=[], walker=document.createTreeWalker(document.querySelector('#settingsModal'),NodeFilter.SHOW_TEXT);

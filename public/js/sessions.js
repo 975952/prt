@@ -141,8 +141,8 @@ function isStale(row) {
 }
 
 /** 生成中守卫：所有会改变会话归属/显示的动作都要先过这一道（修 v3 缺陷③） */
-function guardBusy(label) {
-  if (st.busy || st.ctx?.isBusy?.()) {
+function guardBusy(label, { navigation = false } = {}) {
+  if ((st.busy || st.ctx?.isBusy?.()) && !(navigation && st.ctx?.canSwitchWhileBusy?.())) {
     toast(tr("正在生成中，先等它跑完或点停止再{0}", label), 'err', 3200);
     return false;
   }
@@ -269,6 +269,7 @@ async function deleteRowFile(row) {
   for (const c of copies) {
     const doc = c.fileKey || scope;
     if (!doc) continue;
+    await st.ctx?.discardSessionFile?.(doc, row.sid);
     const q = new URLSearchParams({ doc, sid: row.sid });
     const r = await fetch(`/api/session?${q}`, { method: 'DELETE' });
     if (r.ok || r.status === 404) continue;
@@ -357,7 +358,7 @@ function renderHeader() {
     ui.dot.hidden = !st.busy;
     ui.dot.classList.toggle('running', !!st.busy);
   }
-  if (ui.newBtn) ui.newBtn.disabled = !!st.busy;
+  if (ui.newBtn) ui.newBtn.disabled = !!st.busy && !st.ctx?.canSwitchWhileBusy?.();
   if (ui.histBtn) ui.histBtn.setAttribute('aria-expanded', String(st.historyOpen));
   if (ui.rightSide) {
     if (st.historyOpen) ui.rightSide.dataset.sessView = 'history';
@@ -373,7 +374,7 @@ export function sessionsRefreshHeader() {
 
 export function sessionsSetBusy(on) {
   st.busy = !!on;
-  if (st.busy) closeQuick();
+  if (st.busy && !st.ctx?.canSwitchWhileBusy?.()) closeQuick();
   renderHeader();
 }
 
@@ -413,6 +414,13 @@ export async function sessionsOnDocOpened(docId) {
   if (st.ctx?.consumeSessionOpen?.()) {
     st.ctx?.consumeFolderEntry?.();   // 这次只算「打开论文」，不算按策略进入文件夹
     st.ctx?.showChatAndRender?.();
+    return;
+  }
+
+  if (st.ctx?.hasLiveConversation?.()) {
+    st.ctx?.consumeFolderEntry?.();
+    st.ctx?.showChatAndRender?.();
+    await st.ctx.followCurrentSession?.();
     return;
   }
 
@@ -511,7 +519,7 @@ function renderEntryCard(lastRow) {
 }
 
 async function chooseSession(sidOrRow, docIdHint = '') {
-  if (!guardBusy(tr("切换会话"))) return;
+  if (!guardBusy(tr("切换会话"), { navigation: true })) return;
   // 历史面板的新排列会列出别的文件夹/别的论文的会话：拿到整行才能切文件夹、打开对应论文。
   // docIdHint：按文件排列时用户点的是哪篇论文分组 —— 优先在原论文打开会话，别乱跳。
   const row = typeof sidOrRow === 'string'
@@ -527,7 +535,7 @@ async function chooseSession(sidOrRow, docIdHint = '') {
 }
 
 async function doNewSession() {
-  if (!guardBusy(tr("新建会话"))) return;
+  if (!guardBusy(tr("新建会话"), { navigation: true })) return;
   const wasEntry = st.entryVisible;
   closeQuick();
   closeHistory();

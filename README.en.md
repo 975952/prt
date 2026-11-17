@@ -35,7 +35,7 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 | Compare papers | Tabs, separate windows, window tiling, and saved reading positions |
 | Understand a passage | Selection translation, explanations, source comparison, direct deletion of individual results, and clickable citations |
 | Discuss figures | Screenshot selection, long captures, vision-model questions, equations, and tables |
-| Continue a discussion | Folder conversations, history, cross-window sync, and saved drafts |
+| Continue a discussion | Per-paper or shared folder conversations, background generation, cross-window sync, and saved drafts |
 | Keep your bearings | Full-text search, outlines, highlights, notes, and reference lookup |
 | Read comfortably | Glass, Rice paper, and Dark themes; adjustable PDF elevation, edge highlights, translation card materials, and night text brightness |
 | Choose your language | Simplified Chinese and English throughout the interface; separate answer and translation languages |
@@ -45,17 +45,17 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 1. Download **prt.exe** from [Releases](https://github.com/975952/prt/releases/latest) and put it in a writable folder.
 2. Open it and import or drag in a PDF. Reading, search, and notes work without an AI service.
 3. For AI features, enter an OpenAI-compatible service URL, model name, and API key in Settings. Image questions require a vision-capable model.
-4. In **Settings → 语言 / Language**, select **English** and apply. You can set the answer language separately; the translation target stays independent.
+4. The interface starts in **English**. Use **Settings → Language / 语言** to switch between English and Simplified Chinese. The answer language and translation target can be set separately.
 
 No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.2.8](https://github.com/975952/prt/releases/tag/v1.2.8). Glass combines a near-white, subtly warm background with space around the PDF, soft outer shadows, and fine edge highlights. Rounded corners apply to the paper and the main home panel; sidebars stay flat and square. Library zoom, automatic paper titles, movable and resizable translation cards, and immediate deletion of individual translations remain available.
+**Current release:** [v1.2.9](https://github.com/975952/prt/releases/tag/v1.2.9). Generation belongs to its conversation: switching papers within the same conversation preserves the message view and continues the answer. Switching to another conversation leaves the original task running in the background; returning shows its latest output. Each task keeps the paper materials from when the question was submitted, preventing answers from drifting into a newly opened paper.
 
-In **Settings → Appearance**, adjust background tone, PDF elevation, and paper edge highlights. **Translation card material** offers Liquid glass and Frosted glass, each with independently saved transparency and blur; Liquid glass also has adjustable edge refraction. Initial card transparency is 55% for Liquid glass and 63% for Frosted glass, and both remain adjustable. Default page transparency is 12%, with 88% interface transparency.
+Updated appearance defaults include 17px reading text, 140% home zoom, 16% page transparency, 100% interface transparency, and 92% background brightness. All remain adjustable in **Settings → Appearance**. **Translation card material** offers independently saved Liquid glass and Frosted glass settings: Liquid starts at 35% transparency, 11.4px blur, and 99% edge refraction; Frosted starts at 71% transparency and 9.4px blur. See the [quick start](docs/quick-start.en.md#adjust-the-appearance) for the other defaults.
 
-v1.2.5 strengthens input highlights and shadows and raises the background brightness range to 92%–100%. Successive selections translate independently, with up to three results generating at once in a stable sidebar order. Closing a floating card no longer blocks the next selection. Narrow-column papers also retain correct selection boundaries when zoomed in.
+Conversations are managed per paper by default, with history ordered by time. Choose folder sharing in Settings to continue a discussion across papers in the same folder; ungrouped files then share a common root-folder conversation space.
 
-v1.2.6 fixes washed-out pastel diagram backgrounds and unreadable labels in dark reading. Pale fills become darker shades of their original hue, while photographs and saturated graphics keep their original colors.
+This release also includes recent reading fixes: clearer input highlights and shadows, a 92%–100% background brightness range, up to three translations generating at once in submission order, correct selection boundaries in narrow-column papers, and readable pastel diagram backgrounds in dark mode. **Search paper in browser** opens the default browser with a Bing query from citation cards and reference lists.
 
 <details>
 <summary>Preview both translation card materials</summary>

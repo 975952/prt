@@ -226,7 +226,7 @@ try {
         const data = ctx.getImageData(0, 0, c.width, c.height).data;
         let ink = 0, bg = 0;
         for (let i = 0; i < data.length; i += 4) {
-          if (data[i] === 203 && data[i + 1] === 205 && data[i + 2] === 207) ink++;
+          if (data[i] === 215 && data[i + 1] === 217 && data[i + 2] === 219) ink++;
           if (data[i + 3] === 0) bg++;
         }
         return { ink, bg };
