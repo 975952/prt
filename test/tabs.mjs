@@ -1,10 +1,10 @@
 /**
  * B 线 P1：多标签工作区与 Welcome 验收（真浏览器 + 隔离服务，无真实 API）。
  *
- *   node test/tabs.mjs [--desktop]
+ *   node test/tabs.mjs [--desktop] [--cross-folder-only]
  *
  * 覆盖设计 §10.1 的 P1 范围：打开/激活/去重/顺序、关闭与 Welcome、快捷键、拖拽排序、
- * 溢出菜单、10 个上限、刷新恢复、普通/全屏首页往返及晚加载保护。
+ * 溢出菜单、10 个上限、刷新恢复、普通/全屏首页往返、跨文件夹标签保留及晚加载保护。
  * --desktop 使用隔离 exe 的真实内嵌资源；全屏调用使用桩，只验证页面状态和布局。
  */
 import { spawn } from 'node:child_process';
@@ -16,6 +16,7 @@ import { assertIsolatedDataDir, ROOT, SANDBOX } from './_env.mjs';
 import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 
 const desktop = process.argv.includes('--desktop');
+const crossFolderOnly = process.argv.includes('--cross-folder-only');
 const scratch = fs.mkdtempSync(path.join(SANDBOX, 'tabs-'));
 const DATA = path.join(scratch, 'data');
 const PAPERS = path.join(scratch, 'papers');
@@ -30,6 +31,8 @@ for (let i = 1; i <= 8; i += 1) fs.copyFileSync(path.join(FIXTURES, 'cn-sample.p
 // 子文件夹里放一篇未打开文档，用来验溢出菜单的「当前文件夹」分组
 fs.mkdirSync(path.join(PAPERS, 'sub'), { recursive: true });
 fs.copyFileSync(path.join(FIXTURES, 'cn-sample.pdf'), path.join(PAPERS, 'sub', 'in-folder.pdf'));
+fs.mkdirSync(path.join(PAPERS, 'other'), { recursive: true });
+fs.copyFileSync(path.join(FIXTURES, 'multipage-sample.pdf'), path.join(PAPERS, 'other', 'third-folder.pdf'));
 fs.copyFileSync(path.join(FIXTURES, 'multipage-sample.pdf'), path.join(PAPERS, 'slow-paper.pdf'));
 
 const CHROME = process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe';
@@ -150,6 +153,7 @@ try {
     await settle();
   };
 
+  if (!crossFolderOnly) {
   /* ── 1. 打开第一篇：标签条和首页按钮可见 ── */
   await openFirst();
   let st = await tabs();
@@ -542,11 +546,103 @@ try {
   check('首页期间迟到的PDF加载不改变可见视图或活动态', await page.evaluate(() => !document.body.classList.contains('reading')
     && document.querySelectorAll('#tabStrip .doc-tab.active').length === 0 && document.querySelector('#homeBtn').getAttribute('aria-current') === 'page'));
   await page.screenshot({ path: path.join(scratch, 'home-after-late-load.png') });
+  }
+
+  /* ── 14. 标签属于工作区，跨文件夹只切文档，不隐式关闭其他标签 ── */
+  const crossFolderMatrix = async () => {
+    await page.goto(`${BASE}/?open=paper-a.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(id => window.__state?.viewerDocId === id && window.__ctx?.activeTab === id,
+      { timeout: 60000 }, paperByName('paper-a.pdf').docId);
+    // The explicit startup target only makes fixture setup deterministic; refresh must test the saved active tab.
+    await page.evaluate(() => history.replaceState(null, '', '/?topbar=static'));
+    await settle();
+    for (const tab of await tabs()) {
+      await page.evaluate(docId => __ctx.closeTab(docId), tab.docId);
+      if ((await tabs()).length) await settle();
+      else await page.waitForFunction(() => !document.body.classList.contains('reading'));
+    }
+    const docs = ['paper-a.pdf', 'sub/in-folder.pdf', 'other/third-folder.pdf'].map(file => {
+      const doc = papers.find(row => (row.path || row.name) === file);
+      if (!doc) throw new Error(`缺少跨文件夹夹具 ${file}`);
+      return doc;
+    });
+    const ids = docs.map(doc => doc.docId);
+    const workspace = () => page.evaluate(() => ({
+      ids: __ctx.tabs.map(tab => tab.docId), domIds: [...document.querySelectorAll('#tabStrip .doc-tab')].map(tab => tab.dataset.doc),
+      active: __ctx.activeTab, activeDom: [...document.querySelectorAll('#tabStrip .doc-tab.active')].map(tab => tab.dataset.doc),
+      doc: __state.doc?.docId, viewer: __state.viewerDocId, reading: document.body.classList.contains('reading'),
+      stored: JSON.parse(localStorage.getItem('reader.workspace.v1') || '{}').tabs?.map(tab => tab.docId),
+    }));
+    const keeps = (value, expected) => JSON.stringify(value.ids) === JSON.stringify(expected)
+      && JSON.stringify(value.domIds) === JSON.stringify(expected) && JSON.stringify(value.stored) === JSON.stringify(expected);
+    const current = (value, id) => value.reading && value.doc === id && value.viewer === id && value.active === id
+      && value.activeDom.length === 1 && value.activeDom[0] === id;
+    for (let index = 0; index < docs.length; index++) {
+      await page.evaluate(doc => __ctx.openDoc(doc), docs[index]); await settle();
+      const actual = await workspace();
+      check(`跨文件夹依次打开第 ${index + 1} 篇保留此前全部标签及顺序`, keeps(actual, ids.slice(0, index + 1)) && current(actual, ids[index]), JSON.stringify(actual));
+    }
+    if (!keeps(await workspace(), ids)) {
+      await page.screenshot({ path: path.join(scratch, 'cross-folder-tabs-lost.png') });
+      return;
+    }
+    for (const fullscreen of [false, true]) {
+      if (fullscreen) { await page.keyboard.press('F11'); await wait(250); }
+      const mode = fullscreen ? '全屏' : '普通';
+      for (let index = 0; index < docs.length; index++) {
+        await page.click(`#tabStrip .doc-tab[data-doc="${ids[index]}"] .tab-title`); await settle();
+        const actual = await workspace();
+        check(`${mode}跨文件夹点击${['首个', '中间', '最后'][index]}标签只切当前文档`, keeps(actual, ids) && current(actual, ids[index]), JSON.stringify(actual));
+      }
+      for (let index = 0; index < docs.length; index++) {
+        await page.click('#homeBtn'); await page.waitForFunction(() => !document.body.classList.contains('reading'));
+        const home = await workspace();
+        if (index === 0) check(`${mode}跨文件夹回首页保留三个标签原顺序`, keeps(home, ids) && home.activeDom.length === 0, JSON.stringify(home));
+        await page.click(`#tabStrip .doc-tab[data-doc="${ids[index]}"] .tab-title`); await settle();
+        const actual = await workspace();
+        check(`${mode}首页切回${['首个', '中间', '最后'][index]}跨文件夹标签保留整个工作区`, keeps(actual, ids) && current(actual, ids[index]), JSON.stringify(actual));
+      }
+      const readingContext = await page.evaluate(() => ({ doc: __state.doc.docId, folder: __ctx.currentFolder, sid: __ctx.activeSession }));
+      await page.click('#folderSwitch');
+      check(`${mode}左栏文件夹菜单可以打开`, await page.evaluate(() => !document.querySelector('#folderSwitchMenu').classList.contains('hidden')));
+      await page.click('#folderSwitchMenu .folder-switch-item[title="papers/sub/"]');
+      await page.waitForFunction(() => !document.body.classList.contains('reading'));
+      const filtered = await page.evaluate(() => ({
+        selected: document.querySelector('#homeFolders [data-home-folder][aria-pressed="true"]')?.dataset.homeFolder,
+        files: [...document.querySelectorAll('#homeList .home-item')].map(item => item.dataset.id),
+        menuHidden: document.querySelector('#folderSwitchMenu').classList.contains('hidden'),
+        doc: __state.doc?.docId, folder: __ctx.currentFolder, sid: __ctx.activeSession,
+      }));
+      check(`${mode}左栏选另一文件夹只筛选首页并保留标签及原阅读会话`, keeps(await workspace(), ids)
+        && filtered.selected === 'sub' && JSON.stringify(filtered.files) === JSON.stringify([ids[1]]) && filtered.menuHidden
+        && filtered.doc === readingContext.doc && filtered.folder === readingContext.folder && filtered.sid === readingContext.sid, JSON.stringify(filtered));
+      await page.screenshot({ path: path.join(scratch, fullscreen ? 'cross-folder-browse-home-fullscreen.png' : 'cross-folder-browse-home.png') });
+      await page.click(`#tabStrip .doc-tab[data-doc="${ids[0]}"] .tab-title`); await settle();
+      const afterBrowse = await workspace();
+      check(`${mode}浏览另一文件夹后点旧标签正常返回且其他标签不丢`, keeps(afterBrowse, ids) && current(afterBrowse, ids[0]), JSON.stringify(afterBrowse));
+      await page.click(`#tabStrip .doc-tab[data-doc="${ids[2]}"] .tab-title`); await settle();
+      await page.screenshot({ path: path.join(scratch, fullscreen ? 'cross-folder-fullscreen.png' : 'cross-folder-normal.png') });
+      if (fullscreen) { await page.keyboard.press('Escape'); await wait(250); }
+    }
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(id => __state?.viewerDocId === id && __ctx?.activeTab === id, { timeout: 60000 }, ids[2]);
+    await settle();
+    const restored = await workspace();
+    check('跨文件夹刷新恢复三个标签原顺序及当前文档', keeps(restored, ids) && current(restored, ids[2]), JSON.stringify(restored));
+    await page.click(`#tabStrip .doc-tab[data-doc="${ids[1]}"] .tab-close`); await settle();
+    const closed = await workspace();
+    check('关闭中间非活动标签只删除这一项', keeps(closed, [ids[0], ids[2]]) && current(closed, ids[2]), JSON.stringify(closed));
+    await page.click(`#tabStrip .doc-tab[data-doc="${ids[2]}"] .tab-close`); await settle();
+    const closedActive = await workspace();
+    check('关闭活动标签只删除这一项并激活保留的跨文件夹标签', keeps(closedActive, [ids[0]]) && current(closedActive, ids[0]), JSON.stringify(closedActive));
+    await page.screenshot({ path: path.join(scratch, 'cross-folder-close-only-target.png') });
+  };
+  await crossFolderMatrix();
 
   check('操作期间没有页面错误', pageErrors.length === 0, pageErrors.join(' | '));
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n多标签 P1：${checks.length - failed.length}/${checks.length} 通过`);
-  fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop-assets' : 'source', fullscreenApi: 'stub', checks, pageErrors }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop-assets' : 'source', subset: crossFolderOnly ? 'cross-folder' : 'full', fullscreenApi: 'stub', checks, pageErrors }, null, 2), 'utf8');
   console.log(`证据：${scratch}`);
   process.exitCode = failed.length ? 1 : 0;
 } finally {

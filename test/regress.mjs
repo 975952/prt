@@ -32,7 +32,7 @@ const valueOf = (name) => (args.find((a) => a.startsWith(`--${name}=`)) || '').s
 /** 自带隔离服务的套件：只传 CHROME，不传 BASE（个别会尊重外部 BASE 的除外，见 HYBRID） */
 const SELF = [
   'ai-send-regression', 'answer-note', 'attachments', 'citation-quote', 'context-page',
-  'files-batch', 'folders', 'fullscreen', 'memory-session', 'mobile', 'profile', 'qa',
+  'files-batch', 'folders', 'fullscreen', 'home-background', 'cross-folder-tabs', 'memory-session', 'mobile', 'profile', 'qa',
   'r6', 'right-select', 'save-reliability', 'scan-pdf', 'send-range', 'session-bar',
   'theme', 'translate-order', 'teaching-isolated', 'e2e-isolated', 'node-search',
 ];

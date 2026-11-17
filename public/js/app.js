@@ -4034,6 +4034,8 @@ function initTabs() {
     onReorder: (docId, index) => moveTab(docId, index),
     onNewWindow: (docId, move) => openReaderWindow(tabsStore.tabs.find((t) => t.docId === docId), { move }),
     onOpenDoc: (doc) => openDoc({ name: doc.name, url: doc.url, docId: doc.docId, path: doc.path }),
+    getCurrentFolder: () => !document.body.classList.contains('reading') && homeView.folder !== null
+      ? homeView.folder : currentFolderPath(),
     listFolderDocs: () => (state.papers || []).map((paper) => ({
       ...paper,
       folder: String(paper.path || '').includes('/') ? String(paper.path).slice(0, String(paper.path).lastIndexOf('/')) : '',
@@ -4092,7 +4094,7 @@ async function bootTabWorkspace() {
   if (openName && !named) toast(tr("papers/ 里没有找到 ") + openName, 'err', 4000);
 
   // ① 先恢复上次的工作区（文件还在的标签才恢复；打开顺序不变）
-  const restorable = ws.tabs.filter((t) => byId.has(t.docId) && folderOfDoc(t.docId) === currentFolderPath());
+  const restorable = ws.tabs.filter((t) => byId.has(t.docId));
   if (restorable.length) {
     tabsStore.tabs = restorable.map((t) => {
       const paper = byId.get(t.docId);
@@ -4111,7 +4113,8 @@ async function bootTabWorkspace() {
     tabsStore.tabs.push(wanted);
     tabsSyncBar();
   }
-  await openDocColdSwitch({ name: wanted.name, url: wanted.url, docId: wanted.docId, path: wanted.path });
+  await openDocColdSwitch({ name: wanted.name, url: wanted.url, docId: wanted.docId, path: wanted.path },
+    { resumeWorkspace: restorable.some(tab => tab.docId === wanted.docId) });
   if (state.doc?.docId !== wanted.docId) {
     tabsStore.tabs = tabsStore.tabs.filter((t) => t.docId !== wanted.docId);
     if (!tabsStore.tabs.length) await goWelcome();
@@ -4123,7 +4126,7 @@ async function bootTabWorkspace() {
   tabsPersist();
 }
 
-async function openDocColdSwitch({ name, url, docId, path }, { navigation = beginDocumentNavigation() } = {}) {
+async function openDocColdSwitch({ name, url, docId, path }, { navigation = beginDocumentNavigation(), resumeWorkspace = false } = {}) {
   const myOpen = navigation;
   const viewNavigation = documentViewSeq;
   const superseded = () => myOpen !== state.openSeq || viewNavigation !== documentViewSeq;
@@ -4152,8 +4155,8 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   const prevReady = state.viewerDocId === prevDocId;
   // B 线 P2：切走前把上一篇的右栏 DOM 与会话状态整体停放，切回来直接挂回（不重放渲染）
   if (prevDocId) parkDocView(prevDocId);
-  // 用户口径：每次只处理一个文件夹；换到别的文件夹 = 关掉旧标签 + 开新会话
-  ensureFolderForDoc(docId, path || name);
+  // 阅读上下文跟随目标文档；标签属于整个工作区，不随文件夹切换关闭。
+  ensureFolderForDoc(docId, path || name, { resumeWorkspace });
   if (prevDocId === docId && prevPath !== (path || name)) { dropPdfHandle(docId); dropDocView(docId); }
   hideTranslationCard();
   clearQuoteHighlight();          // 换论文：引用高亮属于上一篇，必须清掉
@@ -6693,26 +6696,7 @@ async function migrateLegacySession(docId) {
   } catch { /* 迁移失败：保留旧文件，下次打开这篇再试 */ }
 }
 
-/* ── 文件夹上下文：一次只处理一个文件夹；换文件夹 = 新会话；只列这个文件夹的会话 ── */
-
-/** 关闭不属于某个文件夹的标签（换文件夹时用），并释放它们的 PDF 句柄/停放视图 */
-function closeTabsNotInFolder(path) {
-  const keep = new Set((state.papers || []).filter((p) => String(p.folder || '') === path).map((p) => p.docId));
-  for (const tab of [...tabsStore.tabs]) {
-    if (keep.has(tab.docId)) continue;
-    dropPdfHandle(tab.docId);
-    dropDocView(tab.docId);
-    releaseDocument(tab.docId);
-  }
-  tabsStore.tabs = tabsStore.tabs.filter((t) => keep.has(t.docId));
-  if (tabsStore.tabs.length) {
-    if (!tabsStore.tabs.some((t) => t.docId === tabsStore.active)) tabsStore.active = tabsStore.tabs[0].docId;
-  } else {
-    tabsStore.active = '';
-  }
-  tabsSyncBar();
-  tabsPersist();
-}
+/* ── 文件夹上下文仅决定阅读与会话归属，打开的标签独立保留 ── */
 
 /** 清掉 AI 功能记录（换会话/新会话/重新进文件夹时） */
 function resetFolderAiRecords() {
@@ -6765,57 +6749,45 @@ function beginFolderEntry() {
 
 /**
  * 确保「当前文件夹」与 docId 所属文件夹一致。
- * - 换到另一个文件夹：关掉旧文件夹标签、开新会话；
- * - 同一个文件夹但之前被「完全关闭」过（回首页/所有标签关了/重启）：开新会话；
+ * - 已在工作区中的文件夹/全局会话：接回原会话，不重新执行进入策略；
+ * - 首次进入或工作区完全关闭后再进入：执行设置中的进入策略；
+ * - 文件夹改变不会关闭标签，也不会释放其他文件的 PDF 或会话视图。
  * 返回 true 表示发生了文件夹切换。
  */
-function ensureFolderForDoc(docId, sourcePath = '') {
+function ensureFolderForDoc(docId, sourcePath = '', { resumeWorkspace = false } = {}) {
   const exact = sourcePath && state.papers.find(paper => (paper.path || paper.name) === sourcePath);
   const path = exact ? String(exact.folder || '') : docId ? folderOfDoc(docId) : '';
   const changed = path !== currentFolderPath();
+  const resume = resumeWorkspace || (!state.folderClosed && (
+    tabsStore.tabs.some(tab => folderOfDoc(tab.docId) === path)
+    || (readSessionScopeMode() === 'global' && tabsStore.tabs.length > 0)));
+  const enter = () => {
+    if (!resume) { beginFolderEntry(); return; }
+    folderEntryPending = false;
+    sessionsOnFolderEntered(path);
+  };
   if (!changed) {
     if (state.folderClosed) {
       state.folderClosed = false;
-      beginFolderEntry();
+      enter();
     }
     return false;
   }
   state.currentFolder = path;
   state.folderClosed = false;
   persistCurrentFolder();
-  closeTabsNotInFolder(path);
-  beginFolderEntry();
+  enter();
   renderFolderSwitch();
   flashHint(tr("已切换文件夹：{0}", folderDisplayName(path)));
   return true;
 }
 
-/** 显式切换文件夹（左栏文件夹按钮 / 菜单） */
-async function switchFolder(path) {
+/** 选择文件夹只浏览该目录；选定 PDF 后才切换阅读和会话归属。 */
+function switchFolder(path) {
   const target = String(path || '');
-  const navigation = beginDocumentNavigation();
-  if (target === currentFolderPath()) return;
-  if (state.busy && !chatJobs.has(displayedChatKey)) { toast(tr("正在生成中，先等它跑完或点停止再换文件夹"), 'err', 3200); return; }
-  // 先把旧文件夹会话存盘，再关旧标签、开新会话
-  try { if (state.doc && state.sessionEntries.length) await saveSessionNow(); } catch { /* 存不下也允许切 */ }
-  if (state.openSeq !== navigation) return;
-  parkChatSession();
-  displayedChatKey = '';
-  refreshChatJobState();
-  state.currentFolder = target;
-  state.folderClosed = false;
-  persistCurrentFolder();
-  closeTabsNotInFolder(target);
-  beginFolderEntry();
-  renderFolderSwitch();
-  if (!tabsStore.tabs.length) {
-    // 旧标签已关；这里不要再把旧文档的会话/译文写回新文件夹（skipSave）
-    await goWelcome({ skipSave: true });
-    state.folderClosed = false;   // 刚进入这个文件夹；首个文件会按 onEnter 策略进入
-  } else if (state.doc && folderOfDoc(state.doc.docId) === target) {
-    await openDoc({ docId: tabsStore.tabs[0].docId, name: tabsStore.tabs[0].name, url: tabsStore.tabs[0].url, path: tabsStore.tabs[0].path });
-  }
-  flashHint(tr("已切换文件夹：{0}", folderDisplayName(target)));
+  if (target === currentFolderPath() && document.body.classList.contains('reading')) return;
+  showHome();
+  chooseHomeView('all', target);
 }
 
 /** 左栏「当前文件夹」按钮的文案 */

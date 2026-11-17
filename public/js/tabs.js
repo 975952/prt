@@ -109,7 +109,7 @@ const escapeHtml = (s) => String(s || '').replace(/[&<>"']/g, (c) => ({
  * @param {(docId:string, index:number)=>void} opts.onReorder 拖拽排序完成
  * @param {()=>Array<{docId,name,url,path,folder}>} [opts.listFolderDocs] 溢出菜单里的「当前文件夹文档」
  */
-export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder, onNewWindow, listFolderDocs } = {}) {
+export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder, onNewWindow, listFolderDocs, getCurrentFolder } = {}) {
   const root = document.createElement('div');
   root.className = 'tab-bar';
   root.id = 'tabBar';
@@ -268,8 +268,9 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
 
   /* ── 溢出菜单：全部标签 + 当前文件夹文档（P1 简版） ── */
   const currentFolder = () => {
-    const first = list[0];
-    return first?.path?.includes('/') ? first.path.slice(0, first.path.lastIndexOf('/')) : '';
+    if (getCurrentFolder) return String(getCurrentFolder() ?? '');
+    const current = list.find(tab => tab.docId === activeId) || list[0];
+    return current?.path?.includes('/') ? current.path.slice(0, current.path.lastIndexOf('/')) : '';
   };
   function buildMenu() {
     menu.replaceChildren();
@@ -296,7 +297,7 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
     try { folderDocs = listFolderDocs?.() || []; } catch { folderDocs = []; }
     const folder = currentFolder();
     const unopened = folderDocs.filter((d) => !list.some((t) => t.docId === d.docId)
-      && (!folder || String(d.folder || '') === folder));
+      && String(d.folder || '') === folder);
     const makeDocItem = (doc) => {
       const item = document.createElement('button');
       item.className = 'tab-menu-item';
@@ -315,7 +316,7 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
     }
     // 全部已导入文件（跨文件夹，按需打开）：所有导入的论文都能看，只是一次不铺满菜单
     const others = folderDocs.filter((d) => !list.some((t) => t.docId === d.docId)
-      && (!folder || String(d.folder || '') !== folder));
+      && String(d.folder || '') !== folder);
     if (others.length) {
       const t3 = document.createElement('div');
       t3.className = 'tab-menu-title';
