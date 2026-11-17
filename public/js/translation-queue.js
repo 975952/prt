@@ -105,7 +105,7 @@ export async function runTranslationBatch(batch, { runItem, isCurrent = () => tr
     notify(run);
     if (!current()) return batch;
     for (const item of batch.items) {
-      if (item.status === 'complete') continue;
+      if (item.status === 'complete' || item.deleted) continue;
       if (!current()) break;
       run.item = item;
       item.status = 'running';
@@ -126,6 +126,7 @@ export async function runTranslationBatch(batch, { runItem, isCurrent = () => tr
         run.item = null;
         break;
       }
+      if (item.deleted) { item.status = 'deleted'; run.item = null; notify(run); continue; }
       if (!['complete', 'failed', 'stopped'].includes(result?.status)) {
         result = { status: 'failed', error: 'Translation item returned an invalid status' };
       }
@@ -144,7 +145,7 @@ export async function runTranslationBatch(batch, { runItem, isCurrent = () => tr
       }
       notify(run);
     }
-    if (current() && batch.items.every((item) => item.status === 'complete')) {
+    if (current() && batch.items.every((item) => item.status === 'complete' || item.deleted)) {
       batch.status = 'complete';
       batch.reason = '';
     }

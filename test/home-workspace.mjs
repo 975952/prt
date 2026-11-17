@@ -106,6 +106,12 @@ try {
   for (const theme of ['glass', 'light', 'dark']) {
     await page.evaluate(value => { const select = document.querySelector('#uiTheme'); select.value = value; select.dispatchEvent(new Event('input', { bubbles: true })); }, theme);
     check(`${theme} theme applies`, await page.evaluate(() => document.documentElement.dataset.theme) === theme);
+    await page.focus('#homeSearch');
+    check(`${theme} focused search has no extra frame`, await page.$eval('#homeSearch', input => {
+      const field = getComputedStyle(input), shell = getComputedStyle(input.closest('.home-search'));
+      return field.outlineStyle === 'none' && field.boxShadow === 'none' && field.backgroundColor === 'rgba(0, 0, 0, 0)'
+        && shell.outlineStyle === 'none' && shell.boxShadow === 'none';
+    }));
     await page.screenshot({ path: path.join(scratch, `home-${theme}.png`) });
   }
   for (const width of [1920, 1280, 900, 700, 480, 360]) {

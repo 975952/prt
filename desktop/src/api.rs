@@ -1374,12 +1374,55 @@ fn session_teach_at(t: Option<&Value>) -> String {
 
 /// 多窗口并发保存：按条目 id 合并（旧条目无 id 时按内容指纹兜底），
 /// 顺序保持旧文件在前、本次新增追加在后；history/ops/teaching/summary 各自合并。
+fn session_with_entry_ids(payload: &Value) -> Value {
+    let mut out = payload.as_object().cloned().unwrap_or_default();
+    let mut seen: HashMap<String, usize> = HashMap::new();
+    let entries: Vec<Value> = payload.get("entries").and_then(Value::as_array).cloned().unwrap_or_default()
+        .into_iter().map(|mut row| {
+            if session_entry_id(&row).is_empty() {
+                let key = ["block", "kind", "tag", "page", "quote", "text"].iter()
+                    .map(|k| collaps_ws(&session_scalar_text(row.get(*k)))).collect::<Vec<_>>().join("\u{1}");
+                let hash = key.as_bytes().iter().fold(0xcbf29ce484222325u64, |h, b| (h ^ *b as u64).wrapping_mul(0x100000001b3));
+                let stem = format!("{:016x}", hash);
+                let occurrence = seen.entry(stem.clone()).or_insert(0);
+                if let Some(m) = row.as_object_mut() { m.insert("id".into(), json!(format!("legacy-{}-{}", stem, occurrence))); }
+                *occurrence += 1;
+            }
+            row
+        }).collect();
+    out.insert("entries".into(), json!(entries));
+    Value::Object(out)
+}
+
+fn apply_session_deletions(payload: &Value, old: Option<&Value>) -> Value {
+    let mut normalized = session_with_entry_ids(payload);
+    let mut deleted = HashSet::new();
+    let mut ids = Vec::new();
+    for source in old.into_iter().chain(std::iter::once(payload)) {
+        if let Some(rows) = source.get("deletedEntryIds").and_then(Value::as_array) {
+            for value in rows {
+                if let Some(id) = value.as_str() {
+                    let id = utf16_clip(&collaps_ws(id), 80);
+                    if !id.is_empty() && deleted.insert(id.clone()) { ids.push(id); }
+                }
+            }
+        }
+    }
+    if let Some(m) = normalized.as_object_mut() {
+        if let Some(entries) = m.get_mut("entries").and_then(Value::as_array_mut) {
+            entries.retain(|row| !deleted.contains(&session_entry_id(row)));
+        }
+        m.insert("deletedEntryIds".into(), json!(ids));
+    }
+    normalized
+}
+
 fn merge_session_payload(old: Option<&Value>, incoming: &Value) -> Value {
     let empty = json!({});
     let old_data: &Value = old.filter(|v| v.is_object()).unwrap_or(&empty);
     let next: &Value = if incoming.is_object() { incoming } else { &empty };
-    let old_entries: Vec<Value> = old_data.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
-    let new_entries: Vec<Value> = next.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+    let old_entries: Vec<Value> = session_with_entry_ids(old_data).get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+    let new_entries: Vec<Value> = session_with_entry_ids(next).get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
     let mut by_id: HashMap<String, usize> = HashMap::new();
     let mut by_content: HashMap<String, usize> = HashMap::new();
     for (i, e) in old_entries.iter().enumerate() {
@@ -1493,7 +1536,7 @@ fn merge_session_payload(old: Option<&Value>, incoming: &Value) -> Value {
     out.insert("teaching".to_string(), teaching);
     out.insert("summary".to_string(), json!(summary));
     out.insert("summaryCovered".to_string(), json!(summary_covered));
-    Value::Object(out)
+    apply_session_deletions(&Value::Object(out), Some(old_data))
 }
 
 /// 内容指纹：与 server.js 的 sessionContentFingerprint 完全一致
@@ -1948,7 +1991,7 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     // 读 / 写 / 删 / 改都先解析到"真正存在的那一份"，避免修了幂等之后老会话读不到
     let file = session_file_resolved(&doc, &sid);
     match method {
-        Method::Get => send_json(rq, 200, &store::read_json(&file, json!({"entries":[],"history":[],"ops":[]}))),
+        Method::Get => send_json(rq, 200, &apply_session_deletions(&store::read_json(&file, json!({"entries":[],"history":[],"ops":[]})), None)),
         Method::Post => {
             let payload = match parse_json(body) {
                 Ok(v) => v,
@@ -1968,7 +2011,7 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
                 let merged = if merge {
                     merge_session_payload(old.as_ref(), &payload)
                 } else {
-                    payload.clone()
+                    apply_session_deletions(&payload, old.as_ref())
                 };
                 let record = prepare_session_record(&merged, old.as_ref());
                 if !store::write_json(&file, &record) {

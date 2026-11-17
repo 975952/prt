@@ -221,4 +221,18 @@ await check('invalid result fails closed and an empty or completed batch complet
   assert.equal(calls, 0);
 });
 
+await check('deleting an active item skips it on resume and continues its siblings', async () => {
+  const batch = make();
+  const calls = [];
+  await runTranslationBatch(batch, { runItem: async item => {
+    calls.push(item.id);
+    if (item === batch.items[0]) { item.deleted = true; throw new DOMException('Entry deleted', 'AbortError'); }
+    return { status: 'complete' };
+  } });
+  assert.deepEqual(calls, batch.items.map(item => item.id));
+  assert.equal(batch.items[0].status, 'deleted');
+  assert.equal(batch.status, 'complete');
+  await runTranslationBatch(batch, { runItem: async () => assert.fail('Deleted/completed item was regenerated') });
+});
+
 console.log(`\n${passed} translation queue checks passed.`);

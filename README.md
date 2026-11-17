@@ -16,16 +16,25 @@
 
 </div>
 
-![prt 透光主题：左侧论文文件，中间 Transformer 原文，右侧问答与公式](docs/assets/reading-glass.png)
+![prt 首页：继续阅读、论文分类与书架搜索](docs/assets/home-glass.png)
 
-<sub>论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。[截图说明](docs/assets/README.md)</sub>
+<sub>v1.2.1 实际界面；书架使用独立演示数据。[截图说明](docs/assets/README.md)</sub>
+
+## 从书架回到阅读
+
+首页集中展示论文和阅读进度：左侧切换**全部论文、最近阅读、未读与文件夹**，右侧搜索文件名或目录。独立的“继续阅读”入口回到上次阅读的位置，导入与整理入口始终可见。
+
+![阅读工作区：原文、问答与公式并排](docs/assets/reading-glass.png)
+
+<sub>论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。</sub>
 
 ## 为阅读准备的工作区
 
 | 从阅读到理解 | 在 prt 中完成 |
 | --- | --- |
+| 找到下一篇论文 | 首页搜索、最近阅读、未读筛选、文件夹导航与继续阅读 |
 | 对照多篇论文 | 多标签、独立窗口与窗口平铺，保留各自的阅读位置 |
-| 读懂一段原文 | 划词翻译、解释、原文对照，点击引用回到对应页面 |
+| 读懂一段原文 | 划词翻译、解释、原文对照；每条译文可直接删除，点击引用回到对应页面 |
 | 看图表与公式 | 框选截图、长截图、视觉模型问答，支持公式与表格排版 |
 | 连贯地追问 | 同文件夹会话、跨窗口同步、输入草稿与翻译任务恢复 |
 | 留下阅读线索 | 全文搜索、目录、高亮笔记与参考文献检索 |
@@ -42,12 +51,16 @@
 
 桌面版免安装，无需 Node.js。支持 Windows 10/11 x64，需要 [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（多数系统已安装）。模型服务由你自行配置，服务费用按对应提供商规则计算。
 
-**当前版本：** [v1.2.0](https://github.com/975952/prt/releases/tag/v1.2.0)，包含上方展示的三种主题、双语界面与草稿恢复功能。
+**当前版本：** [v1.2.1](https://github.com/975952/prt/releases/tag/v1.2.1)，新增书架首页与单条译文删除。点击译文右上角的垃圾桶即可删除，无确认弹窗；历史译文、截图译文和未完成结果同样支持。
 
 升级时，退出旧版并替换同一目录的 `prt.exe`，保留 `papers/` 和 `data/`。下载页提供 `SHA256SUMS.txt` 校验文件。
 
 <details>
 <summary>查看米宣与深色主题</summary>
+
+### 深色首页
+
+![prt 深色书架首页](docs/assets/home-dark.png)
 
 ### 米宣
 

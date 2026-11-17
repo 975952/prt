@@ -2,11 +2,13 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.2.0](https://github.com/975952/prt/releases/tag/v1.2.0), including the new themes, bilingual interface, and draft recovery.
+This guide covers [v1.2.1](https://github.com/975952/prt/releases/tag/v1.2.1), including the library home, individual translation deletion, bilingual interface, and draft recovery.
 
 ## Open a paper
 
 Put `prt.exe` in a writable folder and launch it. Import a PDF or drag it into the app. Use tabs for multiple papers, or open a tab in another window for comparison. The page number, fit-width control, and zoom slider are in the bottom toolbar. Use `Ctrl+F` to search.
+
+The home sidebar offers All papers, Recent, Unread, and folders. Search by filename or folder and use Continue reading to return to your saved page.
 
 ## Choose a language
 
@@ -23,6 +25,8 @@ In **Settings → Model**, enter the service URL, model name, and API key. Save 
 Select text to translate (`T`), explain (`E`), or add it to a question (`Q`). Use screenshot selection (`R`) for figures or pages without a text layer. You can also paste text into Translation or type a question in Chat. Press Enter to send and Shift+Enter for a new line.
 
 Conversations are associated with folders by default. Use history to resume a conversation or start a new one; switching papers within the same folder can continue the discussion. Conversation behavior is configurable in Settings. Saved drafts and unfinished translation tasks can be restored.
+
+Delete an individual translation using its top-right trash icon. Deletion is immediate, without confirmation, and works for saved, screenshot, failed, and unfinished results. Deleting an active result cancels that request while other batch items continue. The deletion persists and syncs across windows without changing other translations or Chat.
 
 ## Adjust the appearance
 

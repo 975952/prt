@@ -431,7 +431,9 @@ function checkNotes(items) {
   if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
     return '会话必须是对象';
   }
-  for (const key of ['entries', 'history', 'ops', 'attachments', 'files']) {
+  if (payload.deletedEntryIds !== undefined && (!Array.isArray(payload.deletedEntryIds)
+    || payload.deletedEntryIds.some(id => typeof id !== 'string' || !id.trim() || id.length > 80))) return '无效的会话删除记录';
+  for (const key of ['entries', 'history', 'ops', 'attachments', 'files', 'deletedEntryIds']) {
     const v = payload[key];
     if (v === undefined) continue;
     if (Array.isArray(v)) {

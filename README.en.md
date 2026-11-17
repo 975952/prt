@@ -15,16 +15,25 @@ A local PDF reader for Windows, with translation, paper chat, and notes beside t
 
 </div>
 
-![prt in English with Attention Is All You Need and an illustrative answer](docs/assets/reading-english.png)
+![prt library home with search, folders, and continue reading](docs/assets/home-english.png)
 
-<sub>Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762). The answer is illustrative. [Screenshot details](docs/assets/README.md).</sub>
+<sub>Actual v1.2.1 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
+
+## Pick up where you left off
+
+Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach.
+
+![prt reading workspace with a paper and an illustrative answer](docs/assets/reading-english.png)
+
+<sub>Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762). The answer is illustrative.</sub>
 
 ## A workspace for reading
 
 | Task | In prt |
 | --- | --- |
+| Find your next paper | Library search, recent and unread filters, folders, and continue reading |
 | Compare papers | Tabs, separate windows, window tiling, and saved reading positions |
-| Understand a passage | Selection translation, explanations, original-text comparison, and clickable citations |
+| Understand a passage | Selection translation, explanations, source comparison, direct deletion of individual results, and clickable citations |
 | Discuss figures | Screenshot selection, long captures, vision-model questions, equations, and tables |
 | Continue a discussion | Folder conversations, history, cross-window sync, and saved drafts |
 | Keep your bearings | Full-text search, outlines, highlights, notes, and reference lookup |
@@ -40,7 +49,7 @@ A local PDF reader for Windows, with translation, paper chat, and notes beside t
 
 No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.2.0](https://github.com/975952/prt/releases/tag/v1.2.0), including the three themes, bilingual interface, and draft recovery shown here.
+**Current release:** [v1.2.1](https://github.com/975952/prt/releases/tag/v1.2.1), with the redesigned library home and individual translation deletion. Use the trash icon at the top right of a result to delete it immediately, without a confirmation dialog. This also works for saved, screenshot, and unfinished translations.
 
 ## Your data
 

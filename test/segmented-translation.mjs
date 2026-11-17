@@ -168,6 +168,10 @@ try {
   await page.evaluate(() => window.__ctx.addToChat({ text: 'Independent chat quotation.', page: 1 }));
   const chatDraft = await draft();
   await page.waitForFunction((text) => [...document.querySelectorAll('#viewer .textLayer span')].some((node) => node.textContent === text), {}, OPENING);
+  // Sidebar transitions and PDF fit-width can move the text after it first appears.
+  await page.evaluate(() => document.fonts.ready);
+  await page.waitForFunction(() => !window.__viewer.renderTasks.size);
+  await wait(600);
   const openingBox = await page.evaluate((text) => {
     const node = [...document.querySelectorAll('#viewer .textLayer span')].find((element) => element.textContent === text);
     const range = document.createRange(); range.selectNodeContents(node);
@@ -218,7 +222,7 @@ try {
   await page.click('#attachRow .translation-segment:nth-of-type(2) summary');
   await page.$eval('#attachRow .translation-segment:nth-of-type(2) .at-tools', (node) => node.scrollIntoView({ block: 'nearest' }));
   await page.click('#attachRow .translation-segment:nth-of-type(2) .at-edit');
-  await page.waitForFunction(() => /3\s*段.*顺序合并/.test(document.querySelector('#composerHint').textContent));
+  await page.waitForFunction(() => /合并翻译\s*3\s*段/.test(document.querySelector('#composerHint').textContent));
   const narrowLayout = await page.evaluate(() => {
     const side = document.querySelector('#rightSide').getBoundingClientRect();
     const attachmentBox = document.querySelector('#attachRow').getBoundingClientRect();
@@ -238,7 +242,7 @@ try {
   });
   assert.ok(narrowLayout.width >= 295 && narrowLayout.width <= 305, JSON.stringify(narrowLayout));
   assert.ok(narrowLayout.open && narrowLayout.hint.visible && narrowLayout.hint.contained && !narrowLayout.hint.overflow, JSON.stringify(narrowLayout));
-  assert.ok(narrowLayout.hint.text.includes([closing, editedOpening, SELECTED_FOOTNOTE, supplement].join('\n\n').length.toLocaleString('en-US')));
+  assert.match(narrowLayout.hint.text, /合并翻译\s*3\s*段/);
   assert.ok(narrowLayout.editor.visible && narrowLayout.editor.contained && !narrowLayout.editor.disabled && !narrowLayout.editor.readOnly && narrowLayout.editor.focused, JSON.stringify(narrowLayout));
   assert.ok(narrowLayout.tools.every((tool) => tool.visible && tool.contained && !tool.disabled), JSON.stringify(narrowLayout));
   assert.ok(narrowLayout.send.visible && narrowLayout.send.contained && !narrowLayout.send.disabled && /合并翻译/.test(narrowLayout.send.title), JSON.stringify(narrowLayout));
@@ -295,6 +299,18 @@ try {
     const request = await send(); emit(request, `${failureKind}: partial translation`);
     await textVisible(`${failureKind}: partial translation`);
     if (failureKind === 'failure') request.res.destroy(); else await page.click('#stopBtn');
+    if (failureKind === 'failure') {
+      // A single failed item returns automatically; only a stopped batch needs Return.
+      await idle();
+      await page.waitForFunction(text => document.querySelector('#chatInput').value === text, {}, originalText);
+      assert.deepEqual(await draft(), original);
+      await refresh();
+      await page.waitForFunction(text => document.querySelector('#chatInput').value === text, {}, originalText);
+      assert.deepEqual(await draft(), original);
+      await clearDraft();
+      pass('a single failed translation automatically restores its complete draft and survives refresh');
+      continue;
+    }
     await paused();
     const nextText = `${failureKind}: newly typed next source`;
     await setInput(nextText); await add(`${failureKind}: new paragraph after pause`, 3);

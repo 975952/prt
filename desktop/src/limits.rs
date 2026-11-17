@@ -306,7 +306,13 @@ pub fn check_session(payload: &Value) -> Result<(), String> {
         Value::Object(m) => m,
         _ => return Err("会话必须是对象".to_string()),
     };
-    for key in ["entries", "history", "ops", "attachments", "files"] {
+    if let Some(ids) = obj.get("deletedEntryIds") {
+        if !ids.as_array().map(|a| a.iter().all(|id| id.as_str()
+            .map(|s| !s.trim().is_empty() && s.encode_utf16().count() <= 80).unwrap_or(false))).unwrap_or(false) {
+            return Err("无效的会话删除记录".to_string());
+        }
+    }
+    for key in ["entries", "history", "ops", "attachments", "files", "deletedEntryIds"] {
         if let Some(Value::Array(a)) = obj.get(key) {
             if a.len() > SESSION_MAX_ITEMS {
                 return Err(format!("会话 {} 条目过多（上限 {} 条）", key, SESSION_MAX_ITEMS));

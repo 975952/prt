@@ -5598,6 +5598,34 @@ function newEntryId() {
   try { if (crypto?.randomUUID) return crypto.randomUUID(); } catch { /* 回退 */ }
   return `${windowId}-${Date.now().toString(36)}-${entryIdSeq.toString(36)}`;
 }
+// Keep local deletions by document until the server has merged them, including late stream saves.
+const translationDeletions = new Map();
+function deleteTranslationEntry(root) {
+  const record = root.__sessionRecord;
+  const docId = record?.docId || state.doc?.docId;
+  if (!record?.id || record.block !== 'translate' || docId !== state.doc?.docId || root.__deleted) return;
+  const deleted = translationDeletions.get(docId) || new Set();
+  deleted.add(record.id);
+  translationDeletions.set(docId, deleted);
+  root.__deleted = true;
+  const batch = translationBatches.get(docId);
+  const item = batch?.items.find(item => item.entry?.root.__sessionRecord?.id === record.id);
+  if (item) item.deleted = true;
+  root.__translationController?.abort('entry-deleted');
+  state.sessionEntries = state.sessionEntries.filter(row => row.id !== record.id);
+  state._fileEntries = state._fileEntries.filter(row => row.id !== record.id);
+  dropDocView(docId);
+  const nextButton = root.nextElementSibling?.querySelector('.translation-delete')
+    || root.previousElementSibling?.querySelector('.translation-delete');
+  const hadFocus = root.contains(document.activeElement);
+  root.remove();
+  if (hadFocus) (nextButton || $('#chatInput'))?.focus({ preventScroll: true });
+  refreshCounts();
+  renderTranslationBatch();
+  scheduleSessionSave();
+  persistSession.flush();
+}
+
 function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs, kind = 'assistant', text, retry, restore = false, reveal = true, docId = '', docTitle = '' }) {
   // 恢复历史时只把内容装回对应块，不强行打开右栏；用户可从下方开关按需展开。
   if (!restore && reveal && !state.panels[block].visible) setPanelVisible(block, true);
@@ -5608,7 +5636,7 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
   }
   const bodyEl = state.blockMeta[block].body;
   const isUser = kind === 'user';
-  /** 译文条目：本条的界面要「纯净」（无动作按钮，role 行也不留回原文图标） */
+  /** 译文条目使用轻量标题与原文对照。 */
   const isTranslateEntry = block === 'translate';
 
   const refText = quote && uiStyle.showQuote ? quote : '';
@@ -5696,6 +5724,13 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     docId: String(docId || state.doc?.docId || ''), docTitle: String(docTitle || state.doc?.name || ''),
     status: isUser ? 'user' : (text !== undefined ? 'complete' : 'pending'), retry: retry || null };
   root.__sessionRecord = record;
+  if (isTranslateEntry) {
+    let header = root.querySelector('.translation-direction');
+    if (!header) { header = el('div', { class: 'translation-direction' }); root.prepend(header); }
+    else { const label = header.textContent; header.replaceChildren(el('span', { text: label })); }
+    header.append(el('button', { class: 'translation-delete', type: 'button', title: tr("删除这条翻译"),
+      'aria-label': tr("删除这条翻译"), onclick: () => deleteTranslationEntry(root) }, iconEl('trash')));
+  }
   if (!restore) {
     // 只有真正新增的问答消息才算全局会话变化（回放历史不算，否则停放的 DOM 会被误判过期）
     if (block === 'chat') {
@@ -5716,6 +5751,7 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
 }
 
 function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', sources, meta, status = 'complete', basis = '', restore = false } = {}) {
+  if (entry.root.__deleted) return;
   const rec = entry.root.__sessionRecord;
   if (rec && !restore) {
     rec.text = String(fullText || '').slice(0, 48000);
@@ -5771,6 +5807,7 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
 }
 
 function addFailureRetry(entry, message, onRetry) {
+  if (entry.root.__deleted) return;
   const rec = entry.root.__sessionRecord;
   const partial = entry.root.__partialText || '';
   if (rec) { rec.status = 'failed'; rec.text = partial; rec.meta = ''; }
@@ -6171,7 +6208,8 @@ function buildSessionPayload() {
   };
   // ② 文档级译文伪会话：只放 translate 条目（AI 功能记录已归会话）
   const translate = {
-    entries: allEntries.filter((e) => e.block === 'translate'),
+    entries: allEntries.filter((e) => e.block === 'translate' && !translationDeletions.get(docId)?.has(e.id)),
+    deletedEntryIds: [...(translationDeletions.get(docId) || [])],
     history: [],
     ops: [],
     teaching: null,
@@ -6231,6 +6269,7 @@ function scheduleRemoteSession() {
 }
 function onRemoteSessionSaved(data) {
   if (!data || data.sender === windowId) return;
+  if (data.kind === 'translate') dropDocView(data.docId);
   remoteSessionPending.push(data);
   scheduleRemoteSession();
 }
@@ -6761,7 +6800,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
       : (Array.isArray(savedChat.entries) ? savedChat.entries : []);
     const translateEntries = keepTranslate ? state.sessionEntries.filter((e) => e?.block === 'translate')
       : (Array.isArray(savedTranslate.entries) ? savedTranslate.entries : []);
-    const combined = [...chatEntries, ...translateEntries];
+    const combined = [...chatEntries, ...translateEntries.filter(row => !translationDeletions.get(docId)?.has(row.id))];
     // 远端同步先取齐附件，再一次性替换视图。附件加载期间可能开始新一轮发送。
     const remoteThumbs = new Map();
     if (canApply) {
@@ -10015,7 +10054,7 @@ function renderTranslationBatch() {
   const visible = composerMode() === 'translate' && batch && batch.status !== 'complete';
   row.classList.toggle('hidden', !visible);
   if (!visible) return;
-  const done = batch.items.filter((item) => item.status === 'complete').length;
+  const done = batch.items.filter((item) => item.status === 'complete' || item.deleted).length;
   const running = batch.status === 'running';
   const title = running ? tr("翻译中") : batch.status === 'failed' ? tr("翻译中断") : tr("已暂停");
   $('#translationBatchStatus').textContent = tr("{0} · 已完成 {1}/{2} 项 · {3}", title, done, batch.items.length, batch.targetLang);
@@ -10034,7 +10073,7 @@ function returnTranslationBatchToDraft(batch) {
   const owner = { docId: batch.docId, mode: 'translate' };
   saveComposerDraft();
   const draft = composerDrafts.read(owner);
-  const remaining = batch.items.filter((item) => item.status !== 'complete');
+  const remaining = batch.items.filter((item) => item.status !== 'complete' && !item.deleted);
   const text = remaining.filter((item) => item.kind === 'text')
     .map((item) => Array.isArray(item.segments) ? item.inputText || '' : item.text).filter(Boolean).join('\n\n');
   if (text) draft.text = draft.text ? `${text}\n\n${draft.text}` : text;
@@ -10075,11 +10114,16 @@ async function resumeTranslationBatch(batch) {
       },
       runItem: async (item, { signal }) => {
         if (!isCurrent() || signal.aborted) return { status: 'stopped' };
-        const task = { item, batch, controller: batch.controller, isCurrent };
-        if (item.kind === 'text') return doTranslateText({ text: item.text, segments: item.segments || [], targetLang: batch.targetLang, task });
-        return doTranslateShot({ shot: { dataUrl: item.dataUrl, width: item.w, height: item.h },
-          page: item.page, label: item.label, refId: item.ref || '', docId: batch.docId,
-          sid: batch.sid, targetLang: batch.targetLang, task });
+        const controller = new AbortController();
+        const stop = () => controller.abort(signal.reason);
+        signal.addEventListener('abort', stop, { once: true });
+        const task = { item, batch, controller, isCurrent };
+        try {
+          if (item.kind === 'text') return await doTranslateText({ text: item.text, segments: item.segments || [], targetLang: batch.targetLang, task });
+          return await doTranslateShot({ shot: { dataUrl: item.dataUrl, width: item.w, height: item.h },
+            page: item.page, label: item.label, refId: item.ref || '', docId: batch.docId,
+            sid: batch.sid, targetLang: batch.targetLang, task });
+        } finally { signal.removeEventListener('abort', stop); }
       },
     });
   } finally {
@@ -10320,6 +10364,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   const target = streamTarget(entry.body);
   const ctl = task?.controller || makeController();
   if (!ctl) return;
+  entry.root.__translationController = ctl;
   setBusy(true, '0s');
   let received = '';
   try {
@@ -10333,7 +10378,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
     const clean = full.trim();
     target.done(clean);
     state.cache.set(key, clean);
-    // 成功时保持译文块「最纯净」的界面（不摆按钮）；失败/停止时 .acts 非空才显示重试
+    // 完成后保留复制、重新翻译和独立删除入口。
     finishEntry(entry, clean, { retryLabel: tr("重新翻译"), onRetry: retry });
     return { status: 'complete' };
   } catch (e) {
@@ -10351,6 +10396,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
     }
   } finally {
     if (!task && state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
+    entry.root.__translationController = null;
   }
 }
 
@@ -10402,15 +10448,17 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
   const cardTarget = cardBody ? streamTarget(cardBody) : null;
   const ctl = makeController();
   if (!ctl) return;
+  entry.root.__translationController = ctl;
   setBusy(true, '0s');
   let received = '';
   try {
     const full = await chat({
       messages: translateMessages({ text, targetLang: lang, context, page: sel.page, docTitle: state.doc?.name }),
       signal: ctl.signal,
-      onDelta: (piece, all) => { received = all; target.push(all); cardTarget?.push(all); },
+      onDelta: (piece, all) => { if (!entry.root.__deleted) { received = all; target.push(all); cardTarget?.push(all); } },
       onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
     });
+    if (ctl.signal.aborted || entry.root.__deleted) throw new DOMException(tr("已停止"), 'AbortError');
     const clean = full.trim();
     target.done(clean);
     cardTarget?.done(clean);
@@ -10483,6 +10531,7 @@ async function doTranslateShot({ shot, page = null, label = tr("截图"), refId 
   const target = streamTarget(entry.body);
   const ctl = task?.controller || makeController();
   if (!ctl) return;
+  entry.root.__translationController = ctl;
   setBusy(true, '0s');
   let received = '';
   try {
@@ -10538,6 +10587,7 @@ async function doTranslateShot({ shot, page = null, label = tr("截图"), refId 
   } finally {
     if (!task && state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
     scrollBody(entry.root.closest('.ai-body'));
+    entry.root.__translationController = null;
   }
 }
 

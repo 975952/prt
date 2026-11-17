@@ -1827,11 +1827,35 @@ function mergeSessionDocRefs(oldData, incoming) {
  * - 顺序保持旧文件在前、本次新增追加在后；history/ops/teaching/summary 也各自合并。
  * desktop/src/api.rs 的 merge_session_payload 要保持同一套规则。
  */
+// Stable IDs for pre-ID sessions; identical legacy rows retain separate identities.
+function sessionWithEntryIds(payload) {
+  const seen = new Map();
+  const entries = (Array.isArray(payload?.entries) ? payload.entries : []).map((row) => {
+    if (collapsWs(row?.id)) return row;
+    const key = ['block', 'kind', 'tag', 'page', 'quote', 'text'].map(k => collapsWs(row?.[k])).join('\u0001');
+    let hash = 0xcbf29ce484222325n;
+    for (const byte of Buffer.from(key, 'utf8')) hash = BigInt.asUintN(64, (hash ^ BigInt(byte)) * 0x100000001b3n);
+    const stem = hash.toString(16).padStart(16, '0');
+    const occurrence = seen.get(stem) || 0;
+    seen.set(stem, occurrence + 1);
+    return { ...row, id: `legacy-${stem}-${occurrence}` };
+  });
+  return { ...payload, entries };
+}
+
+function applySessionDeletions(payload, old = {}) {
+  const deletedEntryIds = [...new Set([...(old?.deletedEntryIds || []), ...(payload?.deletedEntryIds || [])]
+    .filter(id => typeof id === 'string' && id.trim()).map(id => collapsWs(id).slice(0, 80)))];
+  const deleted = new Set(deletedEntryIds);
+  const normalized = sessionWithEntryIds(payload);
+  return { ...normalized, deletedEntryIds, entries: normalized.entries.filter(row => !deleted.has(collapsWs(row?.id).slice(0, 80))) };
+}
+
 function mergeSessionPayload(old, incoming) {
   const oldData = old && typeof old === 'object' && !Array.isArray(old) ? old : {};
   const next = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming : {};
-  const oldEntries = Array.isArray(oldData.entries) ? oldData.entries : [];
-  const newEntries = Array.isArray(next.entries) ? next.entries : [];
+  const oldEntries = sessionWithEntryIds(oldData).entries;
+  const newEntries = sessionWithEntryIds(next).entries;
   const idOf = (e) => collapsWs(e?.id).slice(0, 80);
   const contentKey = (e) => [e?.block, e?.kind, e?.tag, e?.page, e?.quote, e?.text]
     .map((v) => collapsWs(v).slice(0, 300)).join('\u0001');
@@ -1905,7 +1929,7 @@ function mergeSessionPayload(old, incoming) {
   const newSummary = String(next.summary || '');
   const summary = newSummary.length >= oldSummary.length ? newSummary : oldSummary;
   const summaryCovered = summary === newSummary ? Math.max(Number(next.summaryCovered) || 0, 0) : Math.max(Number(oldData.summaryCovered) || 0, 0);
-  return { ...oldData, ...next, entries, history, ops, teaching: teaching ?? null, summary, summaryCovered };
+  return applySessionDeletions({ ...oldData, ...next, entries, history, ops, teaching: teaching ?? null, summary, summaryCovered }, oldData);
 }
 function consumedSafe(used, index) { return index !== undefined && !used.has(index); }
 
@@ -2219,7 +2243,7 @@ async function handle(req, res) {
     const doc = url.searchParams.get('doc') || 'default';
     const sid = (url.searchParams.get('sid') || '').replace(/[^\w-]/g, '').slice(0, 40);
     const file = await resolveSessionFileName(doc, sid);
-    if (req.method === 'GET') return sendJson(res, 200, await readDataFile(file, { entries: [], history: [], ops: [] }));
+    if (req.method === 'GET') return sendJson(res, 200, applySessionDeletions(await readDataFile(file, { entries: [], history: [], ops: [] })));
     if (req.method === 'POST') {
       // 审计 §P1：条目数 + 总字符数 + 附件元数据大小
       const payload = await readJsonBodyOrReq(req, res, sec.BODY_LIMITS.session);
@@ -2232,7 +2256,7 @@ async function handle(req, res) {
       const prev = sessionWriteChains.get(file) || Promise.resolve();
       const job = prev.catch(() => {}).then(async () => {
         const old = await readDataFile(file, null);
-        const merged = merge ? mergeSessionPayload(old, payload) : payload;
+        const merged = merge ? mergeSessionPayload(old, payload) : applySessionDeletions(payload, old);
         const record = prepareSessionRecord(merged, old, Date.now());
         await writeDataFile(file, record);
         return record;

@@ -143,7 +143,7 @@ export const en = {
   "回到第 {0} 页并高亮原文：{1}": "Go to page {0} and highlight: {1}", "回到第 {0} 页并高亮原文": "Go to page {0} and highlight the passage",
   "附件图片 {0}": "Attached image {0}", "<span class=\"thinking\">思考中…</span>": "<span class=\"thinking\">Thinking…</span>",
   "原文": "Original", "{0} 段合并翻译": "{0} passages translated together", "文本翻译": "Text translation", "原文对照": "Original text",
-  "选段 {0} · 第{1}页": "Passage {0} · Page {1}", "定位原文": "Go to source", "复制译文": "Copy translation", "复制这段回答": "Copy answer",
+  "选段 {0} · 第{1}页": "Passage {0} · Page {1}", "定位原文": "Go to source", "复制译文": "Copy translation", "复制这段回答": "Copy answer", "删除这条翻译": "Delete this translation",
   "回到第 {0} 页原文": "Go to page {0}", "接着问": "Follow up", "重新生成": "Regenerate",
   "已停止 · 已保留当前译文": "Stopped · Translation kept", "已停止 · 已保留当前回答": "Stopped · Answer kept", "重试这次发送": "Retry request",
   "生成中断：{0}{1} · 可重试本次请求": "Interrupted: {0}{1} · Retry this request", " · 已保留收到的内容": " · Received content kept",
