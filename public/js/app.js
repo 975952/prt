@@ -6,7 +6,8 @@ import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart }
 import { createComposerDraftStore } from './composer-drafts.js';
 import { createDraftPersistence } from './draft-persistence.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
-import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage } from './pdfview.js';
+import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle } from './pdfview.js';
+import { createPaperTitleIndex } from './paper-titles.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
 import {
@@ -646,13 +647,14 @@ function initPanels() {
 const DEFAULT_UI_STYLE = Object.freeze({
   theme: 'glass', density: 'standard', fontSize: 14, lineHeight: 1.72,
   codeSize: 12, maxWidth: 760, opacity: 1,
-  glassTransparency: 76, glassSurfaceTransparency: 80, glassFrost: 32, glassRadius: 24,
-  glassBrightness: 93, glassShadow: 35, nightSaturation: 50, nightBrightness: 90, motion: true,
+  glassTransparency: 12, glassSurfaceTransparency: 88, glassFrost: 18, glassRadius: 24,
+  glassBrightness: 100, glassShadow: 48, glassCrystal: 55, appearanceVersion: 2,
+  nightSaturation: 50, nightBrightness: 90, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
   paper: 'tint',
   // 界面尺度：uiFontSize = 界面字号 px（--ui-fs），controlSize = 控件大小 %（--ctl-scale）。
   // 这两个和上面的 fontSize（阅读/结果字号 --ai-fs）是互相独立的三套刻度。
-  uiFontSize: 13.5, controlSize: 100,
+  uiFontSize: 13.5, controlSize: 100, homeZoom: 100,
   showPage: true, showQuote: true, showSources: false,
   useFullText: true, useWeb: true,
   zoomSpeed: 1,
@@ -668,6 +670,7 @@ const GLASS_CONTROLS = Object.freeze({
   glassRadius: { id: 'uiGlassRadius', min: 0, max: 32, unit: 'px' },
   glassBrightness: { id: 'uiGlassBrightness', min: 60, max: 100, unit: '%' },
   glassShadow: { id: 'uiGlassShadow', min: 0, max: 100, unit: '%' },
+  glassCrystal: { id: 'uiGlassCrystal', min: 0, max: 100, unit: '%' },
   nightSaturation: { id: 'uiNightSaturation', min: 0, max: 100, unit: '%' },
   nightBrightness: { id: 'uiNightBrightness', min: 65, max: 100, unit: '%' },
 });
@@ -1296,6 +1299,13 @@ function bindSideToggleButton(side, btn) {
 function initLayout() {
   const saved = readUi();
   uiStyle = { ...DEFAULT_UI_STYLE, ...(saved.style || {}) };
+  // Upgrade untouched legacy glass defaults once; retain deliberately adjusted values.
+  if (saved.style?.appearanceVersion !== 2 && (!saved.style?.theme || ['glass', 'mist'].includes(saved.style.theme))) {
+    const previous = { glassTransparency: 76, glassSurfaceTransparency: 80, glassFrost: 32, glassBrightness: 93, glassShadow: 35 };
+    for (const [key, value] of Object.entries(previous)) if (saved.style?.[key] === value) uiStyle[key] = DEFAULT_UI_STYLE[key];
+    uiStyle.appearanceVersion = 2;
+    try { localStorage.setItem('reader.ui', JSON.stringify({ ...saved, style: uiStyle })); } catch {}
+  }
   applyUiStyle();
   if (saved.leftW) { sideBaseW.left = saved.leftW; document.documentElement.style.setProperty('--left-w', `${saved.leftW}px`); }
   if (saved.rightW) {
@@ -1790,19 +1800,23 @@ function applyUiStyle() {
   // --ctl-scale 只带控件尺寸（不影响界面文字，也不影响阅读字号）
   root.style.setProperty('--ui-fs', `${uiFontSizePx(style.uiFontSize)}px`);
   root.style.setProperty('--ctl-scale', `${ctlScaleOf(style.controlSize)}`);
+  root.style.setProperty('--home-scale', String(clamp(Number(style.homeZoom) || 100, 70, 160) / 100));
   root.style.setProperty('--glass-paper-opacity', String(1 - glassValue('glassTransparency') / 100));
   root.style.setProperty('--glass-surface-opacity', String(1 - glassValue('glassSurfaceTransparency') / 100));
   root.style.setProperty('--glass-shadow-strength', String(glassValue('glassShadow') / 35));
+  root.style.setProperty('--glass-crystal', String(glassValue('glassCrystal') / 100));
   root.style.setProperty('--glass-frost', `${glassValue('glassFrost')}px`);
   root.style.setProperty('--glass-radius', `${glassValue('glassRadius')}px`);
-  const brightness = Math.round(glassValue('glassBrightness') * 2.55);
-  root.style.setProperty('--glass-bg', `rgb(${brightness} ${brightness} ${brightness})`);
-  root.style.setProperty('--glass-bg-low', `rgb(${brightness - 4} ${brightness - 4} ${brightness - 4})`);
+  const glassColor = rgb => `rgb(${rgb.map(v => Math.round(v * glassValue('glassBrightness') / 100)).join(' ')})`;
+  const glassBg = glassColor([252, 250, 247]), glassBgLow = glassColor([246, 242, 235]);
+  root.style.setProperty('--glass-bg', glassBg);
+  root.style.setProperty('--glass-bg-low', glassBgLow);
   const palette = style.theme === 'dark' ? [[28, 30, 32], [24, 26, 28]] : [[248, 245, 235], [241, 237, 224]];
   const adjusted = (rgb) => `rgb(${rgb.map(v => Math.round(clamp(style.theme === 'dark'
     ? v + (glassValue('glassBrightness') - 93) * .6 : v * glassValue('glassBrightness') / 93, 0, 255))).join(' ')})`;
-  root.style.setProperty('--appearance-bg', style.theme === 'glass' ? `rgb(${brightness} ${brightness} ${brightness})` : adjusted(palette[0]));
-  root.style.setProperty('--appearance-bg-low', style.theme === 'glass' ? `rgb(${brightness - 4} ${brightness - 4} ${brightness - 4})` : adjusted(palette[1]));
+  root.style.setProperty('--appearance-bg', style.theme === 'glass' ? glassBg : adjusted(palette[0]));
+  root.style.setProperty('--appearance-bg-low', style.theme === 'glass' ? glassBgLow : adjusted(palette[1]));
+  $('#glassCrystalField')?.classList.toggle('hidden', style.theme !== 'glass');
   root.dataset.nightSaturation = String(glassValue('nightSaturation'));
   root.dataset.nightBrightness = String(glassValue('nightBrightness'));
   const nightInk = (rgb) => `rgb(${rgb.map(v => Math.round(v * glassValue('nightBrightness') / 100)).join(' ')})`;
@@ -2201,6 +2215,7 @@ function recentDocs() {
       docId,
       rec,
       name: paper.name,
+      label: paperTitles.label(paper),
       url: paper.url,
       path: paper.path,
       page: Math.max(1, Number(rec?.page) || 1),
@@ -2232,6 +2247,9 @@ async function removeRecent(docId) {
 
 // 首页的筛选只作用于书架视图，不改变阅读工作区的当前文件夹与会话。
 const homeView = { filter: 'all', folder: null, query: '' };
+const paperTitles = createPaperTitleIndex({ storage: localStorage, readTitle: readPdfTitle,
+  onChange: debounce(() => { if (!document.body.classList.contains('reading')) renderHome({ navigation: false }); }, 120),
+});
 function chooseHomeView(filter, folder = null) {
   homeView.filter = filter;
   homeView.folder = folder;
@@ -2288,11 +2306,11 @@ function renderHome({ navigation = true } = {}) {
   contWrap.replaceChildren();
   const last = rows.find((r) => r.docId === serverState.lastDoc) || rows[0];
   if (last && homeView.folder === null && homeView.filter !== 'unread' && !homeView.query.trim()) {
-    const go = el('button', { type: 'button', class: 'home-continue', 'aria-label': tr("继续阅读「{0}」，从第 {1} 页开始", last.name, last.page) },
+    const go = el('button', { type: 'button', class: 'home-continue', 'aria-label': tr("继续阅读「{0}」，从第 {1} 页开始", last.label, last.page) },
       el('span', { class: 'hc-cover', 'aria-hidden': 'true' }, iconEl('book', { size: 26 })),
       el('span', { class: 'hc-main' },
         el('span', { class: 'hc-label', text: tr("继续阅读") }),
-        el('span', { class: 'hc-name', text: last.name.replace(/\.pdf$/i, ''), title: last.name }),
+        el('span', { class: 'hc-name', text: last.label, title: last.label }),
         el('span', { class: 'hc-meta', text: tr("第 {0} 页 · {1}", last.page, relTime(last.ts)) })),
       el('span', { class: 'hc-go' }, tr("继续 →")));
     go.onclick = () => openDoc({ name: last.name, url: last.url, docId: last.docId, path: last.path });
@@ -2306,7 +2324,7 @@ function renderHome({ navigation = true } = {}) {
     if (homeView.folder !== null && !inFolder(p, homeView.folder)) return false;
     if (homeView.filter === 'recent' && !recById.has(p.docId)) return false;
     if (homeView.filter === 'unread' && recById.has(p.docId)) return false;
-    return !query || `${p.name} ${p.folder || ''}`.toLocaleLowerCase().includes(query);
+    return !query || `${paperTitles.label(p)} ${p.name} ${p.folder || ''}`.toLocaleLowerCase().includes(query);
   });
   if ($('#homeResultCount')) $('#homeResultCount').textContent = query ? tr("找到 {0} 篇论文", visible.length) : tr("{0} 篇论文", visible.length);
   if (!visible.length) {
@@ -2346,9 +2364,9 @@ function renderHome({ navigation = true } = {}) {
       const page = rec ? Math.max(1, Number(rec.page) || 1) : 0;
       const meta = rec ? tr("第 {0} 页 · {1}", page, relTime(rec.ts)) : tr("未读");
       const item = el('li', { class: 'home-item', dataset: { id: paper.docId }, style: `--depth:${depth}` },
-        el('button', { type: 'button', class: 'home-item-go', title: paper.name },
+        el('button', { type: 'button', class: 'home-item-go', title: paperTitles.label(paper) },
           el('span', { class: 'hi-icon', 'aria-hidden': 'true' }, iconEl('book', { size: 15 })),
-          el('span', { class: 'hi-name', text: paper.name.replace(/\.pdf$/i, '') }),
+          el('span', { class: 'hi-name', text: paperTitles.label(paper) }),
           el('span', { class: 'hi-meta', text: meta })),
         rec ? el('button', {
           type: 'button', class: 'home-item-x', text: '×',
@@ -2382,6 +2400,7 @@ async function refreshPaperList() {
   } catch { state.papers = []; state.folders = []; }
   renderPaperList();
   renderFolderSwitch();
+  paperTitles.update(state.papers);
 }
 
 const PAPER_GRIP_SVG = '<svg viewBox="0 0 24 24" width="10" height="16" fill="currentColor" aria-hidden="true" focusable="false"><circle cx="9" cy="6" r="1.5"/><circle cx="15" cy="6" r="1.5"/><circle cx="9" cy="12" r="1.5"/><circle cx="15" cy="12" r="1.5"/><circle cx="9" cy="18" r="1.5"/><circle cx="15" cy="18" r="1.5"/></svg>';
@@ -7575,10 +7594,71 @@ function makeDraggable(el, handleSel, { fromAnywhere = false, remember = true } 
   el.classList.add('draggable-card');
 }
 
+function initTranslationCardResize() {
+  const card = $('#translationCard'), grip = $('#translationCardResize');
+  if (!card || !grip) return;
+  const key = 'reader.translationCardSize.v1';
+  let preferred = null, drag = null;
+  try {
+    const saved = JSON.parse(localStorage.getItem(key) || 'null');
+    if (saved && Number.isFinite(saved.width) && Number.isFinite(saved.height)) preferred = saved;
+  } catch { /* Use the content-sized card. */ }
+  const fit = () => {
+    if (preferred) {
+      card.dataset.sized = 'true';
+      card.style.width = `${clamp(preferred.width, Math.min(260, innerWidth - 16), innerWidth - 16)}px`;
+      card.style.height = `${clamp(preferred.height, Math.min(150, innerHeight - 16), innerHeight - 16)}px`;
+    }
+    if (!card.classList.contains('hidden')) {
+      const r = card.getBoundingClientRect();
+      placeCard(card, clamp(r.left, 8, Math.max(8, innerWidth - r.width - 8)),
+        clamp(r.top, 8, Math.max(8, innerHeight - r.height - 8)), false);
+    }
+  };
+  const resize = (width, height) => {
+    const r = card.getBoundingClientRect();
+    const maxW = Math.max(1, innerWidth - Math.max(8, r.left) - 8);
+    const maxH = Math.max(1, innerHeight - Math.max(8, r.top) - 8);
+    preferred = { width: clamp(width, Math.min(260, maxW), maxW), height: clamp(height, Math.min(150, maxH), maxH) };
+    fit();
+  };
+  const save = () => { try { localStorage.setItem(key, JSON.stringify(preferred)); } catch {} };
+  grip.addEventListener('pointerdown', e => {
+    if (e.button !== 0 || drag) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = card.getBoundingClientRect();
+    drag = { id: e.pointerId, x: e.clientX, y: e.clientY, width: r.width, height: r.height };
+    card.classList.add('resizing'); grip.setPointerCapture(e.pointerId);
+  });
+  grip.addEventListener('pointermove', e => {
+    if (!drag || drag.id !== e.pointerId) return;
+    resize(drag.width + e.clientX - drag.x, drag.height + e.clientY - drag.y);
+  });
+  const end = e => {
+    if (!drag || drag.id !== e.pointerId) return;
+    drag = null; card.classList.remove('resizing');
+    if (grip.hasPointerCapture(e.pointerId)) grip.releasePointerCapture(e.pointerId);
+    save();
+  };
+  for (const event of ['pointerup', 'pointercancel', 'lostpointercapture']) grip.addEventListener(event, end);
+  grip.addEventListener('keydown', e => {
+    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(e.key)) return;
+    e.preventDefault(); e.stopPropagation();
+    const r = card.getBoundingClientRect(), step = e.shiftKey ? 40 : 10;
+    resize(r.width + (e.key === 'ArrowRight' ? step : e.key === 'ArrowLeft' ? -step : 0),
+      r.height + (e.key === 'ArrowDown' ? step : e.key === 'ArrowUp' ? -step : 0));
+    save();
+  });
+  window.addEventListener('resize', fit);
+  new ResizeObserver(() => { if (!drag) fit(); }).observe(card);
+  fit();
+}
+
 function initDraggableCards() {
   // 气泡整条都是按钮，所以用「按下后移动才算拖」的模式；它不记位置，每次贴新的选区
   makeDraggable($('#bubble'), null, { fromAnywhere: true, remember: false });
   makeDraggable($('#translationCard'), '.pop-head', { remember: false });
+  initTranslationCardResize();
   $('#translationCardClose')?.addEventListener('click', hideTranslationCard);
   makeDraggable($('#citeBox'), '.pop-head');
   makeDraggable($('#noteBox'), '.pop-head');
@@ -12768,6 +12848,12 @@ function updateUiRangeLabels() {
  * Ctrl/⌘ + =（+）/ - 的落点：只改「阅读字号」（结果正文 --ai-fs），
  * 不动界面字号、不动控件大小；范围与设置里的滑杆一致（12–30），并同步面板与 toast。
  */
+function setHomeZoom(value) {
+  uiStyle = { ...uiStyle, homeZoom: clamp(Math.round(value / 10) * 10, 70, 160) };
+  applyUiStyle(); saveUi();
+  toast(tr("首页缩放 {0}%", uiStyle.homeZoom), '', 1200);
+}
+
 function setReadingFontSize(px) {
   const next = clamp(Math.round(Number(px) || DEFAULT_UI_STYLE.fontSize), READ_FS_MIN, READ_FS_MAX);
   uiStyle = { ...uiStyle, fontSize: next };
@@ -13125,9 +13211,13 @@ function initShortcuts() {
     }
     // 全屏切换：F11（浏览器里也照常用；桌面壳走窗口 IPC）
     if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); return; }
-    if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) { e.preventDefault(); setReadingFontSize(uiStyle.fontSize + 1); return; }
-    if ((e.ctrlKey || e.metaKey) && (e.key === '-' || e.key === '_')) { e.preventDefault(); setReadingFontSize(uiStyle.fontSize - 1); return; }
-    if ((e.ctrlKey || e.metaKey) && e.key === '0') { e.preventDefault(); setReadingFontSize(DEFAULT_UI_STYLE.fontSize); return; }
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && ['=', '+', '-', '_', '0'].includes(e.key)) {
+      e.preventDefault();
+      const reset = e.key === '0', step = ['=', '+'].includes(e.key) ? 1 : -1;
+      if (!document.body.classList.contains('reading')) setHomeZoom(reset ? 100 : (Number(uiStyle.homeZoom) || 100) + step * 10);
+      else setReadingFontSize(reset ? DEFAULT_UI_STYLE.fontSize : uiStyle.fontSize + step);
+      return;
+    }
 
     if (typing) return;
 

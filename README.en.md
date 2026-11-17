@@ -17,7 +17,7 @@ A local PDF reader for Windows, with translation, paper chat, and notes beside t
 
 ![prt library home with search, folders, and continue reading](docs/assets/home-english.png)
 
-<sub>Actual v1.2.1 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
+<sub>Actual v1.2.2 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
 
 ## Pick up where you left off
 
@@ -49,7 +49,7 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 
 No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.2.1](https://github.com/975952/prt/releases/tag/v1.2.1), with the redesigned library home and individual translation deletion. Use the trash icon at the top right of a result to delete it immediately, without a confirmation dialog. This also works for saved, screenshot, and unfinished translations.
+**Current release:** [v1.2.2](https://github.com/975952/prt/releases/tag/v1.2.2). The rounded library home supports `Ctrl+plus` / `Ctrl+minus` zoom and `Ctrl+0` reset. Numeric PDF filenames gain locally detected paper titles, which are also searchable. Drag the floating translation card's lower-right corner to resize it. Glass now uses a near-white, subtly warm background, with 12% page transparency, 88% interface transparency, and a separate crystal intensity control. Individual translations can still be deleted immediately without confirmation.
 
 ## Your data
 

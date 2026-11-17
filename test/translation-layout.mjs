@@ -126,6 +126,31 @@ try {
     `card drag: ${JSON.stringify({ drag, moved })}`);
   console.log('PASS translation card: title drag moves card and keeps it open');
 
+  // Move to a stable corner before testing resize limits with real pointer input.
+  await page.$eval('#translationCard', el => { el.style.left = '30px'; el.style.top = '70px'; });
+  const sizeOf = () => page.$eval('#translationCard', el => {
+    const r = el.getBoundingClientRect(); return { width: r.width, height: r.height, right: r.right, bottom: r.bottom };
+  });
+  const beforeResize = await sizeOf();
+  const grip = await page.$eval('#translationCardResize', el => { const r = el.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 }; });
+  await page.mouse.move(grip.x, grip.y); await page.mouse.down();
+  await page.mouse.move(grip.x + 150, grip.y + 190, { steps: 10 }); await page.mouse.up();
+  const enlarged = await sizeOf();
+  assert.ok(enlarged.width > beforeResize.width + 100 && enlarged.height > beforeResize.height + 130);
+  console.log('PASS translation card: corner drag changes width and height');
+  await page.$eval('#translationCardText', el => { el.textContent = 'Long translated content. '.repeat(600); });
+  assert.ok(await page.$eval('#translationCardText', el => el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === 'auto'));
+  console.log('PASS long translations scroll within the resized card');
+  await page.focus('#translationCardResize');
+  await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowUp');
+  const keyboardSize = await sizeOf();
+  assert.ok(keyboardSize.width < enlarged.width && keyboardSize.height < enlarged.height);
+  await page.setViewport({ width: 380, height: 420 });
+  await page.waitForFunction(() => { const r = document.querySelector('#translationCard').getBoundingClientRect(); return r.right <= innerWidth && r.bottom <= innerHeight; });
+  console.log('PASS card size stays inside a smaller viewport');
+  await page.setViewport({ width: 1250, height: 850 });
+  await page.screenshot({ path: path.join(temp, 'resizable-card.png') });
+
   await page.click('#translationCardClose');
   await page.click('#topbarRightToggle');
   await page.waitForFunction(() => document.querySelector('#rightCols').getBoundingClientRect().width > 200);
@@ -211,13 +236,24 @@ try {
         bubbles: true, cancelable: true, ctrlKey: true, deltaY: -4, clientX: x, clientY: y,
       }));
       const immediateLayouts = layouts;
-      await new Promise((r) => setTimeout(r, 250));
+      const deadline = performance.now() + 2000;
+      while (!layouts && performance.now() < deadline) await new Promise((r) => setTimeout(r, 50));
       return { startingScale, scale: v.scale, immediateLayouts, layouts };
     } finally { v.layout = layout; }
   }, wheelPoint);
   assert.ok(batched.scale > batched.startingScale && batched.immediateLayouts === 0
     && batched.layouts > 0 && batched.layouts < 12, `batched pinch: ${JSON.stringify(batched)}`);
   console.log('PASS rapid pinch events: coalesced into smooth display frames');
+  const savedSize = await page.evaluate(() => JSON.parse(localStorage.getItem('reader.translationCardSize.v1')));
+  await page.goto(`${base}/?open=${encodeURIComponent(sampleName)}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__viewer?.pdf && document.querySelector('.page[data-page="1"] .textLayer span') && document.body.classList.contains('reading'));
+  if (await page.$eval('#rightCols', el => el.getBoundingClientRect().width > 0)) await page.click('#topbarRightToggle');
+  await page.waitForFunction(() => document.querySelector('#rightCols').getBoundingClientRect().width === 0);
+  await select(1, 3);
+  await page.waitForSelector('#translationCard:not(.hidden)');
+  const restoredSize = await sizeOf();
+  assert.ok(Math.abs(restoredSize.width - savedSize.width) < 2 && Math.abs(restoredSize.height - savedSize.height) < 2);
+  console.log('PASS resized translation card restores its dimensions after reload');
   assert.deepEqual(errors, [], `browser errors: ${errors.join('; ')}`);
 } finally {
   await browser?.close();

@@ -3,7 +3,7 @@ import { spawnSync } from 'node:child_process';
 import path from 'node:path';
 
 const suites = ['agent-unit.mjs', 'output-flow.mjs', 'composer-drafts.mjs',
-  'translation-queue.mjs', 'selection-reading-order.mjs', 'i18n.mjs', 'prompts-manifest.mjs', 'repository-check.mjs'];
+  'translation-queue.mjs', 'paper-titles.mjs', 'selection-reading-order.mjs', 'i18n.mjs', 'prompts-manifest.mjs', 'repository-check.mjs'];
 for (const suite of suites) {
   console.log(`\nRunning ${suite}`);
   const result = spawnSync(process.execPath, [path.join(import.meta.dirname, suite)], { stdio: 'inherit' });

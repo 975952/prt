@@ -1,6 +1,8 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "首页缩放 {0}%": "Library zoom {0}%", "水晶质感": "Crystal intensity",
+  "拖动调整大小；方向键微调": "Drag to resize; use arrow keys for fine adjustment", "调整译文卡片大小": "Resize translation card",
   "书架导航": "Library navigation", "论文阅读工作台": "A space for your papers", "论文筛选": "Filter papers",
   "最近阅读": "Recently read", "未读论文": "Unread papers", "按文件夹筛选": "Filter by folder",
   "本地文献库": "Local library", "阅读与思考，从这里继续": "A place to read and think",

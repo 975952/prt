@@ -7,6 +7,7 @@ import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
 import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
 import { stageExe, spawnReader, stopChild } from './_exe.mjs';
+import { writeTitlePdf } from './fixtures/make-title-pdf.mjs';
 
 const desktop = process.argv.includes('--desktop');
 fs.mkdirSync(SANDBOX, { recursive: true });
@@ -41,6 +42,7 @@ try {
   const count = () => page.$$eval('#homeList .home-item', nodes => nodes.length);
   const ids = () => page.$$eval('#homeList .home-item', nodes => nodes.map(n => n.dataset.id));
   const filter = name => page.click(`[data-home-filter="${name}"]`);
+  const zoomKey = async key => { await page.keyboard.down('Control'); await page.keyboard.press(key); await page.keyboard.up('Control'); };
   const search = async text => {
     await page.$eval('#homeSearch', (n, value) => { n.value = value; n.dispatchEvent(new Event('input', { bubbles: true })); }, text);
   };
@@ -100,6 +102,25 @@ try {
   check('typing retains input focus', await page.evaluate(() => document.activeElement.id === 'homeSearch'));
   await page.keyboard.press('Escape');
   check('Escape clears search', await count() === 6);
+  const headingBefore = await page.$eval('#homeHeading', n => n.getBoundingClientRect().height);
+  const fontBefore = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ai-fs'));
+  await zoomKey('+'); await zoomKey('+');
+  check('Ctrl+plus zooms home with focused search', await page.$eval('#homeHeading', (n, before) => n.getBoundingClientRect().height > before * 1.15, headingBefore));
+  check('home zoom leaves reader font unchanged', await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ai-fs')) === fontBefore);
+  await page.reload({ waitUntil: 'networkidle0' });
+  check('home zoom persists', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 120);
+  await zoomKey('-');
+  check('Ctrl+minus reduces home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 110);
+  for (let i = 0; i < 10; i++) await zoomKey('+');
+  check('home zoom has an upper bound', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 160);
+  for (const width of [900, 480, 360]) {
+    await page.setViewport({ width, height: 850 });
+    check(`enlarged home fits at ${width}px`, await page.evaluate(() => ['#home', '.home-content', '.home-workspace', '.home-list'].every(s => { const n = document.querySelector(s); return n.scrollWidth <= n.clientWidth + 1; })));
+  }
+  await page.setViewport({ width: 1440, height: 960 });
+  await zoomKey('0');
+  check('Ctrl+0 resets home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 100);
+  check('home outer corners clip both sidebar and content', await page.$eval('#home', n => parseFloat(getComputedStyle(n).borderRadius) >= 14 && getComputedStyle(n).overflow === 'hidden'));
   const chooser = await Promise.all([page.waitForFileChooser(), page.click('#homeOpen')]).then(r => r[0]);
   check('open PDF launches file picker', chooser.isMultiple());
   await chooser.cancel();
@@ -162,6 +183,16 @@ try {
   });
   assert.deepEqual(untranslated, []); checks++; console.log('PASS English UI has no untranslated application text');
   await page.screenshot({ path: path.join(scratch, 'home-english.png') });
+  writeTitlePdf(path.join(papersDir, '1706.03762.pdf'));
+  writeTitlePdf(path.join(papersDir, '2101.11986.pdf'), { title: 'A Prominent First Page Title', metadata: 'Untitled' });
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => document.querySelector('#homeList').textContent.includes('1706.03762 · Attention Is All You Need')
+    && document.querySelector('#homeList').textContent.includes('2101.11986 · A Prominent First Page Title'));
+  check('numeric PDFs show metadata and first-page titles', true);
+  await search('Prominent First'); check('search matches an extracted title', await count() === 1);
+  await page.click('#homeList .home-item-go');
+  await page.waitForFunction(() => window.__viewer?.numPages > 0 && window.__state?.doc?.path === '2101.11986.pdf');
+  check('title label opens the original path', fs.existsSync(path.join(papersDir, '2101.11986.pdf')) && !fs.existsSync(path.join(papersDir, 'A Prominent First Page Title.pdf')));
   assert.deepEqual(errors, []); checks++; console.log('PASS no browser errors');
   console.log(`PASS ${checks} checks (${desktop ? 'embedded desktop' : 'Node'}). Screenshots: ${scratch}`);
 } catch (error) {

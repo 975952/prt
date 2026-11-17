@@ -116,7 +116,19 @@ try {
       transparency: Number(cs.getPropertyValue('--glass-paper-opacity')), bg: getComputedStyle(document.body).backgroundColor };
   });
   check('玻璃纸底透明，文字像素保持不透明', glass.empty > 1000 && glass.ink > 100 && glass.opacity === '1', JSON.stringify(glass));
-  check('默认采用用户选定的 76% / 32px / 24px', Math.abs(glass.transparency - .24) < .001 && glass.frost === '32px' && glass.radius === '24px');
+  check('默认采用低透明纸面 12% / 磨砂 18px / 圆角 24px', Math.abs(glass.transparency - .88) < .001 && glass.frost === '18px' && glass.radius === '24px');
+  check('界面背景保持高透明度，底色近白并带极淡暖意', await page.evaluate(() => {
+    const cs = getComputedStyle(document.documentElement);
+    return Math.abs(Number(cs.getPropertyValue('--glass-surface-opacity')) - .12) < .001
+      && cs.getPropertyValue('--glass-bg').trim() === 'rgb(252 250 247)';
+  }));
+  const crystal = await page.evaluate(() => {
+    const p = document.querySelector('.page'), canvas = window.__viewer.rendered.get(1).canvas;
+    const set = value => { const n = document.querySelector('#uiGlassCrystal'); n.value = value; n.dispatchEvent(new Event('input', { bubbles: true })); return [getComputedStyle(p).boxShadow, getComputedStyle(p, '::before').opacity]; };
+    const low = set(0), high = set(100);
+    return { low, high, sameCanvas: canvas === window.__viewer.rendered.get(1).canvas };
+  });
+  check('水晶滑杆明显改变边缘光与高光且不重建正文', crystal.low[0] !== crystal.high[0] && crystal.low[1] === '0' && crystal.high[1] === '1' && crystal.sameCanvas);
   const shotPixel = await page.evaluate(async () => {
     const shot = await window.__viewer.capturePageImage(1, { maxDim: 600 });
     const img = new Image(); img.src = shot.dataUrl; await img.decode();
@@ -153,7 +165,7 @@ try {
       motion: document.documentElement.dataset.motion, bg: cs.getPropertyValue('--glass-bg').trim() };
   });
   check('重开恢复玻璃控件，亮度已提亮', restoredGlass.theme === 'glass' && restoredGlass.frost === '0px' && restoredGlass.radius === '18px'
-    && Math.abs(restoredGlass.opacity - .19) < .001 && restoredGlass.motion === 'off' && restoredGlass.bg === 'rgb(245 245 245)', JSON.stringify(restoredGlass));
+    && Math.abs(restoredGlass.opacity - .19) < .001 && restoredGlass.motion === 'off' && restoredGlass.bg === 'rgb(242 240 237)', JSON.stringify(restoredGlass));
   const focusStyle = await page.evaluate(() => {
     const input = document.querySelector('#chatInput'); input.focus();
     const cs = getComputedStyle(input);
@@ -245,10 +257,10 @@ try {
           surface: composer.backgroundColor, backdrop: getComputedStyle(document.body).backgroundImage };
       };
       set('uiGlassTransparency', 0); set('uiGlassSurfaceTransparency', 0); set('uiGlassFrost', 48);
-      set('uiGlassRadius', 32); set('uiGlassShadow', 100); set('uiGlassBrightness', 100);
+      set('uiGlassRadius', 32); set('uiGlassShadow', 100); set('uiGlassBrightness', 100); set('uiGlassCrystal', 100);
       const strong = snapshot();
       set('uiGlassTransparency', 100); set('uiGlassSurfaceTransparency', 100); set('uiGlassFrost', 0);
-      set('uiGlassRadius', 0); set('uiGlassShadow', 0); set('uiGlassBrightness', 60);
+      set('uiGlassRadius', 0); set('uiGlassShadow', 0); set('uiGlassBrightness', 60); set('uiGlassCrystal', 0);
       return { strong, quiet: snapshot(), sameCanvas: canvas === v.rendered.get(1).canvas, sameScroll: scroll === v.container.scrollTop,
         enabled: [...document.querySelectorAll('#glassAppearanceControls input')].every(el => !el.matches(':disabled')) };
     });
@@ -263,7 +275,8 @@ try {
     check(`${theme} 重置效果不改变主题、字号或阅读位置`, await page.evaluate(before => {
       const style = JSON.parse(localStorage.getItem('reader.ui')).style;
       return style.theme === before.theme && style.fontSize === before.font && window.__viewer.current === before.page && window.__viewer.scale === before.scale
-        && style.glassFrost === 32 && style.glassRadius === 24 && style.glassShadow === 35 && style.glassSurfaceTransparency === 80;
+        && style.glassFrost === 18 && style.glassRadius === 24 && style.glassShadow === 48 && style.glassSurfaceTransparency === 88
+        && style.glassTransparency === 12 && style.glassCrystal === 55;
     }, beforeReset));
     await page.screenshot({ path: path.join(artifactDir, `theme-${theme}-adjustable-settings.png`) });
   }
@@ -370,6 +383,19 @@ try {
     check('旧主题偏好平滑迁移 ' + oldTheme, migrated.active === newTheme && migrated.saved === newTheme);
   }
 
+  for (const [custom, transparency, brightness] of [[false, 76, 93], [true, 41, 91]]) {
+    await page.evaluate(({ transparency, brightness }) => {
+      localStorage.setItem('reader.ui', JSON.stringify({ style: { theme: 'glass', glassTransparency: transparency,
+        glassSurfaceTransparency: 80, glassBrightness: brightness, glassFrost: 32, glassShadow: 35 } }));
+    }, { transparency, brightness });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 2);
+    check(custom ? '升级保留用户自定义透明度和亮度' : '升级将旧默认值迁移到微暖透光默认值', await page.evaluate(custom => {
+      const s = JSON.parse(localStorage.getItem('reader.ui')).style;
+      return s.appearanceVersion === 2 && s.glassTransparency === (custom ? 41 : 12)
+        && s.glassBrightness === (custom ? 91 : 100) && s.glassSurfaceTransparency === 88;
+    }, custom));
+  }
   check('操作期间没有页面错误', pageErrors.length === 0, pageErrors.join(' | '));
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n主题皮肤：${checks.length - failed.length}/${checks.length} 通过`);

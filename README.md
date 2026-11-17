@@ -18,7 +18,7 @@
 
 ![prt 首页：继续阅读、论文分类与书架搜索](docs/assets/home-glass.png)
 
-<sub>v1.2.1 实际界面；书架使用独立演示数据。[截图说明](docs/assets/README.md)</sub>
+<sub>v1.2.2 实际界面；书架使用独立演示数据。[截图说明](docs/assets/README.md)</sub>
 
 ## 从书架回到阅读
 
@@ -51,7 +51,7 @@
 
 桌面版免安装，无需 Node.js。支持 Windows 10/11 x64，需要 [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（多数系统已安装）。模型服务由你自行配置，服务费用按对应提供商规则计算。
 
-**当前版本：** [v1.2.1](https://github.com/975952/prt/releases/tag/v1.2.1)，新增书架首页与单条译文删除。点击译文右上角的垃圾桶即可删除，无确认弹窗；历史译文、截图译文和未完成结果同样支持。
+**当前版本：** [v1.2.2](https://github.com/975952/prt/releases/tag/v1.2.2)。首页采用圆角布局，支持 `Ctrl+加号` / `Ctrl+减号` 缩放、`Ctrl+0` 复位；数字 PDF 文件名后会自动补出可识别的论文标题，也能按标题搜索。浮动译文卡片可拖动右下角调整大小。透光主题采用近白、微暖背景，默认纸面透明度 12%、界面透明度 88%，水晶高光可单独调节。每条译文仍可直接删除，无确认弹窗。
 
 升级时，退出旧版并替换同一目录的 `prt.exe`，保留 `papers/` 和 `data/`。下载页提供 `SHA256SUMS.txt` 校验文件。
 
