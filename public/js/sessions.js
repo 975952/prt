@@ -55,7 +55,7 @@ const st = {
   historyOpen: false,
   quickOpen: false,
   /** 会话历史的排列方式：file=按文件整理；time=按时间顺序 */
-  histMode: 'file',
+  histMode: 'time',
   histQuery: '',
   quickQuery: '',
   showArchived: false,
@@ -117,7 +117,7 @@ function setOnEnter(mode) {
 
 /** 历史面板排列方式：按文件整理（默认）/ 按时间顺序 */
 function readHistMode() {
-  try { return localStorage.getItem(HIST_MODE_KEY) === 'time' ? 'time' : 'file'; } catch { return 'file'; }
+  try { return localStorage.getItem(HIST_MODE_KEY) === 'file' ? 'file' : 'time'; } catch { return 'time'; }
 }
 
 function setHistMode(mode) {

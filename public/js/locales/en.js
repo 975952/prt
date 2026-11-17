@@ -1,6 +1,9 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "浏览器搜索论文": "Search paper in browser", "其他参考文献": "Other references",
+  "书架外文献 <b>{0}</b> 条": "<b>{0}</b> references outside the library",
+  "排队中…": "Queued…",
   "PDF 悬浮强度": "PDF elevation", "纸面边缘高光": "Page edge highlight",
   "译文卡片材质": "Translation card material", "卡片材质": "Card material",
   "液态玻璃": "Liquid glass", "磨砂玻璃": "Frosted glass",
@@ -255,7 +258,7 @@ export const en = {
   "发送整篇论文，并先联网查一次资料": "Include the full paper and search the web", "选中 {0}{1}": "Selected {0}{1}", "整篇论文（暂不可提取）": "Full paper (text unavailable)",
   "{0}（Enter）· Shift+Enter 换行": "{0} (Enter) · Shift+Enter for a new line", "合并翻译": "Translate together", "继续补充原文…": "Add more text…",
   "将合并翻译 {0} 段选文{1}": "Translate {0} passages together{1}", " · {0} 张截图另译": " · {0} screenshots translated separately",
-  "{0} 张截图{1}将依次翻译": "Translate {0} screenshots{1} in order", "与输入文字": " and entered text",
+  "{0} 张截图{1}将分别翻译": "Translate {0} screenshots{1} separately", "与输入文字": " and entered text",
   "扫描件 · 将通过图片理解页面": "Scanned paper · Reading page images", "扫描件 · 需要支持图片的模型，可在设置中配置": "Scanned paper · Choose a model with image support in Settings",
   "未配置「视觉模型」：图片会交给主模型；如果它不支持读图，请到设置里填一个视觉模型": "Images use the main model. If it cannot read images, choose an image model in Settings.",
   "扫描件：正在阅读第 {0} 页（{1}/{2}）…": "Scanned paper: reading page {0} ({1}/{2})…", "正在读取整篇论文…": "Reading the full paper…",

@@ -29,6 +29,7 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true, defaultViewport: { width: 1440, height: 960 } });
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', e => errors.push(String(e)));
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   await page.goto(`${base}/?open=sample.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0 && !window.__viewer.renderTasks.size);
   await page.evaluate(() => document.fonts.ready); await wait(400);
@@ -41,7 +42,30 @@ try {
       sideRadii: [...document.querySelectorAll('.main-row .side')].map(n => getComputedStyle(n).borderRadius) };
   });
   const initial = await snapshot();
-  assert.equal(initial.bg, 'rgb(252 250 247)'); assert(initial.sideRadii.every(r => r === '0px'));
+  assert.equal(initial.bg, 'rgb(233 233 233)'); assert(initial.sideRadii.every(r => r === '0px'));
+  assert.equal(await page.$eval('#uiGlassBrightness', n => n.min), '92');
+  await set('uiGlassBrightness', 60);
+  assert.equal((await snapshot()).bg, 'rgb(233 233 233)');
+  assert.equal(await page.$eval('#uiGlassBrightness', n => n.value), '92');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassBrightness), 92);
+  assert.equal((await snapshot()).canvas, initial.canvas);
+  await set('uiGlassBrightness', 100);
+  await page.evaluate(() => document.activeElement?.blur()); await wait(250);
+  const inputSurface = () => page.$eval('#composer .composer-row', n => {
+    const s = getComputedStyle(n), r = n.getBoundingClientRect();
+    return { shadow: s.boxShadow, background: s.backgroundImage, width: r.width, height: r.height };
+  });
+  const restingInput = await inputSurface();
+  await page.screenshot({ path: path.join(scratch, 'composer-resting.png') });
+  await page.focus('#chatInput'); await wait(250);
+  const focusedInput = await inputSurface();
+  assert.notEqual(restingInput.shadow, 'none'); assert.notEqual(focusedInput.shadow, restingInput.shadow);
+  assert(restingInput.shadow.includes('26px')); assert(focusedInput.shadow.includes('32px'));
+  assert.notEqual(focusedInput.background, restingInput.background);
+  assert.equal(focusedInput.width, restingInput.width); assert.equal(focusedInput.height, restingInput.height);
+  assert.equal(await page.$eval('#chatInput', n => getComputedStyle(n).outlineStyle), 'none');
+  await page.screenshot({ path: path.join(scratch, 'composer-focused.png') });
+  console.log('PASS brighter 92–100% range and visible input surface lighting without focus outlines or layout shift');
   await set('uiGlassTone', 0); assert.equal((await snapshot()).bg, 'rgb(253 253 253)');
   await set('uiGlassTone', 100); assert.equal((await snapshot()).bg, 'rgb(255 244 224)');
   await set('uiGlassTone', 20);
@@ -73,9 +97,9 @@ try {
   await set('uiGlassCardTransparency', 72); await set('uiGlassCardBlur', 2.4); await set('uiGlassCardRefraction', 90);
   assert.equal(await page.$eval('#prt-translation-refraction feDisplacementMap', n => n.getAttribute('scale')), '36');
   await mode('frosted');
-  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '63'); assert.equal(await page.$eval('#uiGlassCardBlur', n => n.value), '15');
+  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '71'); assert.equal(await page.$eval('#uiGlassCardBlur', n => n.value), '9.4');
   assert(await page.$eval('#glassCardRefractionField', n => n.classList.contains('hidden')));
-  assert.equal(await page.$eval('.translation-material', n => getComputedStyle(n).backdropFilter), 'blur(15px) saturate(0.85)');
+  assert.equal(await page.$eval('.translation-material', n => getComputedStyle(n).backdropFilter), 'blur(9.4px) saturate(0.85)');
   await page.screenshot({ path: path.join(scratch, 'card-frosted.png') });
   await set('uiGlassCardTransparency', 68); await set('uiGlassCardBlur', 19);
   await mode('liquid');
@@ -97,9 +121,20 @@ try {
   await page.focus('#uiGlassCardTransparency'); await page.keyboard.press('Home'); await page.keyboard.press('ArrowRight');
   assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '16');
   await page.click('#resetAppearanceEffects');
-  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '63');
-  assert.equal(await page.$eval('#uiGlassShadow', n => n.value), '76'); assert.equal(await page.$eval('#uiGlassCrystal', n => n.value), '70');
+  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '71');
+  assert.equal(await page.$eval('#uiGlassShadow', n => n.value), '100'); assert.equal(await page.$eval('#uiGlassCrystal', n => n.value), '100');
   await page.screenshot({ path: path.join(scratch, 'settings.png') });
+  await page.evaluate(() => {
+    const saved = JSON.parse(localStorage.getItem('reader.ui'));
+    saved.style.glassBrightness = 60; saved.style.appearanceVersion = 3;
+    localStorage.setItem('reader.ui', JSON.stringify(saved));
+  });
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassBrightness), 92);
+  assert.equal((await snapshot()).bg, 'rgb(233 233 233)');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassCardMode), 'frosted');
+  console.log('PASS older dim background preferences migrate to the new minimum and retain card material');
   assert.deepEqual(errors, []);
   console.log(`PASS keyboard, reset, reload persistence and current embedded assets (${desktop ? 'desktop' : 'Node'}). Artifacts: ${scratch}`);
 } finally { await browser?.close(); await stopChild(child); }

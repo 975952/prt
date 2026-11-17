@@ -17,7 +17,7 @@ A local PDF reader for Windows, with translation, paper chat, and notes beside t
 
 ![prt library home with search, folders, and continue reading](docs/assets/home-english.png)
 
-<sub>Actual v1.2.4 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
+<sub>Actual v1.2.5 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
 
 ## Pick up where you left off
 
@@ -49,9 +49,13 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 
 No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.2.4](https://github.com/975952/prt/releases/tag/v1.2.4). Glass combines a near-white, subtly warm background with space around the PDF, soft outer shadows, and fine edge highlights. Rounded corners apply to the paper and the main home panel; sidebars stay flat and square. Library zoom, automatic paper titles, movable and resizable translation cards, and immediate deletion of individual translations remain available.
+**Current release:** [v1.2.8](https://github.com/975952/prt/releases/tag/v1.2.8). Glass combines a near-white, subtly warm background with space around the PDF, soft outer shadows, and fine edge highlights. Rounded corners apply to the paper and the main home panel; sidebars stay flat and square. Library zoom, automatic paper titles, movable and resizable translation cards, and immediate deletion of individual translations remain available.
 
 In **Settings → Appearance**, adjust background tone, PDF elevation, and paper edge highlights. **Translation card material** offers Liquid glass and Frosted glass, each with independently saved transparency and blur; Liquid glass also has adjustable edge refraction. Initial card transparency is 55% for Liquid glass and 63% for Frosted glass, and both remain adjustable. Default page transparency is 12%, with 88% interface transparency.
+
+v1.2.5 strengthens input highlights and shadows and raises the background brightness range to 92%–100%. Successive selections translate independently, with up to three results generating at once in a stable sidebar order. Closing a floating card no longer blocks the next selection. Narrow-column papers also retain correct selection boundaries when zoomed in.
+
+v1.2.6 fixes washed-out pastel diagram backgrounds and unreadable labels in dark reading. Pale fills become darker shades of their original hue, while photographs and saturated graphics keep their original colors.
 
 <details>
 <summary>Preview both translation card materials</summary>

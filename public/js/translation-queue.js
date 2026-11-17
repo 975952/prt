@@ -1,4 +1,4 @@
-/** In-window sequential translation batches. No DOM, storage, fetch or model dependencies. */
+/** In-window bounded translation batches. No DOM, storage, fetch or model dependencies. */
 
 let sequence = 0;
 const batches = new WeakMap();
@@ -21,7 +21,7 @@ function pause(run, reason) {
   if (!run.stopReason) run.stopReason = String(reason || 'user');
   run.batch.status = 'paused';
   run.batch.reason = run.stopReason;
-  if (run.item?.status === 'running') run.item.status = 'stopped';
+  for (const item of run.items) if (item.status === 'running') item.status = 'stopped';
   if (!run.controller.signal.aborted) run.controller.abort(run.stopReason);
 }
 
@@ -79,7 +79,7 @@ export function stopTranslationBatch(batch, reason = 'user') {
  * The caller must also guard its own streaming writes with signal/ownership checks.
  * Re-invoke explicitly to resume. Concurrent invocations reject with TranslationBatchBusyError.
  */
-export async function runTranslationBatch(batch, { runItem, isCurrent = () => true, onChange } = {}) {
+export async function runTranslationBatch(batch, { runItem, isCurrent = () => true, onChange, concurrency = 1 } = {}) {
   const meta = metaOf(batch);
   if (typeof runItem !== 'function') throw new TypeError('runItem must be a function');
   if (typeof isCurrent !== 'function') throw new TypeError('isCurrent must be a function');
@@ -88,7 +88,7 @@ export async function runTranslationBatch(batch, { runItem, isCurrent = () => tr
     error.name = 'TranslationBatchBusyError';
     throw error;
   }
-  const run = { batch, controller: new AbortController(), onChange, item: null, stopReason: '' };
+  const run = { batch, controller: new AbortController(), onChange, items: new Set(), stopReason: '', failed: false };
   meta.run = run;
   batch.controller = run.controller;
   batch.status = 'running';
@@ -104,54 +104,60 @@ export async function runTranslationBatch(batch, { runItem, isCurrent = () => tr
   try {
     notify(run);
     if (!current()) return batch;
-    for (const item of batch.items) {
-      if (item.status === 'complete' || item.deleted) continue;
-      if (!current()) break;
-      run.item = item;
-      item.status = 'running';
-      delete item.error;
-      notify(run);
-      // onChange may synchronously stop or change the active document.
-      if (!current()) { run.item = null; break; }
-      let result;
-      try {
-        result = await runItem(item, { signal: run.controller.signal, batch });
-      } catch (error) {
-        result = error?.name === 'AbortError'
-          ? { status: 'stopped', reason: 'stopped' }
-          : { status: 'failed', error: messageOf(error) };
+    let cursor = 0;
+    const worker = async () => {
+      while (cursor < batch.items.length && !run.failed) {
+        const item = batch.items[cursor++];
+        if (item.status === 'complete' || item.deleted) continue;
+        if (!current()) break;
+        run.items.add(item);
+        item.status = 'running';
+        delete item.error;
+        notify(run);
+        // onChange may synchronously stop or change the active document.
+        if (!current()) { run.items.delete(item); break; }
+        let result;
+        try {
+          result = await runItem(item, { signal: run.controller.signal, batch });
+        } catch (error) {
+          result = error?.name === 'AbortError'
+            ? { status: 'stopped', reason: 'stopped' }
+            : { status: 'failed', error: messageOf(error) };
+        }
+        if (!current()) {
+          item.status = 'stopped';
+          run.items.delete(item);
+          break;
+        }
+        if (item.deleted) { item.status = 'deleted'; run.items.delete(item); notify(run); continue; }
+        if (!['complete', 'failed', 'stopped'].includes(result?.status)) {
+          result = { status: 'failed', error: 'Translation item returned an invalid status' };
+        }
+        item.status = result.status;
+        run.items.delete(item);
+        if (result.status === 'failed') {
+          item.error = messageOf(result.error || result.message);
+          batch.status = 'failed';
+          batch.reason = 'item-failed';
+          batch.error = item.error;
+          run.failed = true;
+          break;
+        }
+        if (result.status === 'stopped') {
+          pause(run, result.reason || 'stopped');
+          break;
+        }
+        notify(run);
       }
-      if (!current()) {
-        item.status = 'stopped';
-        run.item = null;
-        break;
-      }
-      if (item.deleted) { item.status = 'deleted'; run.item = null; notify(run); continue; }
-      if (!['complete', 'failed', 'stopped'].includes(result?.status)) {
-        result = { status: 'failed', error: 'Translation item returned an invalid status' };
-      }
-      item.status = result.status;
-      run.item = null;
-      if (result.status === 'failed') {
-        item.error = messageOf(result.error || result.message);
-        batch.status = 'failed';
-        batch.reason = 'item-failed';
-        batch.error = item.error;
-        break;
-      }
-      if (result.status === 'stopped') {
-        pause(run, result.reason || 'stopped');
-        break;
-      }
-      notify(run);
-    }
+    };
+    await Promise.all(Array.from({ length: Math.min(3, Math.max(1, Math.trunc(Number(concurrency)) || 1)) }, worker));
     if (current() && batch.items.every((item) => item.status === 'complete' || item.deleted)) {
       batch.status = 'complete';
       batch.reason = '';
     }
     return batch;
   } finally {
-    run.item = null;
+    run.items.clear();
     if (meta.run === run) meta.run = null;
     notify(run);
   }

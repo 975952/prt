@@ -3,8 +3,8 @@ import { en, enSingular } from './locales/en.js';
 export const LOCALE_KEY = 'reader.locale';
 export const RESPONSE_LANGUAGE_KEY = 'reader.responseLanguage';
 export function storedLocale() {
-  try { return globalThis.localStorage?.getItem(LOCALE_KEY) === 'en' ? 'en' : 'zh-CN'; }
-  catch { return 'zh-CN'; }
+  try { return globalThis.localStorage?.getItem(LOCALE_KEY) === 'zh-CN' ? 'zh-CN' : 'en'; }
+  catch { return 'en'; }
 }
 // A window keeps its language until its UI is safely reloaded. Other windows may be generating.
 export const locale = storedLocale();

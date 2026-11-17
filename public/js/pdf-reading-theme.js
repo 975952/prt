@@ -16,6 +16,29 @@ function nightColor(color, brightness = 90) {
   return '#' + NIGHT_INK.map((ink, i) => Math.round(ink * strength + (NIGHT_BG[i] - ink * strength) * level).toString(16).padStart(2, '0')).join('');
 }
 
+const linearChannel = value => { const x = value / 255; return x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4; };
+const luminance = rgb => rgb.reduce((sum, value, i) => sum + linearChannel(value) * [.2126, .7152, .0722][i], 0);
+
+/** Pale vector backgrounds need to darken with their text. Preserve their hue,
+ * saturated diagram colors and all raster images; never apply this to masks. */
+export function nightFillColor(color, brightness = 90) {
+  if (!/^#[0-9a-f]{6}$/i.test(color)) return color;
+  const rgb = [1, 3, 5].map(i => parseInt(color.slice(i, i + 2), 16));
+  const low = Math.min(...rgb), high = Math.max(...rgb);
+  if (low < 170 || high < 215 || high - low < 6) return nightColor(color, brightness);
+  const tinted = rgb.map((value, i) => NIGHT_BG[i] + 10 + (value - low) * 1.5);
+  const ink = nightColor('#000000', brightness);
+  const inkRgb = [1, 3, 5].map(i => parseInt(ink.slice(i, i + 2), 16));
+  // Leave headroom for rounding and dimmed text: neutral labels on the new
+  // background retain at least 4.5:1 contrast across the brightness range.
+  const ceiling = Math.max(luminance(NIGHT_BG), Math.min(.06, (luminance(inkRgb) + .05) / 4.5 - .05) * .9);
+  const scale = Math.min(1, ceiling / luminance(tinted));
+  return '#' + tinted.map(value => {
+    const x = linearChannel(value) * scale;
+    return Math.round(255 * (x <= .0031308 ? 12.92 * x : 1.055 * x ** (1 / 2.4) - .055)).toString(16).padStart(2, '0');
+  }).join('');
+}
+
 /** Keep text hue while bounding perceptual lightness and chroma. Images and
  * colored vector fills never pass through this text-only conversion. */
 export function nightTextColor(color, saturation = 50, brightness = 90) {
@@ -62,11 +85,17 @@ export function applyNightReading(task, OPS, { saturation = 50, brightness = 90 
         task.cancel();
         throw new Error('PDF 夜读渲染器不兼容，请切换为米宣主题');
       }
-      const originals = new Map();
-      const raw = color => originals.get(color) || color;
-      const convert = color => {
-        const mapped = nightColor(color, brightness);
-        originals.set(mapped, color);
+      // PDF.js clones graphics state with Object.create(). Original colors
+      // belong to that state, rather than an inverse palette which can collide
+      // when different pale fills map to the same dark color.
+      const origins = { fill: Symbol('nightRawFill'), stroke: Symbol('nightRawStroke') };
+      const raw = (current, kind) => {
+        const color = current[`${kind}Color`], origin = current[origins[kind]];
+        return origin?.mapped === color ? origin.raw : color;
+      };
+      const convert = (current, kind, color) => {
+        const mapped = maskDepth ? color : (kind === 'fill' ? nightFillColor : nightColor)(color, brightness);
+        current[origins[kind]] = { raw: color, mapped };
         return mapped;
       };
       let maskDepth = 0;
@@ -77,21 +106,22 @@ export function applyNightReading(task, OPS, { saturation = 50, brightness = 90 
         if (Number.isFinite(OPS[name])) gfx[OPS[name]] = gfx[name];
       };
       for (const name of ['setFillRGBColor', 'setStrokeRGBColor']) {
+        const kind = name === 'setFillRGBColor' ? 'fill' : 'stroke';
         wrap(name, original => function (index, color) {
-          return original.call(this, index, maskDepth ? color : convert(color));
+          return original.call(this, index, convert(this.current, kind, color));
         });
       }
       const textColors = new Map();
       const textColor = color => {
-        if (!textColors.has(color)) textColors.set(color, nightTextColor(raw(color), saturation, brightness));
+        if (!textColors.has(color)) textColors.set(color, nightTextColor(color, saturation, brightness));
         return textColors.get(color);
       };
       wrap('showText', original => function (...args) {
         if (maskDepth) return original.apply(this, args);
         const fill = this.current.fillColor, stroke = this.current.strokeColor;
         const ctxFill = this.ctx.fillStyle, ctxStroke = this.ctx.strokeStyle;
-        this.current.fillColor = this.ctx.fillStyle = textColor(fill);
-        this.current.strokeColor = this.ctx.strokeStyle = textColor(stroke);
+        this.current.fillColor = this.ctx.fillStyle = textColor(raw(this.current, 'fill'));
+        this.current.strokeColor = this.ctx.strokeStyle = textColor(raw(this.current, 'stroke'));
         try { return original.apply(this, args); }
         finally {
           this.current.fillColor = fill; this.current.strokeColor = stroke;
@@ -104,8 +134,8 @@ export function applyNightReading(task, OPS, { saturation = 50, brightness = 90 
         if (group.smask) maskDepth++;
         const result = original.call(this, index, group);
         if (maskDepth) {
-          this.ctx.fillStyle = this.current.fillColor = raw(this.current.fillColor);
-          this.ctx.strokeStyle = this.current.strokeColor = raw(this.current.strokeColor);
+          this.ctx.fillStyle = this.current.fillColor = raw(this.current, 'fill');
+          this.ctx.strokeStyle = this.current.strokeColor = raw(this.current, 'stroke');
         }
         return result;
       });
@@ -117,13 +147,13 @@ export function applyNightReading(task, OPS, { saturation = 50, brightness = 90 
       for (const name of ['paintImageMaskXObject', 'paintImageMaskXObjectRepeat', 'paintImageMaskXObjectGroup', 'paintSolidColorImageMask']) {
         wrap(name, original => function (...args) {
           const color = this.current.fillColor, style = this.ctx.fillStyle;
-          this.ctx.fillStyle = this.current.fillColor = raw(color);
+          this.ctx.fillStyle = this.current.fillColor = raw(this.current, 'fill');
           try { return original.apply(this, args); }
           finally { this.current.fillColor = color; this.ctx.fillStyle = style; }
         });
       }
-      gfx.ctx.fillStyle = gfx.current.fillColor = convert(gfx.current.fillColor);
-      gfx.ctx.strokeStyle = gfx.current.strokeColor = convert(gfx.current.strokeColor);
+      gfx.ctx.fillStyle = gfx.current.fillColor = convert(gfx.current, 'fill', gfx.current.fillColor);
+      gfx.ctx.strokeStyle = gfx.current.strokeColor = convert(gfx.current, 'stroke', gfx.current.strokeColor);
     }
     resume();
   };

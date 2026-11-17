@@ -70,6 +70,7 @@ try {
     defaultViewport: { width: 1500, height: 950 },
   });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));
 
@@ -116,11 +117,11 @@ try {
       transparency: Number(cs.getPropertyValue('--glass-paper-opacity')), bg: getComputedStyle(document.body).backgroundColor };
   });
   check('玻璃纸底透明，文字像素保持不透明', glass.empty > 1000 && glass.ink > 100 && glass.opacity === '1', JSON.stringify(glass));
-  check('默认采用低透明纸面 12% / 磨砂 18px / 圆角 20px', Math.abs(glass.transparency - .88) < .001 && glass.frost === '18px' && glass.radius === '20px');
+  check('默认采用低透明纸面 16% / 磨砂 48px / 圆角 28px', Math.abs(glass.transparency - .84) < .001 && glass.frost === '48px' && glass.radius === '28px');
   check('界面背景保持高透明度，底色近白并带极淡暖意', await page.evaluate(() => {
     const cs = getComputedStyle(document.documentElement);
-    return Math.abs(Number(cs.getPropertyValue('--glass-surface-opacity')) - .12) < .001
-      && cs.getPropertyValue('--glass-bg').trim() === 'rgb(252 250 247)';
+    return Number(cs.getPropertyValue('--glass-surface-opacity')) === 0
+      && cs.getPropertyValue('--glass-bg').trim() === 'rgb(233 233 233)';
   }));
   const crystal = await page.evaluate(() => {
     const p = document.querySelector('.page'), canvas = window.__viewer.rendered.get(1).canvas;
@@ -165,7 +166,7 @@ try {
       motion: document.documentElement.dataset.motion, bg: cs.getPropertyValue('--glass-bg').trim() };
   });
   check('重开恢复玻璃控件，亮度已提亮', restoredGlass.theme === 'glass' && restoredGlass.frost === '0px' && restoredGlass.radius === '18px'
-    && Math.abs(restoredGlass.opacity - .19) < .001 && restoredGlass.motion === 'off' && restoredGlass.bg === 'rgb(242 240 237)', JSON.stringify(restoredGlass));
+    && Math.abs(restoredGlass.opacity - .19) < .001 && restoredGlass.motion === 'off' && restoredGlass.bg === 'rgb(243 243 243)', JSON.stringify(restoredGlass));
   const focusStyle = await page.evaluate(() => {
     const input = document.querySelector('#chatInput'); input.focus();
     const cs = getComputedStyle(input);
@@ -254,13 +255,13 @@ try {
         const paper = getComputedStyle(v.pageEls[1]), composer = getComputedStyle(document.querySelector('.composer-row'));
         return { paper: paper.backgroundColor, frost: paper.backdropFilter, radius: paper.borderRadius,
           shadow: paper.boxShadow, sheen: getComputedStyle(v.pageEls[1], '::before').opacity,
-          surface: composer.backgroundColor, backdrop: getComputedStyle(document.body).backgroundImage };
+          surface: composer.background, backdrop: getComputedStyle(document.body).backgroundImage };
       };
       set('uiGlassTransparency', 0); set('uiGlassSurfaceTransparency', 0); set('uiGlassFrost', 48);
       set('uiGlassRadius', 32); set('uiGlassShadow', 100); set('uiGlassBrightness', 100); set('uiGlassCrystal', 100);
       const strong = snapshot();
       set('uiGlassTransparency', 100); set('uiGlassSurfaceTransparency', 100); set('uiGlassFrost', 0);
-      set('uiGlassRadius', 0); set('uiGlassShadow', 0); set('uiGlassBrightness', 60); set('uiGlassCrystal', 0);
+      set('uiGlassRadius', 0); set('uiGlassShadow', 0); set('uiGlassBrightness', 92); set('uiGlassCrystal', 0);
       return { strong, quiet: snapshot(), sameCanvas: canvas === v.rendered.get(1).canvas, sameScroll: scroll === v.container.scrollTop,
         enabled: [...document.querySelectorAll('#glassAppearanceControls input')].every(el => !el.matches(':disabled')) };
     });
@@ -275,8 +276,8 @@ try {
     check(`${theme} 重置效果不改变主题、字号或阅读位置`, await page.evaluate(before => {
       const style = JSON.parse(localStorage.getItem('reader.ui')).style;
       return style.theme === before.theme && style.fontSize === before.font && window.__viewer.current === before.page && window.__viewer.scale === before.scale
-        && style.glassFrost === 18 && style.glassRadius === 20 && style.glassShadow === 76 && style.glassSurfaceTransparency === 88
-        && style.glassTransparency === 12 && style.glassCrystal === 70;
+        && style.glassFrost === 48 && style.glassRadius === 28 && style.glassShadow === 100 && style.glassSurfaceTransparency === 100
+        && style.glassTransparency === 16 && style.glassCrystal === 100;
     }, beforeReset));
     await page.screenshot({ path: path.join(artifactDir, `theme-${theme}-adjustable-settings.png`) });
   }
@@ -289,7 +290,7 @@ try {
     for (let i = 0; i < d.length; i += 4) {
       if (d[i] === 200 && d[i + 1] === 108 && d[i + 2] === 62 && d[i + 3] === 255) orange++;
       if (d[i] === 250 && d[i + 1] === 246 && d[i + 2] === 232 && d[i + 3] === 255) white++;
-      if (d[i] === 203 && d[i + 1] === 205 && d[i + 2] === 207) ink++;
+      if (d[i] === 215 && d[i + 1] === 217 && d[i + 2] === 219) ink++;
     }
     return { orange, white, ink };
   });
@@ -305,7 +306,7 @@ try {
       repeated: sample(260, 490), masked: sample(260, 270), line: sample(100, 565) };
   });
   check('显式白色纸底与线条反色，重复图片和透明遮罩内的图片保持原色',
-    JSON.stringify(composited.background) === '[34,36,38,255]' && JSON.stringify(composited.line) === '[203,205,207,255]'
+    JSON.stringify(composited.background) === '[34,36,38,255]' && JSON.stringify(composited.line) === '[215,217,219,255]'
     && JSON.stringify(composited.orange) === '[200,108,62,255]' && JSON.stringify(composited.repeated) === '[200,108,62,255]'
     && JSON.stringify(composited.masked) === '[200,108,62,255]' && JSON.stringify(composited.white) === '[255,255,255,255]'
     && JSON.stringify(composited.black) === '[0,0,0,255]', JSON.stringify(composited));
@@ -356,7 +357,7 @@ try {
   check('重开恢复正文亮度和彩色文字鲜艳度', await nightImage.evaluate(() => document.documentElement.dataset.nightSaturation === '0' && document.documentElement.dataset.nightBrightness === '65'));
   await nightImage.click('#settingsBtn'); await nightImage.waitForSelector('#settingsModal:not(.hidden)');
   await nightImage.click('#settingsNavAppearance'); await nightImage.click('#resetAppearanceEffects');
-  await nightImage.waitForFunction(() => window.__viewer.rendered.get(1)?.nightSaturation === '50' && window.__viewer.rendered.get(1)?.nightBrightness === '90' && !window.__viewer.renderTasks.size);
+  await nightImage.waitForFunction(() => window.__viewer.rendered.get(1)?.nightSaturation === '65' && window.__viewer.rendered.get(1)?.nightBrightness === '95' && !window.__viewer.renderTasks.size);
   await nightImage.click('#closeSettings');
   await nightImage.screenshot({ path: path.join(artifactDir, 'theme-dark-composite.png') });
   await nightImage.evaluate(() => window.__viewer.setScale(6));
@@ -383,7 +384,7 @@ try {
     check('旧主题偏好平滑迁移 ' + oldTheme, migrated.active === newTheme && migrated.saved === newTheme);
   }
 
-  for (const [custom, transparency, brightness] of [[false, 76, 93], [true, 41, 91]]) {
+  for (const [custom, transparency, brightness] of [[false, 76, 93], [true, 41, 96]]) {
     await page.evaluate(({ transparency, brightness }) => {
       localStorage.setItem('reader.ui', JSON.stringify({ style: { theme: 'glass', glassTransparency: transparency,
         glassSurfaceTransparency: 80, glassBrightness: brightness, glassFrost: 32, glassShadow: 35 } }));
@@ -392,8 +393,8 @@ try {
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 3);
     check(custom ? '升级保留用户自定义透明度和亮度' : '升级将旧默认值迁移到微暖透光默认值', await page.evaluate(custom => {
       const s = JSON.parse(localStorage.getItem('reader.ui')).style;
-      return s.appearanceVersion === 3 && s.glassTransparency === (custom ? 41 : 12)
-        && s.glassBrightness === (custom ? 91 : 100) && s.glassSurfaceTransparency === 88;
+      return s.appearanceVersion === 3 && s.glassTransparency === (custom ? 41 : 16)
+        && s.glassBrightness === (custom ? 96 : 92) && s.glassSurfaceTransparency === 100;
     }, custom));
   }
   for (const custom of [false, true]) {
@@ -406,8 +407,8 @@ try {
     await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 3);
     check(custom ? '新悬浮外观保留已调圆角、光影与高光' : '新悬浮外观迁移上一版默认圆角、光影与高光', await page.evaluate(custom => {
       const s = JSON.parse(localStorage.getItem('reader.ui')).style;
-      return s.glassRadius === (custom ? 11 : 20) && s.glassShadow === (custom ? 29 : 76)
-        && s.glassCrystal === (custom ? 87 : 70) && s.glassTransparency === 33 && s.glassTone === 9;
+      return s.glassRadius === (custom ? 11 : 28) && s.glassShadow === (custom ? 29 : 100)
+        && s.glassCrystal === (custom ? 87 : 100) && s.glassTransparency === 33 && s.glassTone === 9;
     }, custom));
   }
   check('操作期间没有页面错误', pageErrors.length === 0, pageErrors.join(' | '));

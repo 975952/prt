@@ -38,7 +38,12 @@ function linesOf(runs) {
 
 function columnGutter(rows, bounds) {
   const height = median(rows.flatMap((row) => row.items.map((run) => run.height)));
-  const minimum = Math.max(height * 1.8, (bounds.right - bounds.left) * 0.025);
+  // A journal gutter can be only one to two glyph heights wide. Browser Range
+  // heights round at each zoom level: a 17pt gutter / 9px glyph at 100% can become
+  // 34px / 20px at 200%. Requiring 1.8 glyph heights merged the two paragraphs at
+  // that zoom and alternated their lines. Repeated paragraph-width support below
+  // distinguishes a real gutter from word gaps without that fragile threshold.
+  const minimum = Math.max(height * 0.9, (bounds.right - bounds.left) * 0.015);
   const paragraphWidth = Math.max(height * 6, (bounds.right - bounds.left) * 0.22);
   const gaps = [];
   const paragraphSegments = [];

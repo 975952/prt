@@ -7,11 +7,12 @@
  * （最多 AGENT_MAX_ROUNDS 轮 / 每轮最多 AGENT_MAX_CALLS_PER_ROUND 个 / 总超时 / abort）、
  * 读过页的收集、失败回退信号。
  */
-import {
+globalThis.localStorage = { getItem: key => key === 'reader.locale' ? 'zh-CN' : null };
+const {
   AGENT_MAX_ROUNDS, AGENT_MAX_CALLS_PER_ROUND, AGENT_TOOL_SPECS, AGENT_SYSTEM_NOTE,
   validateToolCall, parseModelResponse, executeToolCall, runAgentLoop, agentStats,
   toolStepLabel, summarizeToolResult,
-} from '../public/js/agent.js';
+} = await import('../public/js/agent.js');
 
 let pass = 0;
 const failures = [];

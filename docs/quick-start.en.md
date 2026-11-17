@@ -2,7 +2,7 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.2.4](https://github.com/975952/prt/releases/tag/v1.2.4), including library zoom, automatic paper titles, adjustable glass translation cards, and floating paper surfaces.
+This guide covers [v1.2.5](https://github.com/975952/prt/releases/tag/v1.2.5), including library zoom, automatic paper titles, adjustable glass translation cards, and floating paper surfaces.
 
 ## Open a paper
 
@@ -32,6 +32,8 @@ Delete an individual translation using its top-right trash icon. Deletion is imm
 
 With the right sidebar closed, translations appear in a floating card. Drag its title bar to move it or its lower-right corner to resize it. The size is saved, and long translations scroll within the card. Focus the resize handle and use arrow keys for small adjustments.
 
+Translate successive selections without waiting for earlier results. Sidebar entries stay in submission order, with up to three translations generating at once and additional tasks queued. Closing the floating card only hides it; its task continues in the sidebar. A new selection owns the next card, so an earlier response cannot overwrite it. Use an entry's trash icon to cancel and delete that translation.
+
 ## Adjust the appearance
 
 Choose Glass, Rice paper, or Dark in **Settings → Appearance**. Adjust transparency, blur, background brightness, lighting, and motion to taste. Dark mode offers separate text-brightness and colored-text controls. Images keep their original colors; image-only PDF pages retain square corners.
@@ -41,6 +43,8 @@ Glass uses a near-white, subtly warm background. **Background tone** ranges from
 Under **Settings → Appearance → Translation card material**, choose **Liquid glass** or **Frosted glass**. Card transparency ranges from 15% to 85% and blur from 0 to 28px. Liquid glass also offers edge refraction from 0% to 100%. Liquid starts at 55% transparency and 1.2px blur; Frosted starts at 63% transparency and 15px blur. Both remain adjustable and remember their own settings when switching.
 
 Settings apply immediately and are saved automatically, without fading card text or changing PDF pixels, zoom, or reading position. **Reset effects** restores appearance defaults for both card materials while keeping the selected theme, material, font size, and reading position. Existing customized values are retained when upgrading.
+
+Background brightness ranges from 92% to 100%; older settings below that range move to the new minimum. The input box has clearer edge highlights and outer shadows, strengthened on focus. Dark mode retains its dark reading surface.
 
 ## Back up and upgrade
 

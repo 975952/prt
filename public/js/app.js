@@ -646,17 +646,17 @@ function initPanels() {
 }
 
 const DEFAULT_UI_STYLE = Object.freeze({
-  theme: 'glass', density: 'standard', fontSize: 14, lineHeight: 1.72,
-  codeSize: 12, maxWidth: 760, opacity: 1,
-  glassTransparency: 12, glassSurfaceTransparency: 88, glassFrost: 18, glassRadius: 20,
-  glassBrightness: 100, glassTone: 20, glassShadow: 76, glassCrystal: 70, appearanceVersion: 3,
-  glassCardMode: 'liquid', glassCardTransparency: 55, glassCardBlur: 1.2, glassCardRefraction: 60,
-  nightSaturation: 50, nightBrightness: 90, motion: true,
+  theme: 'glass', density: 'standard', fontSize: 17, lineHeight: 1.72,
+  codeSize: 12, maxWidth: 916, opacity: 1,
+  glassTransparency: 16, glassSurfaceTransparency: 100, glassFrost: 48, glassRadius: 28,
+  glassBrightness: 92, glassTone: 1, glassShadow: 100, glassCrystal: 100, appearanceVersion: 3,
+  glassCardMode: 'liquid', glassCardTransparency: 35, glassCardBlur: 11.4, glassCardRefraction: 99,
+  nightSaturation: 65, nightBrightness: 95, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
   paper: 'tint',
   // 界面尺度：uiFontSize = 界面字号 px（--ui-fs），controlSize = 控件大小 %（--ctl-scale）。
   // 这两个和上面的 fontSize（阅读/结果字号 --ai-fs）是互相独立的三套刻度。
-  uiFontSize: 13.5, controlSize: 100, homeZoom: 100,
+  uiFontSize: 13.5, controlSize: 100, homeZoom: 140,
   showPage: true, showQuote: true, showSources: false,
   useFullText: true, useWeb: true,
   zoomSpeed: 1,
@@ -670,7 +670,7 @@ const GLASS_CONTROLS = Object.freeze({
   glassSurfaceTransparency: { id: 'uiGlassSurfaceTransparency', min: 0, max: 100, unit: '%' },
   glassFrost: { id: 'uiGlassFrost', min: 0, max: 48, unit: 'px' },
   glassRadius: { id: 'uiGlassRadius', min: 0, max: 32, unit: 'px' },
-  glassBrightness: { id: 'uiGlassBrightness', min: 60, max: 100, unit: '%' },
+  glassBrightness: { id: 'uiGlassBrightness', min: 92, max: 100, unit: '%' },
   glassTone: { id: 'uiGlassTone', min: 0, max: 100, unit: '%' },
   glassShadow: { id: 'uiGlassShadow', min: 0, max: 100, unit: '%' },
   glassCrystal: { id: 'uiGlassCrystal', min: 0, max: 100, unit: '%' },
@@ -768,7 +768,6 @@ const state = {
   refsParsing: null,
   relGen: 0,
   refsSeq: 0,
-  relItemState: new Map(),
   /** 阶段 3：列表视图（搜索 / 筛选 / 排序 / 分组折叠）—— 只存内存，切论文重置，不写 localStorage */
   relView: { q: '', filter: 'all', sort: 'num', fold: { lib: false, pdf: false, todo: false, cited: false } },
   /** 关系面板顶部那一行的临时进度（解析 / 扫描 / 批量查询），单独存一份免得被重绘覆盖 */
@@ -936,6 +935,68 @@ function chatSigOf(sid, entries) {
 /* B 线 P3.1：问答块是**全局共用**的，切换论文时不重绘它。
    chatDomSig = 当前聊天 DOM 里已经渲染的全局会话指纹；冷切换文档时只有指纹变了才重放整块（其余情况 DOM 原样保留）。 */
 let chatDomSig = '';
+// A conversation, rather than the visible PDF, owns its DOM and generation.
+const chatViews = new Map();
+const chatJobs = new Map();
+let displayedChatKey = '';
+let renderingChatJob = null;
+const chatOwnerKey = (scope, sid) => JSON.stringify([scope, sid || '']);
+const currentChatKey = () => chatOwnerKey(sessionScopeKey(), activeSidFor(state.doc?.docId));
+function parkChatSession() {
+  if (!state.doc || !displayedChatKey) return;
+  const view = chatViews.get(displayedChatKey) || {};
+  Object.assign(view, { nodes: [...(state.blockMeta.chat?.body?.children || [])],
+    entries: state.sessionEntries.filter(row => row?.block !== 'translate'),
+    history: state.history, summary: state.sessionSummary, summaryCovered: state.summaryCovered,
+    scrollTop: state.blockMeta.chat?.body?.scrollTop || 0 });
+  chatViews.set(displayedChatKey, view);
+}
+function mountChatSession(scope = sessionScopeKey(), sid = activeSidFor(state.doc?.docId)) {
+  const key = chatOwnerKey(scope, sid), view = chatViews.get(key);
+  displayedChatKey = key;
+  if (!view) return false;
+  ensureBlock('chat');
+  const body = state.blockMeta.chat.body;
+  if (body.firstElementChild !== view.nodes[0] || body.children.length !== view.nodes.length) body.replaceChildren(...view.nodes);
+  state.sessionEntries = [...view.entries, ...state.sessionEntries.filter(row => row?.block === 'translate')];
+  state.history = view.history; state.sessionSummary = view.summary || ''; state.summaryCovered = view.summaryCovered || 0;
+  body.scrollTop = view.scrollTop || 0;
+  refreshChatJobState();
+  return true;
+}
+function snapshotChatReader() {
+  // PDF.js handles and text caches stay attached to the originating PDF even
+  // when the visible viewer detaches it to display another tab.
+  const reader = Object.assign(Object.create(Object.getPrototypeOf(viewer)), viewer);
+  reader.textCache = new Map(viewer.textCache);
+  reader._pageImageCache = new Map(viewer._pageImageCache);
+  reader.currentVisiblePage = () => reader.current;
+  return reader;
+}
+function chatJobVisible(job) { return displayedChatKey === job.key; }
+function refreshChatJobState() {
+  const job = chatJobs.get(displayedChatKey);
+  if (job) { state.abort = job.controller; primaryBusy = true; }
+  else if (state.abort?.__chatJob) { state.abort = null; primaryBusy = false; }
+  refreshBusyState();
+}
+async function saveChatJob(job) {
+  const view = job.view;
+  const payload = { entries: view.entries, history: snapshotHistory(view.history),
+    summary: view.summary || '', summaryCovered: view.summaryCovered || 0, summaryPrompt: PROMPT_SYSTEM_VERSION,
+    folderPath: job.folder, docIds: [...new Set(view.entries.map(row => row.docId).filter(Boolean))],
+    docTitles: [...new Set(view.entries.map(row => row.docTitle).filter(Boolean))], updatedAt: Date.now() };
+  const response = await fetch(`/api/session?${sessionQuery(job.scope, job.sid)}&merge=1`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+  if (!response.ok) throw new Error(`HTTP ${response.status}`);
+  notifySessionSaved({ kind: 'chat', docId: job.docId, scope: job.scope, sid: job.sid });
+}
+function scheduleChatJobSave(job) {
+  clearTimeout(job.saveTimer);
+  job.saveTimer = setTimeout(() => { job.saveChain = (job.saveChain || Promise.resolve()).catch(() => {}).then(() => saveChatJob(job)).catch(error => {
+    toastAction(tr("会话保存失败，当前内容仍保留。"), tr("重试"), () => saveChatJob(job), 'err', 12000);
+  }); }, 500);
+}
 const currentChatSig = () => chatSigOf(
   state.doc ? activeSidFor(state.doc.docId) : '',
   (state.sessionEntries || []).filter((e) => e && e.block === 'chat'),
@@ -997,12 +1058,14 @@ function unparkDocView(docId) {
     meta.body.replaceChildren(...saved.nodes);
     try { meta.body.scrollTop = saved.scrollTop || 0; } catch { /* ignore */ }
   }
-  state.sessionEntries = view.sessionEntries.slice();
+  const liveChat = chatViews.get(currentChatKey());
+  state.sessionEntries = [...(liveChat?.entries || view.sessionEntries.filter(row => row?.block !== 'translate')), ...view.sessionEntries.filter(row => row?.block === 'translate')];
   state._fileEntries = Array.isArray(view.fileEntries) ? view.fileEntries.slice() : [];
   state._fileDocId = docId;
-  state.history = view.history.slice();
-  state.sessionSummary = view.sessionSummary || '';
-  state.summaryCovered = view.summaryCovered || 0;
+  state.history = liveChat?.history || view.history.slice();
+  state.sessionSummary = liveChat?.summary || view.sessionSummary || '';
+  state.summaryCovered = liveChat?.summaryCovered || view.summaryCovered || 0;
+  mountChatSession();
   state.teaching = view.teaching ? JSON.parse(JSON.stringify(view.teaching)) : state.teaching;
   if (view.outlineHTML && $('#outlineList')) $('#outlineList').innerHTML = view.outlineHTML;
   if (view.notesHTML && $('#notesList')) $('#notesList').innerHTML = view.notesHTML;
@@ -1066,7 +1129,7 @@ const REFIT_AFTER_MS = 200;
 
 const sideIntent = { noLeft: false, noRight: false, pinned: { left: false, right: false } };
 
-const sideBaseW = { left: 210, right: 360 };
+const sideBaseW = { left: 241, right: 436 };
 
 /** 读一个 px 令牌的数值（读不到就用兜底值） */
 function cssPx(name, dflt) {
@@ -1317,6 +1380,12 @@ function initLayout() {
       if (uiStyle[key] === oldDefault) uiStyle[key] = DEFAULT_UI_STYLE[key];
     }
     uiStyle.appearanceVersion = 3;
+    try { localStorage.setItem('reader.ui', JSON.stringify({ ...saved, style: uiStyle })); } catch {}
+  }
+  // Keep the whole brightness range usable; older dim values upgrade to the new floor.
+  const brightness = glassValue('glassBrightness');
+  if (uiStyle.glassBrightness !== brightness) {
+    uiStyle.glassBrightness = brightness;
     try { localStorage.setItem('reader.ui', JSON.stringify({ ...saved, style: uiStyle })); } catch {}
   }
   applyUiStyle();
@@ -1764,8 +1833,8 @@ function saveUi() {
     ...old,
     // 存用户意图的宽度（sideBaseW），不是这一刻实际生效的宽度 ——
     // 窄窗下侧栏会让宽，把让宽后的值存下来等于把用户拖好的宽度改掉（同 autoCollapse 的纪律）。
-    leftW: Math.round(sideBaseW.left) || 210,
-    rightW: Math.round(sideBaseW.right) || 360,
+    leftW: Math.round(sideBaseW.left) || 241,
+    rightW: Math.round(sideBaseW.right) || 436,
     // 只存「用户意图」：窗口太窄导致的自动收起（state.autoCollapse）不能写进来，
     // 否则窄窗用过一次之后，下次开宽窗也还是收起的
     noLeft: !!sideIntent.noLeft,
@@ -1801,19 +1870,19 @@ function applyUiStyle() {
   if (!['light', 'dark', 'glass'].includes(style.theme)) style.theme = 'glass';
   root.dataset.theme = style.theme;
   document.body.dataset.density = ['compact', 'standard', 'comfortable'].includes(style.density) ? style.density : 'standard';
-  root.style.setProperty('--ai-fs', `${clamp(Number(style.fontSize) || 14, READ_FS_MIN, READ_FS_MAX)}px`);
+  root.style.setProperty('--ai-fs', `${clamp(Number(style.fontSize) || DEFAULT_UI_STYLE.fontSize, READ_FS_MIN, READ_FS_MAX)}px`);
   root.style.setProperty('--ai-lh', `${clamp(Number(style.lineHeight) || 1.72, 1.45, 2.05)}`);
   root.style.setProperty('--ai-code-fs', `${clamp(Number(style.codeSize) || 12, 10, 15)}px`);
   // 文字列宽：可以直接拖右栏里文字块的左右边沿改（见 initTextEdgeHandle），
   // 写的就是 uiStyle.maxWidth —— 夹取范围与拖动那边共用常量，不会出现「拖到 1200 却只生效 920」。
-  root.style.setProperty('--ai-max-width', `${clamp(Number(style.maxWidth) || 760, TEXT_COL_MIN, TEXT_COL_MAX)}px`);
+  root.style.setProperty('--ai-max-width', `${clamp(Number(style.maxWidth) || DEFAULT_UI_STYLE.maxWidth, TEXT_COL_MIN, TEXT_COL_MAX)}px`);
   root.style.setProperty('--ai-opacity', `${clamp(Number(style.opacity) || 1, .82, 1)}`);
   root.style.setProperty('--surface-opacity', `${clamp(Number(style.opacity) || 1, .82, 1)}`);
   // 界面尺度：--ui-fs 只带界面文字（不碰 --ai-fs，也不影响控件高度），
   // --ctl-scale 只带控件尺寸（不影响界面文字，也不影响阅读字号）
   root.style.setProperty('--ui-fs', `${uiFontSizePx(style.uiFontSize)}px`);
   root.style.setProperty('--ctl-scale', `${ctlScaleOf(style.controlSize)}`);
-  root.style.setProperty('--home-scale', String(clamp(Number(style.homeZoom) || 100, 70, 160) / 100));
+  root.style.setProperty('--home-scale', String(clamp(Number(style.homeZoom) || DEFAULT_UI_STYLE.homeZoom, 70, 160) / 100));
   root.style.setProperty('--glass-paper-opacity', String(1 - glassValue('glassTransparency') / 100));
   root.style.setProperty('--glass-surface-opacity', String(1 - glassValue('glassSurfaceTransparency') / 100));
   // Menus and controls retain a quiet shadow; PDF elevation is independent.
@@ -1933,7 +2002,7 @@ function initViewer() {
   window.__ctx = {
     buildDocContext, pickRelevantPages, webSearch, renderScopeMenu, PICK_K, openExternal,
     alignProbe: selectionAlignProbe, clearSelectionState,
-    OPS, opById, runOperation, doTranslate, doExplain, send, restoreSession, saveSessionNow,
+    OPS, opById, runOperation, doTranslate, doExplain, send, restoreSession, saveSessionNow, chatJobs, chatViews,
     // 「读懂论文」：四项教学能力 + 学习档案（自动化直接点这些入口，不必去点菜单）
     TEACHING_OPS, teachingOpById, runTeaching, continueWalk, runPrereqItem, runVisual,
     openVisualPicker, detectPageObjects, pageTextOf, collectDocObjects, parsePrereqItems,
@@ -3706,7 +3775,8 @@ async function reopenClosedTab() {
 /** 关掉全部标签 → Welcome（现有 #home 书架页；文档对象保留，只是不在工作区里） */
 async function goWelcome({ skipSave = false } = {}) {
   cancelSearch({ clearInput: true, close: true, focus: false });
-  abortStream('document-switch');
+  parkChatSession();
+  abortStream('document-switch', 'document');
   hideDocLoading();
   // B 线 P2：回 Welcome 也把当前文档挂起（PDF 句柄 + 右栏 DOM），之后切回来是热切换
   if (state.doc?.docId) parkDocView(state.doc.docId);
@@ -3844,7 +3914,8 @@ async function bootTabWorkspace() {
 
 async function openDocColdSwitch({ name, url, docId, path }) {
   cancelSearch({ clearInput: true, close: true, focus: false });
-  abortStream('document-switch');
+  parkChatSession();
+  abortStream('document-switch', 'document');
   if (state.doc && state.sessionEntries.length) {
     persistSession.cancel?.();
     try {
@@ -3889,6 +3960,7 @@ async function openDocColdSwitch({ name, url, docId, path }) {
   state.sessionSummary = '';
   state.summaryCovered = 0;
   state.sessionEntries = [];
+  mountChatSession();
   state.cache.clear();
   // 换论文了：整篇文本和阅读索引都作废；单次范围也随论文切换复位。
   state.docText = null;
@@ -3911,9 +3983,8 @@ async function openDocColdSwitch({ name, url, docId, path }) {
   state.refsDoc = null;
   state.refsParsing = null;
   state.relHint = '';
-  state.relItemState.clear();   // 条目状态跟着论文走（key 只保证在同一篇论文内稳定）
   resetRelView();               // 搜索 / 分组折叠只活在内存里，换论文即重置
-  // 正文引用卡片也是上一篇的：不清的话「找这篇的 PDF」会拿上一篇的文献去查
+  // 换文档时关闭上一篇论文的引用卡片。
   state.cite = null;
   $('#citeBox')?.classList.add('hidden');
   // 换论文：操作结果不再适用（缓存按 docId 存，别串到新论文头上）
@@ -4392,7 +4463,6 @@ function showCiteBox(n, ref, anchor, { canReturn = true } = {}) {
   $('#citeReturn').classList.toggle('hidden', !canReturn);
   $('#citeTitle').textContent = tr("参考文献 [{0}] · p.{1}", n, ref.page);
   $('#citeText').textContent = ref.text;
-  $('#citeResult').innerHTML = '';
   renderCiteDetail();
   placeBox(box, anchor);
 }
@@ -4403,8 +4473,6 @@ function renderCiteDetail() {
   out.replaceChildren();
   const ref = state.cite?.ref;
   if (!ref) return;
-  const docId = state.doc?.docId || null;
-
   if (ref.lib) {
     out.append(el('div', { class: 'cite-item' },
       el('div', { class: 'ci-top' }, el('span', { class: 'ci-badge', text: tr("书架已有") })),
@@ -4419,107 +4487,17 @@ function renderCiteDetail() {
         }))));
   }
 
-  const slot = docId ? relSlotIfAny(docId, ref) : null;
-  if (!slot || slot.status === 'idle' || slot.status === 'local') return;
-  if (slot.status === 'loading') {
-    out.append(el('div', { class: 'cite-msg', text: tr("正在查 arXiv / OpenAlex / Crossref…") }));
-    return;
-  }
-  if (slot.status === 'none') {
-    out.append(el('div', { class: 'cite-msg', text: tr("公开库里没查到这篇的开放版本；可以点下面的「找这篇的 PDF」再搜一遍。") }));
-    return;
-  }
-  if (slot.status === 'error') {
-    out.append(el('div', { class: 'cite-msg err', text: tr("上次查询失败：{0}", slot.fail || tr("未知原因")) }));
-    out.append(el('button', {
-      class: 'cd-btn', text: tr("重试"),
-      onclick: () => lookupRefPdf(state.cite?.ref),
-    }));
-    return;
-  }
-  // pdf / landing：已知的开放版本
-  const link = searchResultUrl(slot.found);
-  out.append(el('div', { class: 'cite-item' },
-    el('div', { class: 'ci-top' },
-      el('span', {
-        class: 'ci-badge' + (slot.found?.pdfUrl ? ' pdf' : ''),
-        text: slot.found?.pdfUrl ? tr("PDF 直链") : (slot.found?.source || tr("落地页")),
-      }),
-      slot.found?.year ? el('span', { text: slot.found.year }) : null,
-      slot.found?.venue ? el('span', { text: String(slot.found.venue).slice(0, 26) }) : null),
-    el('div', { class: 'ci-title', text: slot.found?.title || slot.guessed || tr("(无标题)") }),
-    el('div', { class: 'ci-acts' },
-      link ? el('a', { href: link, target: '_blank', rel: 'noopener noreferrer', text: tr("打开链接") }) : null,
-      link ? el('button', { text: tr("复制链接"), onclick: () => copyText(link) }) : null)));
 }
 
-async function searchCite() {
-  const ref = state.cite?.ref;
-  if (!ref) return;
-  const docId = state.doc?.docId || null;
-  const myGen = state.relGen;
-  const btn = $('#citeSearch');
-  const out = $('#citeResult');
-  btn.disabled = true;
-  out.innerHTML = tr("<div class=\"cite-msg\">正在查 arXiv / OpenAlex / Crossref…</div>");
-  try {
-    const r = await fetch(`/api/ref-search?q=${encodeURIComponent(ref.text)}`);
-    const data = await r.json();
-    if (relStale(docId, myGen)) return;          // 换论文了：这次结果属于上一篇，一个字都不写
-    renderCiteResults(data);
-    // 顺手把结论同步到关系列表的显式状态（列表里同一行的小徽标跟着变，不用再单独查一次）
-    applyResultsToSlot(docId, ref, data);
-    renderRelations();
-    renderCiteDetail();
-  } catch (e) {
-    if (relStale(docId, myGen)) return;
-    out.innerHTML = tr("<div class=\"cite-msg err\">检索失败：{0}</div>", esc(e.message));
-    markSlotError(docId, ref, e.message);
-    renderRelations();
-    renderCiteDetail();
-  } finally {
-    btn.disabled = false;
-  }
+/** Manual paper lookup leaves the reader immediately; no internal result list. */
+function searchPaperInBrowser(ref) {
+  const query = String(ref?.text || '').replace(/^\s*\[\d+\]\s*/, '').replace(/\s+/g, ' ').trim();
+  if (!query) return false;
+  return openExternal('https://www.bing.com/search?q=' + encodeURIComponent(query));
 }
 
-function renderCiteResults(data) {
-  const out = $('#citeResult');
-  out.innerHTML = '';
-  const list = data?.results || [];
-  const got = String(data?.title || '').trim();
-  if (got) {
-    const hint = el('div', { class: 'cite-msg' });
-    hint.append(document.createTextNode(data?.titleGuessed === false
-      ? tr("没能从这条文献里认出标题，这次用整条文献串检索：")
-      : tr("按标题检索：")));
-    hint.append(el('b', { text: got }));
-    out.append(hint);
-  }
-  if (!list.length) {
-    const why = data?.dropped ? tr("（已丢掉 {0} 条与标题无关的结果）", data.dropped) : '';
-    out.append(el('div', { class: 'cite-msg', text: tr("几家公开库里都没查到这个标题的开放版本{0}，可以直接用下面的搜索引擎链接。", why) }));
-  }
-  for (const r of list) {
-    const link = r.pdfUrl || r.url || '';
-    if (!link) continue;
-    out.append(el('div', { class: 'cite-item' },
-      el('div', { class: 'ci-top' },
-        el('span', { class: 'ci-badge' + (r.pdfUrl ? ' pdf' : ''), text: r.pdfUrl ? tr("PDF 直链") : r.source }),
-        r.year ? el('span', { text: r.year }) : null,
-        r.venue ? el('span', { text: r.venue.slice(0, 26) }) : null,
-      ),
-      el('div', { class: 'ci-title', text: r.title || tr("(无标题)") }),
-      el('div', { class: 'ci-acts' },
-        el('a', { href: link, target: '_blank', rel: 'noopener noreferrer', text: tr("打开链接") }),
-        el('button', { text: tr("复制链接"), onclick: () => copyText(link) }),
-      ),
-    ));
-  }
-  const extra = el('div', { class: 'cite-acts' });
-  if (data?.scholarUrl) extra.append(el('a', { href: data.scholarUrl, target: '_blank', rel: 'noopener noreferrer', text: 'Google Scholar' }));
-  if (data?.searchUrl) extra.append(el('a', { href: data.searchUrl, target: '_blank', rel: 'noopener noreferrer', text: tr("网页搜索 PDF") }));
-  if (extra.children.length) out.append(el('div', { class: 'cite-item' }, el('div', { class: 'ci-top' }, el('span', { text: tr("没找到？") })), extra));
-}
+function searchCite() { return searchPaperInBrowser(state.cite?.ref); }
+
 /* 点气泡上的「✎」= 收藏这段文字，然后立刻弹出编辑框写笔记；
    正文右边缘会出现一个小书签，点它就能随时读 / 改这条笔记。 */
 
@@ -4892,9 +4870,19 @@ function onRightSelectionChanged({ deselect = false } = {}) {
   showBubble(sel);
 }
 
-function hideTranslationCard() { $('#translationCard')?.classList.add('hidden'); }
+let translationCardVersion = 0;
+let translationCardStream = null;
+function hideTranslationCard() {
+  translationCardVersion += 1;
+  translationCardStream?.dispose();
+  translationCardStream = null;
+  const card = $('#translationCard');
+  card?.classList.add('hidden');
+  if (card) delete card.dataset.entryId;
+}
 
 function showTranslationCard(sel) {
+  hideTranslationCard();
   const card = $('#translationCard');
   const body = $('#translationCardText');
   $('#translationCardQuote').textContent = sel.cleanText || sel.text || '';
@@ -5136,7 +5124,7 @@ function createReadingWelcome(id) {
   const translating = id === 'translate';
   const actions = translating
     ? [el('button', { type: 'button', class: 'welcome-action', text: tr("截图翻译"), onclick: () => {
-      if (!state.busy) state.startRegion?.('translate');
+      state.startRegion?.('translate');
     } })]
     : [
       [tr("解释当前页"), tr("请解释当前页的核心概念。")],
@@ -5665,6 +5653,7 @@ function deleteTranslationEntry(root) {
   const item = batch?.items.find(item => item.entry?.root.__sessionRecord?.id === record.id);
   if (item) item.deleted = true;
   root.__translationController?.abort('entry-deleted');
+  if ($('#translationCard')?.dataset.entryId === record.id) hideTranslationCard();
   state.sessionEntries = state.sessionEntries.filter(row => row.id !== record.id);
   state._fileEntries = state._fileEntries.filter(row => row.id !== record.id);
   dropDocView(docId);
@@ -5855,7 +5844,7 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
   if (status === 'stopped') stateParts.push(bare ? tr("已停止 · 已保留当前译文") : tr("已停止 · 已保留当前回答"));
   if (stateParts.length) extra.push(el('div', { class: `entry-meta${status === 'stopped' ? ' stopped' : ''}`, text: stateParts.join(' · ') }));
   if (extra.length) entry.root.append(...extra);
-  if (!restore) scheduleSessionSave();
+  if (!restore) { if (entry.root.__chatJob) scheduleChatJobSave(entry.root.__chatJob); else scheduleSessionSave(); }
   scrollBody(entry.root.closest('.ai-body'));
 }
 
@@ -5869,7 +5858,7 @@ function addFailureRetry(entry, message, onRetry) {
   entry.acts.classList.remove('hidden');
   entry.root.querySelectorAll('.entry-meta').forEach((node) => node.remove());
   entry.root.append(el('div', { class: 'entry-meta failed', text: tr("生成中断：{0}{1} · 可重试本次请求", message, partial ? tr(" · 已保留收到的内容") : '') }));
-  scheduleSessionSave();
+  if (entry.root.__chatJob) scheduleChatJobSave(entry.root.__chatJob); else scheduleSessionSave();
 }
 
 /**
@@ -6016,8 +6005,8 @@ const AI_TITLE_KEY = 'reader.session.aiTitle';
 function readSessionScopeMode() {
   try {
     const v = localStorage.getItem(SESSION_SCOPE_MODE_KEY);
-    return v === 'paper' || v === 'global' ? v : 'folder';
-  } catch { return 'folder'; }
+    return ['paper', 'folder', 'global'].includes(v) ? v : 'paper';
+  } catch { return 'paper'; }
 }
 function writeSessionScopeMode(mode) {
   const next = mode === 'paper' || mode === 'global' ? mode : 'folder';
@@ -6832,6 +6821,7 @@ function restoreRetryCallback(row, entry, priorUser) {
 }
 
 async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, canApply = null } = {}) {
+  if (only !== 'translate' && mountChatSession(sessionScopeKey(), activeSidFor(docId))) return;
   try {
     // B 线 P3：首次打开旧数据 → 懒迁移（旧按文档会话 → 全局问答 + 文档译文，复制不删）
     if (!canApply) await migrateLegacySession(docId);
@@ -6846,7 +6836,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     const savedChat = await chatRes.json();
     const savedTranslate = translateRes.ok ? await translateRes.json() : {};
     if (!readingRequestCurrent({ docId, openSeq, sid })) return;
-    const keepChat = canApply && only === 'translate';
+    const keepChat = only === 'translate';
     // 只恢复问答时，译文 DOM 保留，记录对象也必须保持同一份，否则续译只更新旧 DOM。
     const keepTranslate = only === 'chat';
     const chatEntries = keepChat ? state.sessionEntries.filter((e) => e?.block !== 'translate')
@@ -7025,6 +7015,8 @@ function sessionHasChatContent() {
 function sessionsContext() {
   return {
     isBusy: () => !!state.busy,
+    canSwitchWhileBusy: () => !!chatJobs.get(displayedChatKey),
+    hasLiveConversation: () => chatViews.has(currentChatKey()),
     hasDoc: () => !!state.doc,
     doc: () => (state.doc ? { docId: state.doc.docId, name: state.doc.name } : null),
     currentSid: () => (state.doc ? activeSidFor(state.doc.docId) : ''),
@@ -7223,7 +7215,7 @@ async function toggleSessionMenu() {
  *  force=true：选择卡片里点「继续上次」时即使 sid 相同也要重新重放问答 */
 async function switchSession(sid, { force = false } = {}) {
   if (!state.doc) return;
-  if (state.busy) {
+  if (state.busy && !chatJobs.has(displayedChatKey)) {
     toast(tr("正在生成中，先等它跑完或点停止再切换会话"), 'err', 3200);
     return;
   }
@@ -7236,7 +7228,10 @@ async function switchSession(sid, { force = false } = {}) {
     persistSession.cancel?.();
     try { if (sessionSaveInFlight) await sessionSaveInFlight; await saveSessionNow(); } catch { /* 存不下也允许切 */ }
   }
+  parkChatSession();
   setActiveSidFor(docId, sid || '');
+  displayedChatKey = currentChatKey();
+  refreshChatJobState();
   clearChatBlock();                 // 会话只管问答，译文留着
   chatVersion += 1;                 // 换了会话 = 全局会话内容变了：作废所有停放视图（否则切回旧标签还是旧会话）
   // 译文条目留在内存里：切会话后还会保存，不能因为换会话把文档级译文覆盖成空
@@ -7393,7 +7388,7 @@ async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {
  *  fromEntry=true：从「进文件夹选择卡片」进来，问答还没装回内存 —— 不能先保存（会把空条目写进旧会话） */
 async function newSession({ silent = false, fromEntry = false } = {}) {
   if (!state.doc) return;
-  if (state.busy) {
+  if (state.busy && !chatJobs.has(displayedChatKey)) {
     toast(tr("正在生成中，先等它跑完或点停止再新建会话"), 'err', 3200);
     return;
   }
@@ -7404,7 +7399,10 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
     persistSession.cancel?.();
     try { if (sessionSaveInFlight) await sessionSaveInFlight; await saveSessionNow(); } catch { /* 存不下也允许新建 */ }
   }
+  parkChatSession();
   setActiveSidFor(docId, newSid());
+  displayedChatKey = currentChatKey();
+  refreshChatJobState();
   clearChatBlock();                 // 新建会话 = 清空问答区；译文不动（它不属于任何会话）
   chatVersion += 1;                 // 新建会话 = 全局会话内容变了：作废所有停放视图
   state.sessionEntries = state.sessionEntries.filter((e) => e && e.block === 'translate');
@@ -8669,13 +8667,6 @@ async function runOperation(opId, { force = false, block = 'chat', retryEntry = 
   }
 }
 
-/** 从检索结果里挑一个能打开的 http(s) 链接（优先 PDF 直链） */
-function searchResultUrl(r) {
-  const cand = r?.pdfUrl || r?.url || '';
-  return /^https?:\/\//i.test(cand) ? cand : '';
-}
-
-
 /** 归一化标题：只留字母数字和汉字，用来判断「这条文献是不是书架里的某篇」 */
 function titleKey(s) {
   return String(s || '').toLowerCase().replace(/[^a-z0-9\u4e00-\u9fa5]+/g, '');
@@ -8708,83 +8699,18 @@ function relHint(t) {
   if (node && state.relHint) node.textContent = state.relHint;
 }
 
-/* ── 阶段 3：引用条目的显式状态模型 ──────────────────────────────────────
-   以前靠 `r.found?.pdfUrl` 的真值猜状态，「还没查 / 查过了但没有 / 查失败」在界面上
-   分不出来，失败也不能单独重试。现在状态是显式枚举： */
-
-/** status 枚举 + 徽标文案 + 归到哪一组 */
 const REL_STATUS = {
-  local:   { tag: '书架已有', cls: 'lib', group: 'lib' },
-  idle:    { tag: '未查',     cls: '',    group: 'todo' },
-  loading: { tag: '查询中',   cls: '',    group: 'todo' },
-  pdf:     { tag: '已找到',   cls: 'has', group: 'pdf' },
-  landing: { tag: '落地页',   cls: 'has', group: 'todo' },
-  none:    { tag: '未找到',   cls: '',    group: 'todo' },
-  error:   { tag: '查询失败', cls: 'err', group: 'todo' },
+  local: { tag: '书架已有', cls: 'lib', group: 'lib' },
+  idle: { tag: '', cls: '', group: 'todo' },
 };
-
 const REL_GROUPS = [
   { id: 'lib', title: tr("书架已有") },
-  { id: 'pdf', title: tr("已找到开放版本") },
-  { id: 'todo', title: tr("待查 / 未找到") },
+  { id: 'todo', title: tr("其他参考文献") },
 ];
-
-/**
- * 稳定 key：编号 + 文本前 60 字。
- * 「↻ 重新解析」会整批换掉 ref 对象，但在途请求靠这个 key 仍能落回重建后的新对象，
- * 而不是写进被丢弃的旧对象（那正是 `busy` 永久卡住的根因）。
- */
 function relKey(ref) {
-  return `${Number(ref?.num) || 0}:${String(ref?.text || '').slice(0, 60)}`;
+  return String(Number(ref?.num) || 0) + ':' + String(ref?.text || '').slice(0, 60);
 }
-
-/** 取某条引用的状态槽；key 相同但换了论文（同编号同开头，极少见）就重建一个 */
-function relSlot(docId, ref) {
-  const key = relKey(ref);
-  let slot = state.relItemState.get(key);
-  if (!slot || slot.docId !== docId) {
-    slot = { key, docId, status: 'idle', found: null, fail: '', guessed: '' };
-    state.relItemState.set(key, slot);
-  }
-  return slot;
-}
-
-/** 只查不建：正文里点的 [n] 未必在 state.refs 里（文本抽取口径略有差异），别为它凭空造槽 */
-function relSlotIfAny(docId, ref) {
-  const slot = state.relItemState.get(relKey(ref));
-  return slot && slot.docId === docId ? slot : null;
-}
-
-/** 显式状态：书架里已经有这篇就是 local，其余看状态槽 */
-function relStatusOf(docId, ref) {
-  if (ref?.lib) return 'local';
-  return relSlot(docId, ref).status;
-}
-
-/** 把一次检索结果写进状态槽（单条查 / 详情里查 / 搜索卡片都走这里，口径只有一个） */
-function applyResultsToSlot(docId, ref, data) {
-  if (!docId || ref?.lib) return null;
-  const slot = relSlot(docId, ref);
-  const list = (data?.results || []).filter((x) => x.pdfUrl || x.url);
-  slot.found = list.find((x) => x.pdfUrl) || list[0] || null;   // 优先带 PDF 直链的
-  slot.guessed = data?.title || '';
-  slot.fail = '';
-  slot.status = slot.found ? (slot.found.pdfUrl ? 'pdf' : 'landing') : 'none';
-  // 兼容镜像：老代码 / 外部探针仍在读 ref.found
-  ref.found = slot.found;
-  ref.guessed = slot.guessed;
-  return slot;
-}
-
-/** 把一次失败写进状态槽（只影响这一条，别的条目照常） */
-function markSlotError(docId, ref, message) {
-  if (!docId || ref?.lib) return null;
-  const slot = relSlot(docId, ref);
-  slot.status = 'error';
-  slot.fail = String(message || tr("查询失败"));
-  return slot;
-}
-
+function relStatusOf(docId, ref) { return ref?.lib ? 'local' : 'idle'; }
 
 /**
  * 换论文：代际 +1。所有异步收尾都必须过 relStale 这一关。
@@ -8837,9 +8763,6 @@ async function buildRelations({ force = false } = {}) {
     const idx = libIndex();
     for (const r of refs) {
       r.lib = findInLibrary(r.text, idx);
-      // 建槽，并把已经查到过的结果镜像回新对象（↻ 之后列表上的徽标不会白白退回「未查」）
-      const slot = relSlot(docId, r);
-      if (slot.found) { r.found = slot.found; r.guessed = slot.guessed; }
     }
     state.refs = refs;
     state.refsDoc = docId;
@@ -8867,33 +8790,6 @@ function ensureRelationsBuilt({ force = false } = {}) {
   buildRelations({ force });
 }
 
-async function lookupRefPdf(ref, ctx = {}) {
-  const myDoc = ctx.docId || state.doc?.docId || null;
-  const myGen = ctx.gen ?? state.relGen;
-  if (!myDoc || !ref) return null;
-  const slot = relSlot(myDoc, ref);
-  // 正在查 / 已经有结果（含书架已有）就不重复打请求；idle / none / error 都允许再查一次
-  if (slot.status === 'loading' || slot.status === 'local'
-    || slot.status === 'pdf' || slot.status === 'landing') return slot;
-  slot.status = 'loading';
-  slot.fail = '';
-  renderRelations();
-  renderCiteDetail();
-  try {
-    const r = await fetch(`/api/ref-search?q=${encodeURIComponent(ref.text)}`);
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const data = await r.json();
-    if (relStale(myDoc, myGen)) return slot;    // 换论文了：这条结果属于上一篇，直接丢掉
-    applyResultsToSlot(myDoc, ref, data);
-  } catch (e) {
-    if (relStale(myDoc, myGen)) return slot;
-    markSlotError(myDoc, ref, e.message);
-  } finally {
-    if (!relStale(myDoc, myGen)) { renderRelations(); renderCiteDetail(); }
-  }
-  return slot;
-}
-
 /** 把工具条控件对齐到内存里的视图状态（值相同就不写，免得把光标顶到末尾） */
 function syncRelTools(view) {
   const q = $('#relSearch');
@@ -8918,7 +8814,7 @@ function showRefDetail(ref) {
 function relItemRow(docId, row) {
   const { ref: r, status } = row;
   const meta = REL_STATUS[status] || REL_STATUS.idle;
-  const slot = relSlotIfAny(docId, r);
+
   const rr = el('div', { class: 'rrow' });
 
   if (status === 'local') {
@@ -8926,23 +8822,13 @@ function relItemRow(docId, row) {
       class: 'rbtn primary', text: tr("打开"),
       onclick: () => openDoc({ name: r.lib.name, url: r.lib.url, docId: r.lib.docId }),
     }));
-  } else if (status === 'pdf' || status === 'landing') {
-    const link = searchResultUrl(slot?.found);
-    if (link) {
-      rr.append(el('a', { class: 'rbtn primary', href: link, target: '_blank', rel: 'noreferrer', text: tr("打开链接") }));
-      rr.append(el('button', { class: 'rbtn', text: tr("复制链接"), onclick: () => copyText(link) }));
-    }
-  } else if (status === 'loading') {
-    rr.append(el('button', { class: 'rbtn', text: tr("查询中…"), disabled: true }));
   } else {
-    // idle 未查 / none 没查到 / error 上次失败 —— 三种都能再查一次
     rr.append(el('button', {
-      class: 'rbtn',
-      text: status === 'error' ? tr("重试") : (status === 'none' ? tr("重查") : tr("查 PDF")),
-      onclick: () => lookupRefPdf(r),
+      class: 'rbtn', text: tr("浏览器搜索论文"),
+      onclick: () => searchPaperInBrowser(r),
     }));
   }
-  rr.append(el('span', { class: `rel-tag ${meta.cls}`.trim(), text: meta.tag }));
+  if (meta.tag) rr.append(el('span', { class: 'rel-tag ' + meta.cls, text: tr(meta.tag) }));
   rr.append(el('span', { class: 'rel-tag', text: `p.${r.page}` }));
 
   const li = el('li', {
@@ -9001,14 +8887,13 @@ function renderRelations() {
 
   // 每条引用的显式状态 → 三个引用分组
   const rows = refs.map((ref) => ({ ref, status: relStatusOf(docId, ref) }));
-  const byGroup = { lib: [], pdf: [], todo: [] };
+  const byGroup = { lib: [], todo: [] };
   for (const row of rows) (byGroup[REL_STATUS[row.status]?.group || 'todo']).push(row);
 
   const bits = [
     tr("本文引用 <b>{0}</b> 篇", refs.length),
     tr("书架已有 <b>{0}</b> 篇", byGroup.lib.length),
-    tr("查到开放版本 <b>{0}</b> 条", byGroup.pdf.length),
-    tr("待查 <b>{0}</b> 条", byGroup.todo.length),
+    tr("书架外文献 <b>{0}</b> 条", byGroup.todo.length),
   ];
   // 进度里可能带文件名，一律走 textContent，不进 innerHTML
   if (state.relHint) sum.textContent = state.relHint;
@@ -9297,7 +9182,8 @@ function agentSearchPages(text, query, k = 4) {
 
 /** Agent 工具运行时（全部只读；不写任何状态，除了「读过哪些页」的记录） */
 function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {}) {
-  const numPages = Number(viewer?.numPages) || 0;
+  const taskReader = pending.chatReader || viewer;
+  const numPages = Number(taskReader?.numPages) || 0;
   const reading = pending.reading || null;
   /* 跨论文读取：papers 文件夹里所有已导入论文（懒加载一次；图片材料收集起来随最终回答一起发） */
   const other = { papers: null, loading: null, images: [] };
@@ -9348,7 +9234,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
     const n = Number(page) || 1;
     if (n < 1 || (numPages && n > numPages)) return { page: n, error: tr("页码超出范围（1–{0}）", numPages || '?') };
     try {
-      return { page: n, ...await readImage(`current:${n}`, `当前 PDF 第 ${n} 页`, () => viewer.capturePageImage(n, { maxDim: 1400 })) };
+      return { page: n, ...await readImage(`current:${n}`, `当前 PDF 第 ${n} 页`, () => taskReader.capturePageImage(n, { maxDim: 1400 })) };
     } catch (e) {
       return { page: n, error: `取第 ${n} 页页图失败：${e?.message || e}` };
     }
@@ -9364,7 +9250,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
       return {
         count: list.length,
         papers: list.slice(0, 80).map((p) => ({ index: p.index, name: p.name, folder: p.folder, path: p.path, docId: p.docId })),
-        current: state.doc?.name || '',
+        current: pending.docTitle || '',
         note: '顺序与左侧文件树一致；用户说「第 N 篇」按 index 数。',
       };
     },
@@ -9382,7 +9268,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
         }));
         return {
           query, scope,
-          scopeLabel: scope === 'all' ? tr("全部论文") : `当前文件夹（${currentFolderPath() || 'papers/'}）`,
+          scopeLabel: scope === 'all' ? tr("全部论文") : `当前文件夹（${pending.chatJob?.folder || 'papers/'}）`,
           papersScanned: result.scanned, papersTotal: result.total, truncated: result.truncated,
           count: hits.length, hits,
           note: hits.length
@@ -9428,9 +9314,9 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
     },
     async getReadingState() {
       return {
-        docTitle: state.doc?.name || '',
+        docTitle: pending.docTitle || '',
         numPages,
-        currentPage: viewer?.currentVisiblePage?.() || viewer?.current || null,
+        currentPage: pending.firstPage || taskReader?.current || null,
         scanned: !!scannedDoc,
         hasTextLayer: !scannedDoc,
         selection: reading?.selection ? { page: reading?.focus?.page || null, text: String(reading.selection).slice(0, 600) } : null,
@@ -9439,12 +9325,12 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
     },
     async readPage(page) {
       /* 扫描件没有文本层：不先报错再让模型重试 —— 直接自动改取页图（少一轮往返、过程列表也少一条失败）。 */
-      const text = await viewer.getPageText(page);
+      const text = await taskReader.getPageText(page);
       if (String(text || "").trim().length < 40) return attachCurrentPageImage(page);
       return { page, chars: String(text || '').length, text: String(text || '').slice(0, 6000) };
     },
     async searchPaper(query) {
-      const text = await ensureAgentDocText();
+      const text = await taskReader.getAllText();
       if (!text) return { query, pages: [], note: '没有可用全文（可能是扫描件）' };
       const rows = agentSearchPages(text, query, 4);
       return { query, pages: rows, note: rows.length ? '' : '没有命中，可以换个词或直接 read_page' };
@@ -9523,10 +9409,10 @@ async function runAgentReadPath({ pending, reading, context, references, sources
   try {
     const base = askMessages({ ...baseMaterials, availablePages: baseMaterials.availablePages || [], scopeLabel: tr("AI 自行读取"), objectLabel: objectLabelFor(pending, reading) });
     const system = String(base[0]?.content || '');
-    const folderLine = `【当前文件夹】${currentFolderPath() || 'papers/'}。默认只读**当前论文 / 当前文件夹**的材料；` +
+    const folderLine = `【当前文件夹】${(pending.chatJob?.folder ?? currentFolderPath()) || 'papers/'}。默认只读**当前论文 / 当前文件夹**的材料；` +
       '用户要求在本文件夹的 PDF 中查找时，应检索并读取当前文件夹里的其他 PDF；用户指定全部论文或其他文件夹时才扩大范围。';
     base[0] = { role: 'system', content: `${system}\n\n${AGENT_SYSTEM_NOTE}\n${folderLine}` };
-    base[0].content += `\n【当前阅读】PDF 共 ${viewer?.numPages || '?'} 页，所在 PDF 页码 ${pending.firstPage || '?'}；所在页材料为空时可自行决定是否读取页图。`;
+    base[0].content += `\n【当前阅读】PDF 共 ${pending.chatReader?.numPages || viewer?.numPages || '?'} 页，所在 PDF 页码 ${pending.firstPage || '?'}；所在页材料为空时可自行决定是否读取页图。`;
     if (followUpDirectEnabled()) base[0].content += '\n连贯追问优先沿用上文，是否需要重新查证仍由你判断，不要因为输入只有问号就自动检查论文。';
     if (pending.forceFull) base[0].content += '\n读者要求重新生成，请重新审视前一回答；需要核实时自行调用工具。';
     attachAnswerImages(base, images, [], pending.question);
@@ -9670,12 +9556,12 @@ function citationMaterialsFor({ docCtx = null, context = '', references = [], sc
 }
 
 /** 引用核验：流式结束后算一次，渲染器按 raw 查表降级/拦截 */
-async function auditAnswerCitations(answer, { availablePages = null, scanned = false } = {}) {
+async function auditAnswerCitations(answer, { availablePages = null, scanned = false, reader = viewer } = {}) {
   try {
-    const totalPages = Number(viewer?.numPages) || 0;
+    const totalPages = Number(reader?.numPages) || 0;
     const pageTextFor = scanned
       ? (p) => pageTextFromScanDigest(state.scanDigest, p)
-      : (p) => (viewer?.getPageText ? viewer.getPageText(p) : '');
+      : (p) => (reader?.getPageText ? reader.getPageText(p) : '');
     const result = await validateCitations(answer, {
       totalPages,
       availablePages: availablePages?.length ? availablePages : null,
@@ -9971,7 +9857,8 @@ function streamTarget(node) {
     if (height <= visible) return Math.max(0, offset);
     return Math.max(0, offset + height - visible + 16);
   };
-  const scrollFollow = () => { if (bodyEl) bodyEl.scrollTop = followTop(); };
+  const ownsFollow = () => !entryEl?.classList.contains('msg-translation') || bodyEl?.firstElementChild === entryEl;
+  const scrollFollow = () => { if (bodyEl && ownsFollow()) bodyEl.scrollTop = followTop(); };
   const ensureFollowBtn = () => {
     if (!blockEl) return null;
     if (!followEl) {
@@ -9990,7 +9877,7 @@ function streamTarget(node) {
     }
     return followEl;
   };
-  const showFollow = () => { ensureFollowBtn()?.classList.remove('hidden'); };
+  const showFollow = () => { if (ownsFollow()) ensureFollowBtn()?.classList.remove('hidden'); };
   const hideFollow = () => { followEl?.classList.add('hidden'); };
   /* 用户向上滚（离开跟随位置）→ 停止自动跟随并出现悬浮的「↓」按钮；点按钮回来继续跟随 */
   const onBodyScroll = () => {
@@ -10037,7 +9924,12 @@ function streamTarget(node) {
     if (following) requestAnimationFrame(() => { if (active) scrollFollow(); });
   };
   return {
+    dispose() {
+      stopTimers(); pending = null; active = false; hideFollow();
+      bodyEl?.removeEventListener('scroll', onBodyScroll);
+    },
     push(text) {
+      if (!active) return;
       // 工具调用标记（DSML / XML）绝不显示给用户：流式期间也实时剥离
       pending = stripAgentMarkup(text);
       lastContent = pending;
@@ -10123,6 +10015,42 @@ function chat(opts) {
   })();
 }
 
+// Translation requests own their abort controller and queue slot. Keeping this
+// separate from the chat controller lets another selection start immediately.
+const translationJobs = new Set();
+const TRANSLATION_CONCURRENCY = 3;
+let primaryBusy = false;
+let regionCaptureCount = 0;
+function pumpTranslationJobs() {
+  let active = [...translationJobs].filter(job => job.active).length;
+  for (const job of translationJobs) {
+    if (active >= TRANSLATION_CONCURRENCY) break;
+    if (job.active || job.controller.signal.aborted) continue;
+    job.active = true; active += 1;
+    job.entry.body.textContent = tr("翻译中…");
+    job.resolve(true);
+  }
+}
+function beginTranslationJob(entry, controller = new AbortController()) {
+  let resolve;
+  const ready = new Promise(done => { resolve = done; });
+  const job = { entry, controller, active: false, resolve, ready };
+  const end = () => {
+    if (!translationJobs.delete(job)) return;
+    controller.signal.removeEventListener('abort', end);
+    if (!job.active) resolve(false);
+    pumpTranslationJobs(); refreshBusyState();
+  };
+  job.end = end;
+  entry.root.__translationController = controller;
+  translationJobs.add(job);
+  controller.signal.addEventListener('abort', end, { once: true });
+  if (controller.signal.aborted) end(); else pumpTranslationJobs();
+  if (!job.active && !controller.signal.aborted) entry.body.textContent = tr("排队中…");
+  refreshBusyState();
+  return job;
+}
+
 function makeController() {
   if (state.busy) return null;
   const ctl = new AbortController();
@@ -10131,29 +10059,45 @@ function makeController() {
   return ctl;
 }
 
-function abortStream(reason = 'user') {
-  if (activeTranslationBatch) stopTranslationBatch(activeTranslationBatch, reason);
+function abortStream(reason = 'user', scope = 'all') {
+  if (scope !== 'primary') {
+    if (activeTranslationBatch) stopTranslationBatch(activeTranslationBatch, reason);
+    for (const job of [...translationJobs]) job.controller.abort(reason);
+  }
   const ctl = state.abort;
-  if (ctl) {
+  if (scope === 'all') for (const job of chatJobs.values()) job.controller.abort(reason);
+  if (ctl && !(scope === 'document' && ctl.__chatJob) && (scope !== 'translate' || ctl === activeTranslationBatch?.controller)
+    && (scope !== 'primary' || ctl !== activeTranslationBatch?.controller)) {
     state.abortReason = reason;
     try { ctl.abort(); } catch { /* ignore */ }
   }
 }
+function userStopScope() {
+  return activeTranslationBatch || !state.abort || (composerMode() === 'translate' && translationJobs.size)
+    ? 'translate' : 'primary';
+}
 
 function setBusy(on, hint = '') {
+  primaryBusy = !!on;
+  refreshBusyState(hint);
+}
+function refreshBusyState(hint = '') {
+  const on = primaryBusy || translationJobs.size > 0 || regionCaptureCount > 0;
   state.busy = on;
   if ($('#answerLanguage')) $('#answerLanguage').disabled = on;
   if (!on) state.activeSendScope = '';
   if (!on) scheduleRemoteSession();
-  $('#stopBtn')?.classList.toggle('hidden', !on || !state.abort);
+  $('#stopBtn')?.classList.toggle('hidden', !on || (!state.abort && !translationJobs.size));
   if ($('#stopBtn')) $('#stopBtn').title = activeTranslationBatch ? tr("停止整批翻译") : tr("停止生成");
-  $('#sendBtn').disabled = on;
-  $('#clipBtn').disabled = on;
-  if (on) setHint(hint);
+  const translationInput = composerMode() === 'translate';
+  $('#sendBtn').disabled = on && !translationInput;
+  $('#clipBtn').disabled = on && !translationInput;
+  if (on && hint) setHint(hint);
+  else if (on && !primaryBusy) setHint(tr("翻译中…"));
   else updateComposerHint();
   const regionTop = $('#regionBtn');
-  if (regionTop) regionTop.disabled = on;
-  $$('#attachRow .at-x').forEach((button) => { button.disabled = on; });
+  if (regionTop) regionTop.disabled = on && !translationInput;
+  $$('#attachRow .at-x').forEach((button) => { button.disabled = on && !translationInput; });
   const clearBtn = $('#clearSession');
   if (clearBtn) clearBtn.disabled = on;
   updateSendScope();
@@ -10183,7 +10127,7 @@ function renderTranslationBatch() {
 }
 
 function returnTranslationBatchToDraft(batch) {
-  if (state.busy || batch.status === 'running' || batch.docId !== (state.doc?.docId || '')) return;
+  if (primaryBusy || batch.status === 'running' || batch.docId !== (state.doc?.docId || '')) return;
   const owner = { docId: batch.docId, mode: 'translate' };
   saveComposerDraft();
   const draft = composerDrafts.read(owner);
@@ -10209,14 +10153,29 @@ function returnTranslationBatchToDraft(batch) {
 }
 
 async function resumeTranslationBatch(batch) {
-  if (state.busy || activeTranslationBatch || batch.docId !== (state.doc?.docId || '')) return;
+  if (primaryBusy || activeTranslationBatch || batch.docId !== (state.doc?.docId || '')) return;
   if (!await allowEdit(tr("译文")) || !ensureReady()) return;
-  if (state.busy || batch.docId !== (state.doc?.docId || '')) return;
+  if (primaryBusy || batch.docId !== (state.doc?.docId || '')) return;
   const openSeq = state.openSeq;
   const isCurrent = () => batch.docId === (state.doc?.docId || '') && state.openSeq === openSeq;
   activeTranslationBatch = batch;
   try {
+    // Reserve all results before work starts; upload/response timing cannot
+    // reorder them and queued screenshots are immediately visible.
+    for (const item of batch.items) {
+      if (item.deleted || item.status === 'complete' || item.entry?.root?.isConnected) continue;
+      const textItem = item.kind === 'text';
+      const source = String(textItem ? item.text : item.label || tr("截图"));
+      item.entry = addEntry({ block: 'translate', tag: 'translation', page: textItem ? null : item.page,
+        quote: source.length > 400 ? `${source.slice(0, 400)}…` : source,
+        thumbs: textItem ? [] : [item.dataUrl], retry: textItem
+          ? { kind: 'translate-text', docId: batch.docId, text: item.text, targetLang: batch.targetLang, segments: snapshotTranslationSegments(item.segments) }
+          : translateShotRetryPayload({ docId: batch.docId, sid: batch.sid, page: item.page, label: item.label, refId: item.ref || '', targetLang: batch.targetLang }),
+        reveal: false });
+      item.entry.body.textContent = tr("排队中…");
+    }
     await runTranslationBatch(batch, {
+      concurrency: TRANSLATION_CONCURRENCY,
       isCurrent,
       onChange: () => {
         if (batch.status === 'running') {
@@ -10357,7 +10316,7 @@ function translationSegmentLabel(part, index) {
 
 /** 按加入顺序收集正文；只翻译明确选中的片段，不补入中间的图注/脚注。 */
 async function addToTranslate(sel) {
-  if (!sel || sel.source === 'right' || state.busy) return;
+  if (!sel || sel.source === 'right') return;
   const docId = state.doc?.docId || '';
   if (sel.docId && sel.docId !== docId) return;
   const openSeq = state.openSeq;
@@ -10396,7 +10355,7 @@ function renderTranslationSegment(part, index, segments) {
   });
   editor.value = part.text;
   const move = (direction) => {
-    if (state.busy || !sameComposerOwner(owner, composerOwner)) return;
+    if (!sameComposerOwner(owner, composerOwner)) return;
     const list = state.attachments.filter((item) => item.kind === 'text');
     const at = list.findIndex((item) => item.id === part.id);
     const other = list[at + direction];
@@ -10408,9 +10367,9 @@ function renderTranslationSegment(part, index, segments) {
   };
   return el('details', { class: 'attach text translation-segment', dataset: { id: part.id } }, summary, editor,
     el('div', { class: 'at-tools' },
-      el('button', { type: 'button', class: 'at-up', text: tr("上移"), disabled: state.busy || index === 0,
+      el('button', { type: 'button', class: 'at-up', text: tr("上移"), disabled: index === 0,
         'aria-label': tr("上移第 {0} 段", index + 1), onclick: () => move(-1) }),
-      el('button', { type: 'button', class: 'at-down', text: tr("下移"), disabled: state.busy || index === segments.length - 1,
+      el('button', { type: 'button', class: 'at-down', text: tr("下移"), disabled: index === segments.length - 1,
         'aria-label': tr("下移第 {0} 段", index + 1), onclick: () => move(1) }),
       el('button', { type: 'button', class: 'at-x', text: tr("移除"), 'aria-label': tr("移除第 {0} 段", index + 1), onclick: () => removeAttach(part.id) }),
     ));
@@ -10429,7 +10388,7 @@ function translationCacheScope({ page = null, context = '' } = {}) {
 async function doTranslateText({ text, targetLang = '', force = false, task = null, segments = [] } = {}) {
   if (!task && !await allowEdit(tr("译文"))) return;
   const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
-  if (!raw || (state.busy && !task)) return;
+  if (!raw) return;
   if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
   if (!ensureReady()) return;
   const docId = state.doc?.docId || '';
@@ -10461,6 +10420,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
       const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
       row?.scrollIntoView({ block: 'nearest' });
       toast(tr("这段文字翻过，直接用原结果"), 'ok', 1800);
+      if (task?.item.entry) deleteTranslationEntry(task.item.entry.root);
       return { status: 'complete' };
     }
   }
@@ -10476,17 +10436,16 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
     return { status: 'complete' };
   }
   const target = streamTarget(entry.body);
-  const ctl = task?.controller || makeController();
-  if (!ctl) return;
-  entry.root.__translationController = ctl;
-  setBusy(true, '0s');
+  const job = beginTranslationJob(entry, task?.controller);
+  const ctl = job.controller;
   let received = '';
   try {
+    if (!await job.ready || ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     const full = await chat({
       messages: translateMessages({ text: body, targetLang: lang, context: '', page: null, docTitle: state.doc?.name }),
       signal: ctl.signal,
       onDelta: (piece, all) => { if (isCurrent() && !ctl.signal.aborted) { received = all; target.push(all); } },
-      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
+      onTick: () => refreshBusyState(),
     });
     if (ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     const clean = full.trim();
@@ -10509,14 +10468,13 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
       return { status: 'failed' };
     }
   } finally {
-    if (!task && state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
+    job.end();
     entry.root.__translationController = null;
   }
 }
 
 async function doTranslate(sel, { targetLang = '', force = false } = {}) {
   if (!await allowEdit(tr("译文"))) return;
-  if (state.busy) return;
   const text = sel.cleanText || cleanText(sel.text);
   if (!text || !ensureReady()) return;
   // 目标语言以输入框旁「译成」的选择为准；重试时沿用当时记录的目标语言
@@ -10524,73 +10482,72 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
   const lang = resolveTranslateTarget(targetLang);
   const docId = state.doc?.docId || null;
   const openSeq = state.openSeq;
-  const context = sel.page ? await viewer.getContextAround(sel.page, text).catch(() => '') : '';
-  if (state.busy || docId !== (state.doc?.docId || null) || openSeq !== state.openSeq) return;
-  const retry = () => doTranslate(sel, { targetLang: lang, force: true });
-  // A 线 P3：翻译缓存键带提示词版本（改翻译提示词 → 旧缓存不复用）
-  const key = `translate.selection@${PROMPT_SYSTEM_VERSION}::${lang}::${text.length}-${hashStr(text)}::${translationCacheScope({ page: sel.page, context })}`;
-  const cached = force ? null : state.cache.get(key);
+  const isCurrent = () => docId === (state.doc?.docId || null) && openSeq === state.openSeq;
+  const docTitle = state.doc?.name;
+  const retry = () => { if (isCurrent()) return doTranslate(sel, { targetLang: lang, force: true }); };
   const inCard = document.body.classList.contains('no-right') || document.body.classList.contains('right-empty');
   const cardBody = inCard ? showTranslationCard(sel) : null;
   if (!inCard) revealTranslatePanel();
 
-  if (cached) {
-    const existing = [...state.sessionEntries].reverse().find((x) => x?.block === 'translate'
-      && x?.tag === 'translation' && x?.status === 'complete' && x?.quote === text
-      && String(x?.text || '') === String(cached));
-    if (existing) {
-      if (cardBody) cardBody.innerHTML = renderMarkdown(cached);
-      else {
-        const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
-        row?.scrollIntoView({ block: 'nearest' });
-        toast(tr("这段翻译已在结果区，直接使用原结果"), 'ok', 1800);
-      }
-      return;
-    }
-  }
   const entry = addEntry({ block: 'translate', tag: 'translation', page: sel.page, quote: text,
     retry: { kind: 'translate', docId: state.doc?.docId || null, text, page: sel.page || null, targetLang: lang }, reveal: !inCard });
-  if (cached) {
-    entry.body.innerHTML = renderMarkdown(cached);
-    if (cardBody) cardBody.innerHTML = renderMarkdown(cached);
-    finishEntry(entry, cached, { page: sel.page, retryLabel: tr("重新翻译"), onRetry: retry });
-    toast(tr("这段翻过，直接用缓存"), 'ok', 1500);
-    return;
-  }
-
+  const cardVersion = translationCardVersion;
+  if (cardBody) $('#translationCard').dataset.entryId = entry.root.__sessionRecord.id;
+  const ownsCard = () => cardBody && cardVersion === translationCardVersion;
   const target = streamTarget(entry.body);
   const cardTarget = cardBody ? streamTarget(cardBody) : null;
-  const ctl = makeController();
-  if (!ctl) return;
-  entry.root.__translationController = ctl;
-  setBusy(true, '0s');
+  if (cardTarget) translationCardStream = cardTarget;
+  const job = beginTranslationJob(entry), ctl = job.controller;
+  if (ownsCard()) cardBody.textContent = tr(job.active ? "翻译中…" : "排队中…");
   let received = '';
   try {
+    if (!await job.ready || ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
+    if (ownsCard()) cardBody.textContent = tr("翻译中…");
+    const context = sel.page ? await viewer.getContextAround(sel.page, text).catch(() => '') : '';
+    if (ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
+    const key = `translate.selection@${PROMPT_SYSTEM_VERSION}::${lang}::${text.length}-${hashStr(text)}::${translationCacheScope({ page: sel.page, context })}`;
+    const cached = force ? null : state.cache.get(key);
+    if (cached) {
+      const existing = state.sessionEntries.find(x => x !== entry.root.__sessionRecord && x?.block === 'translate'
+        && x?.tag === 'translation' && x?.status === 'complete' && x?.quote === text && x?.text === cached);
+      if (existing) {
+        if (ownsCard()) { cardTarget.done(cached); $('#translationCard').dataset.entryId = existing.id; }
+        else [...(state.blockMeta.translate?.body?.children || [])].find(n => n.__sessionRecord?.id === existing.id)?.scrollIntoView({ block: 'nearest' });
+        target.dispose(); deleteTranslationEntry(entry.root); return;
+      }
+      target.done(cached); if (ownsCard()) cardTarget.done(cached);
+      finishEntry(entry, cached, { page: sel.page, retryLabel: tr("重新翻译"), onRetry: retry });
+      return;
+    }
     const full = await chat({
-      messages: translateMessages({ text, targetLang: lang, context, page: sel.page, docTitle: state.doc?.name }),
+      messages: translateMessages({ text, targetLang: lang, context, page: sel.page, docTitle }),
       signal: ctl.signal,
-      onDelta: (piece, all) => { if (!entry.root.__deleted) { received = all; target.push(all); cardTarget?.push(all); } },
-      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
+      onDelta: (piece, all) => { if (isCurrent() && !ctl.signal.aborted && !entry.root.__deleted) {
+        received = all; target.push(all); if (ownsCard()) cardTarget.push(all);
+      } },
+      onTick: () => refreshBusyState(),
     });
-    if (ctl.signal.aborted || entry.root.__deleted) throw new DOMException(tr("已停止"), 'AbortError');
+    if (ctl.signal.aborted || entry.root.__deleted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     const clean = full.trim();
     target.done(clean);
-    cardTarget?.done(clean);
+    if (ownsCard()) cardTarget.done(clean);
     state.cache.set(key, clean);
     finishEntry(entry, clean, { page: sel.page, retryLabel: tr("重新翻译"), onRetry: retry });
   } catch (e) {
-    if (isAbort(e)) {
+    if (isAbort(e) || ctl.signal.aborted || !isCurrent()) {
       target.done(received);
-      cardTarget?.done(received);
-      finishEntry(entry, received, { page: sel.page, status: 'stopped', retryLabel: tr("重新翻译"), onRetry: retry });
+      if (ownsCard()) cardTarget.done(received);
+      const record = entry.root.__sessionRecord;
+      if (record) { record.text = received; record.status = 'stopped'; }
+      finishEntry(entry, received, { page: sel.page, status: 'stopped', retryLabel: tr("重新翻译"), onRetry: retry, restore: !isCurrent() });
     }
     else {
       target.fail(errText(e));
-      cardTarget?.fail(errText(e));
+      if (ownsCard()) cardTarget.fail(errText(e));
       addFailureRetry(entry, errText(e), retry);
     }
   } finally {
-    if (state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
+    job.end(); entry.root.__translationController = null;
   }
 }
 
@@ -10615,7 +10572,7 @@ function translateShotRetryPayload({ docId, sid, page, label, refId = '', target
 async function doTranslateShot({ shot, page = null, label = tr("截图"), refId = '', sid = null, docId = '', targetLang = '', task = null } = {}) {
   if (!task && !await allowEdit(tr("译文"))) return;
   const dataUrl = String(shot?.dataUrl || '');
-  if (!dataUrl || (state.busy && !task)) return;
+  if (!dataUrl) return;
   if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
   const curDocId = state.doc?.docId || null;
   const targetDoc = String(docId || '') || curDocId;
@@ -10643,12 +10600,10 @@ async function doTranslateShot({ shot, page = null, label = tr("截图"), refId 
   entry.root.classList.add('msg-shot-translate');
 
   const target = streamTarget(entry.body);
-  const ctl = task?.controller || makeController();
-  if (!ctl) return;
-  entry.root.__translationController = ctl;
-  setBusy(true, '0s');
+  const job = beginTranslationJob(entry, task?.controller), ctl = job.controller;
   let received = '';
   try {
+    if (!await job.ready || ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     // 图片单独存：会话 JSON 只记 {id,w,h,label}，恢复/重试时按 id 取回原图
     if (!finalRef) {
       finalRef = await uploadAttachment(dataUrl, targetDoc, sessionSid);
@@ -10678,7 +10633,7 @@ async function doTranslateShot({ shot, page = null, label = tr("截图"), refId 
       messages,
       signal: ctl.signal,
       onDelta: (piece, all) => { if (isCurrent() && !ctl.signal.aborted) { received = all; target.push(all); } },
-      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
+      onTick: () => refreshBusyState(),
     });
     if (ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     const clean = String(full || '').trim();
@@ -10699,7 +10654,7 @@ async function doTranslateShot({ shot, page = null, label = tr("截图"), refId 
       return { status: 'failed' };
     }
   } finally {
-    if (!task && state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
+    job.end();
     scrollBody(entry.root.closest('.ai-body'));
     entry.root.__translationController = null;
   }
@@ -10710,7 +10665,6 @@ function retryTranslateShot(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const docId = p.docId || state.doc?.docId || '';
   if (!docId || docId !== state.doc?.docId) { toast(tr("这张截图属于另一篇论文，请切回原论文后重试"), 'err', 3200); return; }
-  if (state.busy) { toast(tr("正在生成中，先等它跑完或点停止再重试"), 'err', 3200); return; }
   const sid = typeof p.sid === 'string' ? p.sid : activeSidFor(docId);
   const openSeq = state.openSeq;
   const refId = validAttachmentId(p.refId) ? p.refId : '';
@@ -10821,7 +10775,7 @@ function addToChat(sel) {
 
 /** 把一张截图加进附件 */
 function addImageToChat(shot, page, label, { allowBusy = false, owner = null } = {}) {
-  if (state.busy && !allowBusy) return;
+  if (state.busy && !allowBusy && composerMode() !== 'translate') return;
   const target = owner || currentComposerOwner();
   if (!owner && composerMode() !== 'translate') revealPanel('chat');
   changeDraftAttachments(target, (items) => [...items, {
@@ -10836,7 +10790,7 @@ function addImageToChat(shot, page, label, { allowBusy = false, owner = null } =
 }
 
 function removeAttach(id) {
-  if (state.busy) return;
+  if (state.busy && composerMode() !== 'translate') return;
   state.attachments = state.attachments.filter((a) => a.id !== id);
   renderAttachments();
 }
@@ -10921,7 +10875,7 @@ function renderAttachments() {
     ),
     el('button', { type: 'button', class: 'at-x', title: tr("移除"), onclick: () => removeAttach(a.id) }, iconEl('close', { size: 13 })),
   )));
-  $$('#attachRow .at-x').forEach((button) => { button.disabled = state.busy; });
+  $$('#attachRow .at-x').forEach((button) => { button.disabled = state.busy && composerMode() !== 'translate'; });
   updateSendScope();
 }
 
@@ -10956,8 +10910,10 @@ function hideDocLoading() {
 function initComposer() {
   $('#composer').addEventListener('submit', (e) => { e.preventDefault(); send(); });
   syncComposerMode();
-  $('#stopBtn').onclick = () => { abortStream('user'); setHint(tr("正在停止…")); };
-  $('#clipBtn').onclick = () => state.startRegion?.();
+  $('#stopBtn').onclick = () => {
+    abortStream('user', userStopScope()); setHint(tr("正在停止…"));
+  };
+  $('#clipBtn').onclick = () => state.startRegion?.(composerMode());
   // 「清空会话」不再常驻在输入框下面，改挂在会话菜单里。
   // 这里的绑定用可选链，元素不在也不抛。
   const clearBtn = $('#clearSession');
@@ -11029,7 +10985,12 @@ function rangeOverview() {
 }
 
 function updateComposerHint() {
-  if (state.busy) return;                    // 忙的时候那行归进度文案用
+  if (state.busy) {
+    const translating = composerMode() === 'translate';
+    $('#sendBtn').disabled = !translating;
+    $('#clipBtn').disabled = !translating;
+    return;
+  }
   if (composerMode() === 'translate') {
     const segments = state.attachments.filter((a) => a.kind === 'text');
     const text = translationDraftText($('#chatInput')?.value || '', segments);
@@ -11037,7 +10998,7 @@ function updateComposerHint() {
     $('#sendBtn').title = tr("{0}（Enter）· Shift+Enter 换行", segments.length ? tr("合并翻译") : tr("翻译"));
     $('#chatInput').placeholder = segments.length ? tr("继续补充原文…") : tr("粘贴原文…");
     setHint(segments.length ? tr("将合并翻译 {0} 段选文{1}", segments.length, images ? tr(" · {0} 张截图另译", images) : '')
-      : images ? tr("{0} 张截图{1}将依次翻译", images, text ? tr("与输入文字") : '') : '');
+      : images ? tr("{0} 张截图{1}将分别翻译", images, text ? tr("与输入文字") : '') : '');
     return;
   }
   setHint(rangeOverview());
@@ -11452,7 +11413,8 @@ async function webSearch(query, signal) {
   return filterWebResults(query, j.results || []).slice(0, 6);
 }
 
-function readingRequestCurrent({ docId, openSeq, sid }) {
+function readingRequestCurrent({ docId, openSeq, sid, chatJob }) {
+  if (chatJob) return chatJobs.get(chatJob.key) === chatJob || (chatJob.finished && displayedChatKey === chatJob.key);
   return (state.doc?.docId || null) === docId && (openSeq == null || state.openSeq === openSeq)
     && (sid == null || activeSidFor(docId) === sid);
 }
@@ -11559,7 +11521,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   if (retryPending && !readingRequestCurrent(retryPending)) return;
   if (!retryPending && !draftUnchanged()) return;
   const ta = $('#chatInput');
-  if (state.busy) return;
+  if (state.busy && (retryPending || composerMode() !== 'translate')) return;
   if (!retryPending && composerMode() === 'translate') {
     const inputText = String(ta.value || '');
     const segments = state.attachments.filter((a) => a.kind === 'text').map((part) => structuredClone(part));
@@ -11571,22 +11533,26 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     if (shots.length && !docId) { toast(tr("先打开一篇论文，再翻译截图"), 'err'); return; }
     if (docId && state.viewerDocId !== docId) { flashHint(tr("论文正在打开，请稍候")); return; }
     const existing = translationBatches.get(docId);
-    if (existing && existing.status !== 'complete') {
-      toast(tr("这批翻译还有未完成项，请先继续，或将它放回草稿"), 'err', 3500);
-      renderTranslationBatch();
-      return;
-    }
     const lang = selectedTranslateTarget();
     if (!ensureReady()) return;
     const batch = createTranslationBatch({ docId, sid: activeSidFor(docId), targetLang: lang,
       items: [...(text ? [{ kind: 'text', text, inputText, segments }] : []), ...shots] });
-    translationBatches.set(docId, batch);
+    const independent = primaryBusy || activeTranslationBatch || (existing && existing.status !== 'complete');
+    if (!independent) translationBatches.set(docId, batch);
     ta.value = '';
     ta.style.height = 'auto';
     const submitted = new Set([...segments, ...shots].map((a) => a.id));
     state.attachments = state.attachments.filter((a) => !submitted.has(a.id));
     renderAttachments();
-    await resumeTranslationBatch(batch);
+    // Release the input immediately. Each accepted request owns its entry and
+    // cancellation; a later submission must never wait for this stream to end.
+    if (independent) {
+      for (const item of batch.items) {
+        if (item.kind === 'text') void doTranslateText({ text: item.text, segments: item.segments || [], targetLang: lang });
+        else void doTranslateShot({ shot: { dataUrl: item.dataUrl, width: item.w, height: item.h },
+          page: item.page, label: item.label, refId: item.ref || '', docId, sid: batch.sid, targetLang: lang });
+      }
+    } else void resumeTranslationBatch(batch);
     return;
   }
   let pending = retryPending;
@@ -11597,7 +11563,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     return;
   }
   if (!pending && !ta.value.trim() && !state.attachments.length) return;
-  if (pending && pending.docId !== (state.doc?.docId || null)) {
+  if (pending && !pending.chatJob && pending.docId !== (state.doc?.docId || null)) {
     flashHint(tr("这条请求属于另一篇论文，请切回原论文后重试"));
     return;
   }
@@ -11704,6 +11670,20 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
 
   const ctl = makeController();
   if (!ctl) return;
+  const reader = pending.chatReader || snapshotChatReader();
+  pending.chatReader = reader;
+  const scope = sessionScopeKey(), sid = activeSidFor(state.doc?.docId);
+  displayedChatKey = chatOwnerKey(scope, sid);
+  parkChatSession();
+  const job = { key: displayedChatKey, scope, sid, folder: currentFolderPath(), docId: pending.docId,
+    docTitle: pending.docTitle, reader, controller: ctl, view: chatViews.get(displayedChatKey), pending,
+    teaching: teachingProgressBlock(), summary: state.sessionSummary, finished: false };
+  ctl.__chatJob = job; pending.chatJob = job;
+  pending.entry.root.__chatJob = job;
+  if (pending.userEntry) pending.userEntry.root.__chatJob = job;
+  chatJobs.set(job.key, job);
+  const setJobHint = text => { if (chatJobVisible(job)) setHint(text); };
+  const tickJob = text => { if (chatJobVisible(job)) setBusy(true, text); };
   // 「我叫 Cyan，请记住」这类明确要求：发送当时就确定性记住，不依赖回答成功或模型提取
   rememberExplicitIdentity(pending.question, {
     docId: pending.docId || '', paper: pending.docTitle || '', capability: 'chat',
@@ -11726,7 +11706,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   });
   pending.scope = baseScope;
   state.activeSendScope = baseScope;
-  setBusy(true, '0s');
+  tickJob( '0s');
   const target = streamTarget(pending.entry.body);
   let received = '';
   let sources = [];
@@ -11749,7 +11729,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         if (shots.length) rec.shots = shots;
         else delete rec.shots;
       }
-      scheduleSessionSave();     // 让 shots 引用跟着会话一起落盘
+      scheduleChatJobSave(job);     // 让 shots 引用跟着会话一起落盘
     }
     const reading = pending.reading && (!images.length || pending.reading.screenshotCount === images.length)
       ? pending.reading : resolveReadingRequest({ question: pending.question,
@@ -11760,7 +11740,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     pending.reading = reading;
     // 只准备现有所在页，不等待整篇扫描；是否继续读页由模型选择工具。
     const currentPageText = pending.docId && pending.firstPage
-      ? await viewer.getPageText(pending.firstPage).catch(() => '') : '';
+      ? await reader.getPageText(pending.firstPage).catch(() => '') : '';
     if (!readingRequestCurrent(pending)) return;
     const scannedDoc = !!pending.docId && (String(currentPageText).trim().length < 40 || /\(cid:\d+\)|[\uE000-\uF8FF\uFFFD]/.test(currentPageText));
     pending.scanned = scannedDoc;
@@ -11771,11 +11751,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     const anchor = contextAnchorFor(pending.pageRole, reading);
     const contextParts = scannedDoc ? [] : (quotes.length ? await Promise.all(quotes.slice(0, 6).map(async (a) => {
       // 右栏划来的文字不是 PDF 原文，定位不到「原文附近」；给所在页整页当语境
-      const nearby = await viewer.getContextAround(a.page || pending.firstPage,
+      const nearby = await reader.getContextAround(a.page || pending.firstPage,
         a.from === 'right' ? '' : a.text);
       return nearby ? `[第${a.page || pending.firstPage}页]\n${nearby}` : '';
     })) : [pending.firstPage && pending.docId
-      ? await viewer.getContextAround(pending.firstPage, anchor) : '']);
+      ? await reader.getContextAround(pending.firstPage, anchor) : '']);
     const context = [...new Set(contextParts.filter(Boolean))].join('\n\n');
     const references = []; // 文献查阅由模型按需选择，发送前不扫描参考文献。
     if (!readingRequestCurrent(pending)) return;
@@ -11786,21 +11766,20 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       query: pending.inputValue, docId: pending.docId, contextIncluded: !!context, scanned: scannedDoc,
       contextHint: scopeContextHintFor(pending),
     });
-    state.activeSendScope = pending.scope;
-    updateSendScope();
+    if (chatJobVisible(job)) { state.activeSendScope = pending.scope; updateSendScope(); }
 
     // 联网是允许查找材料；短追问先确定对象，纠正消息和纯问号不会拿去检索。
     // 追问直答这类短问题也不联网（省一次搜索往返；需要查资料的问题一般会点名要查/最新/出处）。
     if (pending.useWeb && (!images.length || pending.inputValue.trim() || reading.selection)
       && webQueryFor(pending.question, reading.selection, { reading })) {
-      setHint(tr("正在联网搜索…"));
+      setJobHint(tr("正在联网搜索…"));
       try {
         sources = await readingSources(reading, references, ctl.signal);
-        setHint(sources.length ? tr("搜到 {0} 条来源", sources.length) : tr("没搜到相关结果，只用论文内容回答"));
+        setJobHint(sources.length ? tr("搜到 {0} 条来源", sources.length) : tr("没搜到相关结果，只用论文内容回答"));
       } catch (e) {
         if (isAbort(e)) throw e;
         sources = [];
-        setHint(tr("联网搜索不可用，这次只用论文内容回答"));
+        setJobHint(tr("联网搜索不可用，这次只用论文内容回答"));
       }
     }
 
@@ -11810,11 +11789,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // 只有「只发截图没写问题」（shotOnly）才不启用，避免模型把截图当成唯一依据乱翻。
     const batch = splitNumberedQuestions(pending.inputValue);
     const agentAllowed = agentReadEnabled() && !shotOnly
-      && !!pending.docId && !!state.doc && !!viewer?.pdf;
+      && !!pending.docId && !!reader?.pdf;
     let agentRun = null;
     let agentProgress = null;
     if (agentAllowed) {
-      setHint(tr("正在思考…"));
+      setJobHint(tr("正在思考…"));
       // 过程列表：把「正在思考 / 检索 / 读第 N 页 / 命中」一条条列在回答上方（用户要求像 agent 工具一样可见）
       agentProgress = createAgentProgress(pending.entry);
       agentRun = await runAgentReadPath({
@@ -11825,7 +11804,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         onDelta: (_piece, all) => {
           if (!readingRequestCurrent(pending)) return;
           agentProgress?.answerStarted();
-          setHint('');
+          setJobHint('');
           received = all;
           target.push(all);
         },
@@ -11842,11 +11821,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
           context, page: pending.firstPage, pageRole: pending.pageRole, docTitle: pending.docTitle,
           history: pending.history, reading, references, webResults: sources,
           availablePages: context && pending.firstPage ? [pending.firstPage] : [], pageImages: [], screenshotCount: images.length,
-          profileBlock: askProfileBlock(state.docText || context || '', pending.question, { docId: pending.docId }),
-          teachingBlock: teachingProgressBlock(),
+          profileBlock: askProfileBlock(context || '', pending.question, { docId: pending.docId }),
+          teachingBlock: job.teaching,
         },
       });
-      setHint('');
+      setJobHint('');
       // 静默回退：模型不支持工具 / 超时 / 出错时，把过程列表整块撤掉，用户只看到正常回答
       if (agentRun) agentProgress?.finish();
       else {
@@ -11861,19 +11840,19 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     if (!agentRun && scannedDoc) {
       try {
         docCtx = pending.useFullText && !shotOnly
-          ? await buildDocContext(pending.question, reading.selection || reading.focus.text, { page: pending.firstPage || reading.page, whole: true })
-          : { text: '', mode: 'scan', pageImages: shotOnly ? [] : await renderScanPages([pending.firstPage || reading.page || 1]) };
+          ? await buildChatJobContext(job, pending.question, reading.selection || reading.focus.text, { page: pending.firstPage || reading.page, whole: true })
+          : { text: '', mode: 'scan', pageImages: shotOnly ? [] : await renderChatJobPages(job, [pending.firstPage || reading.page || 1]) };
       } catch (e) {
         if (isAbort(e)) throw e;
-        setHint(tr("读取扫描页失败，这次只带已有材料"));
+        setJobHint(tr("读取扫描页失败，这次只带已有材料"));
       }
     } else if (!agentRun && pending.useFullText && !shotOnly && pending.docId) {
       try {
-        docCtx = await buildDocContext(pending.question, reading.selection || reading.focus.text);
+        docCtx = await buildChatJobContext(job, pending.question, reading.selection || reading.focus.text);
       } catch (e) {
         if (isAbort(e)) throw e;
         docCtx = null;
-        setHint(tr("读取整篇论文失败，这次只带选中内容和当前页上下文"));
+        setJobHint(tr("读取整篇论文失败，这次只带选中内容和当前页上下文"));
       }
     }
     pending.scope = sendScopeText({
@@ -11891,14 +11870,13 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       contextIncluded: !!context,
       contextHint: scopeContextHintFor(pending),
     });
-    state.activeSendScope = pending.scope;
-    updateSendScope();
+    if (chatJobVisible(job)) { state.activeSendScope = pending.scope; updateSendScope(); }
 
     if (!readingRequestCurrent(pending)) return;
     if (ctl.signal.aborted) throw new DOMException(tr("已停止"), 'AbortError');
     // 记忆块：学习画像 + 用户手写长期记忆 + 本篇之前的讨论 + 本次会话滚动摘要。
     // 教学进度（「带我一步步读」）也在这里带上，避免自由追问时模型擅自推进下一步。
-    const profileForAsk = askProfileBlock(state.docText || context || '', pending.question,
+    const profileForAsk = askProfileBlock(context || '', pending.question,
       { docId: pending.docId });
     // P1.5：可用页码白名单 + 本轮要求（近因指令）+ 本次依据回执，全部由程序算好，不靠模型猜。
     citationMat = citationMaterialsFor({
@@ -11927,7 +11905,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       pageImages: docCtx?.pageImages || [],
       screenshotCount: images.length,
       profileBlock: profileForAsk,
-      teachingBlock: teachingProgressBlock(),
+      teachingBlock: job.teaching,
       availablePages: citationMat.availablePages,
       scopeLabel: scopeLabelFor(pending, { scanned: scannedDoc, images }),
       objectLabel: objectLabelFor(pending, reading),
@@ -11959,7 +11937,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     meta = '';
     warnIfNoVisionModel(images.length > 0 || pageImages.length > 0);
 
-    setHint('');
+    setJobHint('');
     // P2.5：Agent 最后一轮已经给出完整回答时直接采用，不再重复一次流式请求（省一次 LLM 往返）。
     // 但如果这次有**页图材料**（扫描件页图 / Agent 读的页图 / 跨论文页图），图片只能附在下一个请求里发出去，
     // 直接采用 directContent 会让模型根本没看到图 —— 这种情况必须再走一次最终流式请求。
@@ -11982,7 +11960,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
             const oneMessages = [...messages, { role: 'user', content: `本次只解答下面这一道题，完整作答，不要代答其他题。${batch.intro ? `共同要求：${batch.intro}\n` : ''}\n${batch.questions[i]}` }];
             const answer = await chat({ messages: oneMessages, signal: ctl.signal,
               onDelta: (_piece, all) => { answers[i].text = stripAgentMarkup(all); updateBatch(); },
-              onTick: () => setBusy(true, tr("已完成 {0}/{1} 题 · {2}s", answers.filter((a) => a.done).length, answers.length, ((Date.now() - startedAt) / 1000).toFixed(0))) });
+              onTick: () => tickJob( tr("已完成 {0}/{1} 题 · {2}s", answers.filter((a) => a.done).length, answers.length, ((Date.now() - startedAt) / 1000).toFixed(0))) });
             answers[i].text = stripAgentMarkup(answer).trim() || tr("这一题未得到回答，请重新生成。");
           } catch (e) {
             if (isAbort(e)) throw e;
@@ -12002,16 +11980,16 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         stream: true,
         signal: ctl.signal,
         onDelta: (_piece, all) => { received = all; target.push(all); },
-        onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
+        onTick: (ms) => tickJob( `${(ms / 1000).toFixed(0)}s`),
       });
     const full = stripAgentMarkup(rawFull);
     if (!readingRequestCurrent(pending)) return;
     // 引用核验必须在最终渲染之前完成：不合格的片段降级成纯页码，编造的页码直接不渲染。
-    await auditAnswerCitations(full, { availablePages: citationMat.availablePages, scanned: scannedDoc });
+    await auditAnswerCitations(full, { availablePages: citationMat.availablePages, scanned: scannedDoc, reader });
     if (!readingRequestCurrent(pending)) return;
     target.done(full);
-    state.history = snapshotHistory([...state.history, ...readingTurn(reading, full)]);
-    scheduleSessionSummary();
+    job.view.history = snapshotHistory([...job.view.history, ...readingTurn(reading, full)]);
+    if (chatJobVisible(job)) { state.history = job.view.history; scheduleSessionSummary(); }
     finishEntry(pending.entry, full, {
       page: pending.firstPage, sources: citedSources(full, sources), meta, status: 'complete', basis: citationMat.basis,
       // 用户要求：正常问答的回答下面也要能「重新生成」（复用这条 pending，原地重跑，不新加一轮问答）
@@ -12021,7 +11999,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       topic: reading.selection || reading.focus?.text || '',
       source: { docId: pending.docId || '', paper: pending.docTitle || '', capability: 'chat' } });
     // 附件在发送那一刻就已从输入区清掉（dropSentAttachments），成功时无需再处理。
-    scheduleSessionSave();
+    scheduleChatJobSave(job);
   } catch (e) {
     if (!readingRequestCurrent(pending)) return;
     if (isAbort(e)) {
@@ -12038,11 +12016,17 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       restoreSentAttachments(pending);
     }
   } finally {
-    setHint('');
+    setJobHint('');
+    job.finished = true;
+    clearTimeout(job.saveTimer);
+    await (job.saveChain || Promise.resolve()).catch(() => {});
+    await saveChatJob(job).catch(error => { toastAction(tr("会话保存失败，当前内容仍保留。"), tr("重试"), () => saveChatJob(job), 'err', 12000); });
+    chatJobs.delete(job.key);
     if (state.abort === ctl) { state.abort = null; state.abortReason = ''; setBusy(false); }
+    refreshChatJobState();
     // 「整篇」是单次发送范围：无论成功、失败还是用户停止，本次结束后复位。
     // 失败 / 停止的重试闭包仍持有 pending.useFullText，因此不会丢掉原范围。
-    if (pending.useFullText) {
+    if (pending.useFullText && chatJobVisible(job)) {
       state.useFullText = false;
       renderScopeMenu();
     }
@@ -12268,7 +12252,8 @@ async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
     return null;
   }
 
-  setBusy(true, tr("截图中…"));
+  regionCaptureCount += 1;
+  refreshBusyState(tr("截图中…"));
   try {
     let shot;
     if (rangeSlices.length === 1) {
@@ -12287,7 +12272,8 @@ async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
     toast(tr("截图失败：{0}", e.message), 'err', 4000);
     return null;
   } finally {
-    setBusy(false);
+    regionCaptureCount -= 1;
+    refreshBusyState();
   }
 }
 
@@ -12303,7 +12289,7 @@ async function captureToChat(topDoc, bottomDoc, leftVp, rightVp) {
 
 /** 截图翻译：截图先进下方输入框（和问答一样），再按 Enter / 发送翻译图中文字（2026-11-03 用户 m05190） */
 async function captureToTranslate(topDoc, bottomDoc, leftVp, rightVp) {
-  if (state.busy) return;
+  if (regionCaptureCount) return;
   const owner = currentComposerOwner('translate');
   const captured = await captureRegionShot(topDoc, bottomDoc, leftVp, rightVp);
   if (!captured) return;
@@ -12958,10 +12944,10 @@ function applyUiSettingsFromControls() {
 
 function resetPanels() {
   // 复位宽度意图与实际宽度都要回默认（sideBaseW 是「用户意图」，两边一起写才一致）
-  sideBaseW.left = 210;
-  sideBaseW.right = 360;
-  document.documentElement.style.setProperty('--left-w', '210px');
-  document.documentElement.style.setProperty('--right-w', '360px');
+  sideBaseW.left = 241;
+  sideBaseW.right = 436;
+  document.documentElement.style.setProperty('--left-w', '241px');
+  document.documentElement.style.setProperty('--right-w', '436px');
   // 「恢复默认布局」= 两边都展开：清掉用户意图和临时豁免，再按窗口宽度重算
   sideIntent.noLeft = false;
   sideIntent.noRight = false;
@@ -13258,7 +13244,10 @@ function initShortcuts() {
       if (!$('#settingsModal').classList.contains('hidden')) { closeSettings(); return; }
       if (!$('#searchBar').classList.contains('hidden')) { $('#searchClose').click(); return; }
       if (!$('#noteBox').classList.contains('hidden')) { saveNoteBox(); return; }
-      if (state.abort) { abortStream('user'); $('#composerHint').textContent = tr("正在停止…"); return; }
+      if (state.abort || translationJobs.size) {
+        abortStream('user', userStopScope());
+        $('#composerHint').textContent = tr("正在停止…"); return;
+      }
       // 引用高亮不随 Esc 取消：点正文任意处 / 再点同一个引用 / 翻页 / 换文档时清
       // Esc 是明确的「不要这个选区了」：连方块和记住的选区一起清掉
       if (state.selection || viewer?.getSelectionInfo()) { clearSelectionState(); viewer?.clearSelection(); return; }
@@ -13270,7 +13259,7 @@ function initShortcuts() {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && ['=', '+', '-', '_', '0'].includes(e.key)) {
       e.preventDefault();
       const reset = e.key === '0', step = ['=', '+'].includes(e.key) ? 1 : -1;
-      if (!document.body.classList.contains('reading')) setHomeZoom(reset ? 100 : (Number(uiStyle.homeZoom) || 100) + step * 10);
+      if (!document.body.classList.contains('reading')) setHomeZoom(reset ? DEFAULT_UI_STYLE.homeZoom : (Number(uiStyle.homeZoom) || DEFAULT_UI_STYLE.homeZoom) + step * 10);
       else setReadingFontSize(reset ? DEFAULT_UI_STYLE.fontSize : uiStyle.fontSize + step);
       return;
     }

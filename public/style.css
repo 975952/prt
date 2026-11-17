@@ -44,8 +44,8 @@
   /* 底部状态栏高度。**必须有这个名字**：顶栏改成浮层之后，主区高度要按
      「顶栏高度 − 状态栏高度」补回来（见文件末尾那一段），写死 22 在改密度时会失配。 */
   --statusbar-h: 22px;
-  --left-w: 210px;
-  --right-w: 360px;
+  --left-w: 241px;
+  --right-w: 436px;
   --rail-w: 40px;
   --viewer-min: 420px;
   --reading-fs: 14px;
@@ -3173,23 +3173,29 @@ body:not(.reading) #topbar :is(#homeBtn, #opsBtn, #searchBtn, .topbar-side-contr
   background: rgba(var(--surface-rgb), .45);
 }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) #composer .composer-row {
+  --composer-shadow-rgb: 84, 66, 44;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 32px 32px;
   gap: 6px 8px;
   padding: 13px;
-  background: rgba(var(--surface-rgb), var(--glass-surface-opacity, .2));
-  border: 1px solid rgba(var(--surface-rgb), .69);
+  background: linear-gradient(145deg, rgba(var(--surface-rgb), calc(var(--glass-surface-opacity, .2) + .22)), rgba(var(--surface-rgb), var(--glass-surface-opacity, .2)));
+  border: 1px solid rgba(var(--surface-rgb), .86);
   border-radius: 14px;
   backdrop-filter: blur(var(--glass-frost, 32px));
-  box-shadow: inset 0 1px 0 rgba(var(--surface-rgb), calc(.5 * var(--glass-shadow-strength, 1))),
-    0 7px 20px rgba(0, 0, 0, calc(.02 * var(--glass-shadow-strength, 1)));
+  box-shadow: inset 0 1.5px 0 rgba(var(--surface-rgb), .98),
+    inset 0 -1px 0 rgba(var(--composer-shadow-rgb), .07),
+    0 3px 7px rgba(var(--composer-shadow-rgb), .1),
+    0 12px 26px -8px rgba(var(--composer-shadow-rgb), .22);
 }
+:root[data-theme="dark"] #composer .composer-row { --composer-shadow-rgb: 0, 0, 0; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) #composer .composer-row:focus-within {
-  background: rgba(var(--surface-rgb), calc(var(--glass-surface-opacity, .2) + .07));
-  border-color: rgba(var(--surface-rgb), .69) !important;
+  background: linear-gradient(145deg, rgba(var(--surface-rgb), calc(var(--glass-surface-opacity, .2) + .3)), rgba(var(--surface-rgb), calc(var(--glass-surface-opacity, .2) + .06)));
+  border-color: rgba(var(--surface-rgb), .96) !important;
   outline: none !important;
-  box-shadow: inset 0 1px 0 rgba(var(--surface-rgb), calc(.5 * var(--glass-shadow-strength, 1))),
-    0 7px 20px rgba(0, 0, 0, calc(.02 * var(--glass-shadow-strength, 1))) !important;
+  box-shadow: inset 0 1.5px 0 rgba(var(--surface-rgb), 1),
+    inset 0 -1px 0 rgba(var(--composer-shadow-rgb), .09),
+    0 4px 10px rgba(var(--composer-shadow-rgb), .14),
+    0 16px 32px -9px rgba(var(--composer-shadow-rgb), .28) !important;
 }
 .glass-send-arrow { display: none; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) #composer #attachRow { grid-column: 1 / -1; }

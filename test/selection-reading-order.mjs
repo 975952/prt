@@ -65,6 +65,21 @@ assert.equal(selectionRunAt(staggered, 80, 130).text, 'L2 staggered body line');
 assert.ok(clipSelectionRuns(staggered, { index: 0, offset: 0 }, { index: 2, offset: 12 }).every(run => run.text.startsWith('L')));
 console.log('PASS staggered column baselines retain independent selection flows');
 
+for (const scale of [0.75, 1, 1.25, 1.5, 2, 3]) {
+  // The narrow 17pt gutter is from a journal layout. Glyph boxes round up more
+  // than proportionally at some zoom levels, just as browser Range metrics do.
+  const narrow = orderSelectionRuns(Array.from({ length: 8 }, (_, i) => [
+    run(`L${i + 1} narrow journal paragraph`, 42 * scale, (100 + i * 12.5) * scale, 238 * scale, Math.round(10 * scale)),
+    run(`R${i + 1} narrow journal paragraph`, 297 * scale, (100 + i * 12.5) * scale, 238 * scale, Math.round(10 * scale)),
+  ]).flat(), { width: 595 * scale, height: 842 * scale });
+  assert.deepEqual(narrow.map(item => item.text[0]), [...Array(8).fill('L'), ...Array(8).fill('R')],
+    `narrow journal columns remain independent at ${scale * 100}%`);
+  const selected = clipSelectionRuns(narrow, { index: 0, offset: 0 }, { index: 4, offset: 18 });
+  assert(selected.every(item => item.text.startsWith('L')));
+  assert(selectionRunAt(narrow, 284 * scale, 137.5 * scale).text.startsWith('L'), 'column whitespace stays in the same flow');
+}
+console.log('PASS narrow journal gutters survive rounded glyph metrics at six zoom levels');
+
 const mixed = layout([
   run('L1 body', 60, 200, 194), run('R1 body', 330, 200, 210),
   run('L2 body', 60, 212, 170), run('[1]', 233, 210, 15, 7), run('R2 body', 330, 212, 180), run('[2]', 513, 210, 15, 7),

@@ -235,4 +235,44 @@ await check('deleting an active item skips it on resume and continues its siblin
   await runTranslationBatch(batch, { runItem: async () => assert.fail('Deleted/completed item was regenerated') });
 });
 
+await check('parallel workers are bounded, start in order and keep completion order independent', async () => {
+  const batch = make(5), gates = batch.items.map(deferred), started = [];
+  const running = runTranslationBatch(batch, { concurrency: 3, runItem: async item => {
+    const index = batch.items.indexOf(item); started.push(index);
+    await gates[index].promise; return { status: 'complete' };
+  } });
+  assert.deepEqual(started, [0, 1, 2]);
+  gates[1].resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(started, [0, 1, 2, 3]);
+  gates[3].resolve(); await new Promise(resolve => setImmediate(resolve));
+  assert.deepEqual(started, [0, 1, 2, 3, 4]);
+  gates.forEach(gate => gate.resolve()); await running;
+  assert.equal(batch.status, 'complete');
+  assert.deepEqual(batch.items.map(item => item.id), ['source-0', 'source-1', 'source-2', 'source-3', 'source-4']);
+});
+
+await check('parallel failure preserves in-flight siblings and leaves unstarted work resumable', async () => {
+  const batch = make(5), gates = batch.items.map(deferred), started = [];
+  const running = runTranslationBatch(batch, { concurrency: 3, runItem: async item => {
+    const index = batch.items.indexOf(item); started.push(index); await gates[index].promise;
+    return index === 1 ? { status: 'failed', error: 'fixture failure' } : { status: 'complete' };
+  } });
+  gates[1].resolve(); await new Promise(resolve => setImmediate(resolve));
+  gates[0].resolve(); gates[2].resolve(); await running;
+  assert.deepEqual(started, [0, 1, 2]); assert.equal(batch.status, 'failed');
+  assert.deepEqual(batch.items.map(item => item.status), ['complete', 'failed', 'complete', 'pending', 'pending']);
+  await runTranslationBatch(batch, { concurrency: 3, runItem: async () => ({ status: 'complete' }) });
+  assert.equal(batch.status, 'complete');
+});
+
+await check('parallel stop aborts every active sibling without starting queued work', async () => {
+  const batch = make(5), gate = deferred(); let count = 0;
+  const running = runTranslationBatch(batch, { concurrency: 3, runItem: async (_item, { signal }) => {
+    count++; await gate.promise; assert.equal(signal.aborted, true); return { status: 'complete' };
+  } });
+  stopTranslationBatch(batch, 'document-switch'); gate.resolve(); await running;
+  assert.equal(count, 3); assert.equal(batch.status, 'paused');
+  assert.deepEqual(batch.items.map(item => item.status), ['stopped', 'stopped', 'stopped', 'pending', 'pending']);
+});
+
 console.log(`\n${passed} translation queue checks passed.`);

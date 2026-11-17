@@ -1,8 +1,8 @@
 /* The optical layer is separate from text and PDF pixels. Only its rounded
    edge refracts; the center stays still while the card is moved or resized. */
 export const CARD_MATERIAL_DEFAULTS = Object.freeze({
-  liquid: Object.freeze({ transparency: 55, blur: 1.2, refraction: 60 }),
-  frosted: Object.freeze({ transparency: 63, blur: 15, refraction: 60 }),
+  liquid: Object.freeze({ transparency: 35, blur: 11.4, refraction: 99 }),
+  frosted: Object.freeze({ transparency: 71, blur: 9.4, refraction: 60 }),
 });
 
 let controller;

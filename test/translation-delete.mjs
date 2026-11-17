@@ -150,12 +150,16 @@ try {
     const shot = { dataUrl: canvas.toDataURL(), width: 160, height: 80 };
     window.__ctx.addImageToChat(shot, 1, 'First image'); window.__ctx.addImageToChat(shot, 2, 'Second image');
   });
-  await page.click('#sendBtn'); const firstImage = await nextRequest(2);
+  await page.click('#sendBtn'); await nextRequest(3);
+  // Uploads may finish out of order now that screenshots run concurrently.
+  // Match ownership by source label, never by network arrival position.
+  const firstImage = requests.slice(2).find(request => JSON.stringify(request.body.messages).includes('First image'));
+  const secondImage = requests.slice(2).find(request => JSON.stringify(request.body.messages).includes('Second image'));
+  assert.ok(firstImage && secondImage);
   emit(firstImage, 'First image partial result.');
   await page.waitForFunction(() => window.__state.sessionEntries.some(row => row.screenshot && row.status === 'pending'));
-  const firstImageId = await page.evaluate(() => window.__state.sessionEntries.find(row => row.screenshot && row.status === 'pending').id);
+  const firstImageId = await page.evaluate(() => window.__state.sessionEntries.find(row => row.screenshot && row.quote === 'First image').id);
   await remove(firstImageId);
-  const secondImage = await nextRequest(3);
   await remove('concurrent'); // Removing an older result must not abort the running screenshot.
   emit(secondImage, 'Second image survives deletion of its sibling.', true);
   await page.waitForFunction(() => !window.__state.busy);
