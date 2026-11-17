@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 /**
  * A 线 P2.5：让 AI 自己决定读哪些页（只读工具 + 有界循环）。
  *
@@ -370,85 +371,85 @@ export function toolStepLabel(call) {
   const name = String(call?.name || '');
   const args = call?.args || {};
   const q = clip(args.query, 40);
-  if (name === 'get_reading_state') return '查看当前阅读状态';
-  if (name === 'search_paper') return `检索「${q}」`;
-  if (name === 'read_page') return `读取第 ${toInt(args.page) || '?'} 页`;
-  if (name === 'read_scan_page') return `读取扫描页第 ${toInt(args.page) || '?'} 页`;
-  if (name === 'read_page_image') return `加入第 ${toInt(args.page) || '?'} 页原图`;
-  if (name === 'read_memory') return `读取学习记忆：${clip(args.topic, 30)}`;
-  if (name === 'list_papers') return '查看 papers 文件夹';
+  if (name === 'get_reading_state') return tr("查看当前阅读状态");
+  if (name === 'search_paper') return tr("检索「{0}」", q);
+  if (name === 'read_page') return tr("读取第 {0} 页", toInt(args.page) || '?');
+  if (name === 'read_scan_page') return tr("读取扫描页第 {0} 页", toInt(args.page) || '?');
+  if (name === 'read_page_image') return tr("加入第 {0} 页原图", toInt(args.page) || '?');
+  if (name === 'read_memory') return tr("读取学习记忆：{0}", clip(args.topic, 30));
+  if (name === 'list_papers') return tr("查看 papers 文件夹");
   if (name === 'search_papers') {
-    return `检索论文库「${q}」（${args.scope === 'all' ? '全部论文' : '当前文件夹'}）`;
+    return tr("检索论文库「{0}」（{1}）", q, args.scope === 'all' ? tr("全部论文") : tr("当前文件夹"));
   }
   if (name === 'read_other_paper') {
     const paper = clip(args.name, 40);
     const page = toInt(args.page);
-    if (page) return `读取《${paper}》第 ${page} 页`;
-    return `在《${paper}》里检索「${clip(args.query, 40)}」`;
+    if (page) return tr("读取《{0}》第 {1} 页", paper, page);
+    return tr("在《{0}》里检索「{1}」", paper, clip(args.query, 40));
   }
-  if (name === 'read_other_paper_image') return `读取《${clip(args.name, 40)}》第 ${toInt(args.page) || '?'} 页原图`;
-  return name || '调用工具';
+  if (name === 'read_other_paper_image') return tr("读取《{0}》第 {1} 页原图", clip(args.name, 40), toInt(args.page) || '?');
+  return name || tr("调用工具");
 }
 
 /** 某次工具调用「做完了什么」的一句话（给右侧过程列表用；失败时说明原因） */
 export function summarizeToolResult(call, result) {
   const name = String(call?.name || '');
   const args = call?.args || {};
-  if (!result?.ok) return `${toolStepLabel(call)}失败：${clip(result?.error || '未知错误', 120)}`;
+  if (!result?.ok) return tr("{0}失败：{1}", toolStepLabel(call), clip(result?.error || tr("未知错误"), 120));
   const v = result.value || {};
   if (name === 'get_reading_state') {
-    const scans = v.scanned ? '（扫描件）' : '';
-    const pages = Number.isFinite(Number(v.numPages)) ? `共 ${v.numPages} 页` : '页数未知';
-    const cur = Number.isFinite(Number(v.currentPage)) ? `，当前第 ${v.currentPage} 页` : '';
-    return `阅读状态：${pages}${cur}${scans}`;
+    const scans = v.scanned ? tr("（扫描件）") : '';
+    const pages = Number.isFinite(Number(v.numPages)) ? tr("共 {0} 页", v.numPages) : tr("页数未知");
+    const cur = Number.isFinite(Number(v.currentPage)) ? tr("，当前第 {0} 页", v.currentPage) : '';
+    return tr("阅读状态：{0}{1}{2}", pages, cur, scans);
   }
   if (name === 'search_paper') {
     const pages = (Array.isArray(v.pages) ? v.pages : []).map((p) => toInt(p?.page)).filter((p) => p !== null);
-    return pages.length ? `检索「${clip(args.query, 40)}」→ 命中 ${pages.map((p) => `p.${p}`).join('、')}` : `检索「${clip(args.query, 40)}」→ 没有命中`;
+    return pages.length ? tr("检索「{0}」→ 命中 {1}", clip(args.query, 40), pages.map((p) => `p.${p}`).join('、')) : tr("检索「{0}」→ 没有命中", clip(args.query, 40));
   }
   if (name === 'read_scan_page') {
     const page = toInt(v.page) || toInt(args.page) || '?';
-    if (v.duplicate) return `第 ${page} 页原图已经在材料里`;
-    if (v.imageAttached) return `已加入第 ${page} 页原图（直接读图）`;
-    return `已读取扫描页第 ${page} 页`;
+    if (v.duplicate) return tr("第 {0} 页原图已经在材料里", page);
+    if (v.imageAttached) return tr("已加入第 {0} 页原图（直接读图）", page);
+    return tr("已读取扫描页第 {0} 页", page);
   }
   if (name === 'read_page') {
     const page = toInt(v.page) || toInt(args.page) || '?';
-    if (v.duplicate) return `第 ${page} 页原图已经在材料里`;
+    if (v.duplicate) return tr("第 {0} 页原图已经在材料里", page);
     // 扫描件上模型可能先调 read_page：runtime 会自动改取页图，这里如实显示「自动改用页图」
-    if (v.imageAttached) return `已加入第 ${page} 页原图（直接读图，自动改用页图）`;
+    if (v.imageAttached) return tr("已加入第 {0} 页原图（直接读图，自动改用页图）", page);
     const chars = String(v.text || '').length;
-    return `已读取第 ${page} 页（${chars.toLocaleString()} 字）`;
+    return tr("已读取第 {0} 页（{1} 字）", page, chars.toLocaleString());
   }
-  if (name === 'read_page_image') return `已加入第 ${toInt(v.page) || toInt(args.page) || '?'} 页原图`;
+  if (name === 'read_page_image') return tr("已加入第 {0} 页原图", toInt(v.page) || toInt(args.page) || '?');
   if (name === 'read_memory') {
     const hits = Number(v.hits ?? v.items?.length ?? v.entries?.length ?? 0);
-    return `已读取学习记忆（${Number.isFinite(hits) ? hits : 0} 条）`;
+    return tr("已读取学习记忆（{0} 条）", Number.isFinite(hits) ? hits : 0);
   }
   if (name === 'list_papers') {
     const list = Array.isArray(v.papers) ? v.papers : [];
-    return `已列出 papers 文件夹：${v.count ?? list.length} 篇`;
+    return tr("已列出 papers 文件夹：{0} 篇", v.count ?? list.length);
   }
   if (name === 'read_other_paper') {
     const paper = clip(v.name || args.name, 40);
     if (Array.isArray(v.hits)) {
       const pages = v.hits.map((h) => `p.${h.page}`).join('、');
       return v.hits.length
-        ? `在《${paper}》检索「${clip(args.query, 40)}」→ ${pages}`
-        : `在《${paper}》检索「${clip(args.query, 40)}」→ 没有命中`;
+        ? tr("在《{0}》检索「{1}」→ {2}", paper, clip(args.query, 40), pages)
+        : tr("在《{0}》检索「{1}」→ 没有命中", paper, clip(args.query, 40));
     }
-    if (v.scanned) return `《${paper}》第 ${v.page || args.page} 页没有文本层（可改用页图）`;
-    return `已读取《${paper}》第 ${v.page || args.page} 页（${String(v.text || '').length.toLocaleString()} 字，共 ${v.numPages || '?'} 页）`;
+    if (v.scanned) return tr("《{0}》第 {1} 页没有文本层（可改用页图）", paper, v.page || args.page);
+    return tr("已读取《{0}》第 {1} 页（{2} 字，共 {3} 页）", paper, v.page || args.page, String(v.text || '').length.toLocaleString(), v.numPages || '?');
   }
   if (name === 'search_papers') {
     const hits = Array.isArray(v.hits) ? v.hits : [];
-    const label = v.scope === 'all' ? '全部论文' : '当前文件夹';
+    const label = v.scope === 'all' ? tr("全部论文") : tr("当前文件夹");
     return hits.length
-      ? `检索${label}「${clip(args.query, 40)}」→ ${v.count ?? hits.length} 条命中（已扫 ${v.papersScanned ?? '?'}/${v.papersTotal ?? '?'} 篇）`
-      : `检索${label}「${clip(args.query, 40)}」→ ${v.papersScanned ?? 0} 篇里没有命中`;
+      ? tr("检索{0}「{1}」→ {2} 条命中（已扫 {3}/{4} 篇）", label, clip(args.query, 40), v.count ?? hits.length, v.papersScanned ?? '?', v.papersTotal ?? '?')
+      : tr("检索{0}「{1}」→ {2} 篇里没有命中", label, clip(args.query, 40), v.papersScanned ?? 0);
   }
-  if (name === 'read_other_paper_image') return `已识读《${clip(v.name || args.name, 40)}》第 ${v.page || args.page} 页`;
-  return `${toolStepLabel(call)}完成`;
+  if (name === 'read_other_paper_image') return tr("已识读《{0}》第 {1} 页", clip(v.name || args.name, 40), v.page || args.page);
+  return tr("{0}完成", toolStepLabel(call));
 }
 
 /**
@@ -513,7 +514,7 @@ export async function runAgentLoop({
     });
     // 同轮参数已经确定，所有工具都是只读：并行读取，回传仍保持模型原来的顺序。
     const results = await Promise.all(batch.map(async (call) => {
-      if (signal?.aborted) return { ok: false, error: '已停止' };
+      if (signal?.aborted) return { ok: false, error: tr("已停止") };
       emit({ type: 'tool_start', round: rounds, call: { name: call.name, args: call.args } });
       const result = await executeToolCall(call, runtime);
       emit({

@@ -1,3 +1,4 @@
+import { t as tr, intlLocale } from './i18n.js';
 import { windowStorage as localStorage } from './window-storage.js';
 /* 会话系统 P0（2026-11，用户拍板 B：进文件夹默认显示空态选择卡片）
  *
@@ -70,14 +71,14 @@ function relTime(ts) {
   const t = Number(ts) || 0;
   if (!t) return '';
   const min = Math.floor((Date.now() - t) / 60000);
-  if (!Number.isFinite(min) || min < 1) return '刚刚';
-  if (min < 60) return `${min} 分钟前`;
+  if (!Number.isFinite(min) || min < 1) return tr("刚刚");
+  if (min < 60) return tr("{0} 分钟前", min);
   const h = Math.floor(min / 60);
-  if (h < 24) return `${h} 小时前`;
+  if (h < 24) return tr("{0} 小时前", h);
   const d = Math.floor(h / 24);
-  if (d < 7) return `${d} 天前`;
+  if (d < 7) return tr("{0} 天前", d);
   const dt = new Date(t);
-  return `${dt.getMonth() + 1} 月 ${dt.getDate()} 日`;
+  return new Intl.DateTimeFormat(intlLocale, { month: 'short', day: 'numeric' }).format(dt);
 }
 
 function normalizeRows(raw) {
@@ -142,7 +143,7 @@ function isStale(row) {
 /** 生成中守卫：所有会改变会话归属/显示的动作都要先过这一道（修 v3 缺陷③） */
 function guardBusy(label) {
   if (st.busy || st.ctx?.isBusy?.()) {
-    toast(`正在生成中，先等它跑完或点停止再${label}`, 'err', 3200);
+    toast(tr("正在生成中，先等它跑完或点停止再{0}", label), 'err', 3200);
     return false;
   }
   return true;
@@ -244,7 +245,7 @@ async function patchMeta(row, patch) {
     if (st.historyOpen) renderHistoryList();
     return true;
   } catch (e) {
-    toast(`会话更新失败：${e.message}`, 'err', 4200);
+    toast(tr("会话更新失败：{0}", e.message), 'err', 4200);
     return false;
   }
 }
@@ -295,7 +296,7 @@ async function refreshList({ force = false } = {}) {
   } catch (e) {
     if (!st.listLoaded) st.list = [];
     st.listLoaded = true;
-    toast(`会话列表读取失败：${e.message}`, 'err', 4200);
+    toast(tr("会话列表读取失败：{0}", e.message), 'err', 4200);
   } finally {
     st.listLoading = false;
   }
@@ -318,7 +319,7 @@ async function refreshAllList() {
     st.allList = await fetchAllList();
   } catch (e) {
     st.allList = [];
-    toast(`全部会话读取失败：${e.message}`, 'err', 4200);
+    toast(tr("全部会话读取失败：{0}", e.message), 'err', 4200);
   } finally {
     st.allLoading = false;
   }
@@ -335,11 +336,11 @@ function currentRow() {
 }
 
 function headerName() {
-  if (st.entryVisible) return '会话';
+  if (st.entryVisible) return tr("会话");
   const row = currentRow();
   if (row?.title) return row.title;
-  if (st.currentSid) return row?.count ? '（无标题会话）' : '新会话';
-  return '会话';
+  if (st.currentSid) return row?.count ? tr("（无标题会话）") : tr("新会话");
+  return tr("会话");
 }
 
 function renderHeader() {
@@ -349,7 +350,7 @@ function renderHeader() {
   const name = headerName();
   if (label) label.textContent = name;
   if (ui.btn) {
-    ui.btn.title = `${name} · 点击切换会话`;
+    ui.btn.title = tr("{0} · 点击切换会话", name);
     ui.btn.setAttribute('aria-expanded', String(st.quickOpen));
   }
   if (ui.dot) {
@@ -496,21 +497,21 @@ function renderEntryCard(lastRow) {
     ui.entry.replaceChildren(st.ctx.createReadingWelcome('chat'));
     return;
   }
-  const name = lastRow.title || '未命名会话';
+  const name = lastRow.title || tr("未命名会话");
   ui.entry.replaceChildren(
     el('div', { class: 'entry-heading' },
-      el('h3', { class: 'entry-title', text: '接着上次聊' }),
-      el('button', { type: 'button', class: 'entry-link', text: '全部会话', onclick: openHistory })),
-    el('button', { type: 'button', class: 'entry-primary', title: `继续「${name}」`, onclick: () => chooseSession(lastRow.sid) },
+      el('h3', { class: 'entry-title', text: tr("接着上次聊") }),
+      el('button', { type: 'button', class: 'entry-link', text: tr("全部会话"), onclick: openHistory })),
+    el('button', { type: 'button', class: 'entry-primary', title: tr("继续「{0}」", name), onclick: () => chooseSession(lastRow.sid) },
       el('span', { class: 'entry-primary-main', text: name }),
-      el('span', { class: 'entry-primary-meta', text: `${lastRow.count} 条消息 · ${relTime(lastRow.updatedAt)}` }),
-      el('span', { class: 'entry-continue', text: '继续对话 →' })),
-    el('button', { type: 'button', class: 'entry-new', text: '新建会话', onclick: doNewSession }),
+      el('span', { class: 'entry-primary-meta', text: tr("{0} 条消息 · {1}", lastRow.count, relTime(lastRow.updatedAt)) }),
+      el('span', { class: 'entry-continue', text: tr("继续对话 →") })),
+    el('button', { type: 'button', class: 'entry-new', text: tr("新建会话"), onclick: doNewSession }),
   );
 }
 
 async function chooseSession(sidOrRow, docIdHint = '') {
-  if (!guardBusy('切换会话')) return;
+  if (!guardBusy(tr("切换会话"))) return;
   // 历史面板的新排列会列出别的文件夹/别的论文的会话：拿到整行才能切文件夹、打开对应论文。
   // docIdHint：按文件排列时用户点的是哪篇论文分组 —— 优先在原论文打开会话，别乱跳。
   const row = typeof sidOrRow === 'string'
@@ -526,7 +527,7 @@ async function chooseSession(sidOrRow, docIdHint = '') {
 }
 
 async function doNewSession() {
-  if (!guardBusy('新建会话')) return;
+  if (!guardBusy(tr("新建会话"))) return;
   const wasEntry = st.entryVisible;
   closeQuick();
   closeHistory();
@@ -542,22 +543,22 @@ function buildQuick() {
   const search = el('input', {
     type: 'search',
     class: 'sess-quick-search',
-    placeholder: '搜索会话标题…',
-    'aria-label': '搜索会话',
+    placeholder: tr("搜索会话标题…"),
+    'aria-label': tr("搜索会话"),
     oninput: (e) => { st.quickQuery = e.target.value; renderQuickList(); },
   });
   quick.replaceChildren(
     el('div', { class: 'sess-quick-head' },
-      el('span', { class: 'sess-quick-title', text: '切换会话' }),
-      el('span', { class: 'sess-quick-hint', text: scopeMode() === 'global' ? '全部论文' : scopeMode() === 'paper' ? '当前论文' : '当前文件夹' })),
+      el('span', { class: 'sess-quick-title', text: tr("切换会话") }),
+      el('span', { class: 'sess-quick-hint', text: scopeMode() === 'global' ? tr("全部论文") : scopeMode() === 'paper' ? tr("当前论文") : tr("当前文件夹") })),
     search,
     el('div', { class: 'sess-quick-list', id: 'sessQuickList' }),
     el('div', { class: 'sess-quick-foot' },
       el('button', {
-        type: 'button', class: 'sess-quick-all', text: '查看全部会话',
+        type: 'button', class: 'sess-quick-all', text: tr("查看全部会话"),
         onclick: () => { closeQuick(); openHistory(); },
       }),
-      el('button', { type: 'button', class: 'sess-quick-new', text: '＋ 新建会话', onclick: doNewSession })),
+      el('button', { type: 'button', class: 'sess-quick-new', text: tr("＋ 新建会话"), onclick: doNewSession })),
   );
 }
 
@@ -592,17 +593,17 @@ function renderQuickList() {
     .filter((r) => !q || (r.title || '').toLowerCase().includes(q) || (r.preview || '').toLowerCase().includes(q))
     .slice(0, 6);
   if (!actives.length) {
-    box.replaceChildren(el('div', { class: 'sess-empty', text: q ? '没有匹配的会话' : '还没有会话' }));
+    box.replaceChildren(el('div', { class: 'sess-empty', text: q ? tr("没有匹配的会话") : tr("还没有会话") }));
     return;
   }
   box.replaceChildren(...actives.map((r) => el('button', {
     type: 'button',
     class: `sess-quick-row${!!st.currentSid && r.sid === st.currentSid ? ' on' : ''}`,
-    title: r.title || '（无标题会话）',
+    title: r.title || tr("（无标题会话）"),
     onclick: () => chooseSession(r.sid),
   },
-  el('span', { class: 'sess-quick-name', text: r.title || (r.count ? '（无标题会话）' : '新会话') }),
-  el('span', { class: 'sess-quick-meta', text: [r.pinned ? '置顶' : '', r.count ? `${r.count} 条` : '', relTime(r.updatedAt)].filter(Boolean).join(' · ') }))));
+  el('span', { class: 'sess-quick-name', text: r.title || (r.count ? tr("（无标题会话）") : tr("新会话")) }),
+  el('span', { class: 'sess-quick-meta', text: [r.pinned ? tr("置顶") : '', r.count ? tr("{0} 条", r.count) : '', relTime(r.updatedAt)].filter(Boolean).join(' · ') }))));
 }
 
 /* ───────────────────────────── 历史面板 ───────────────────────────── */
@@ -633,26 +634,26 @@ function buildHistory() {
   const search = el('input', {
     type: 'search',
     class: 'sess-hist-search',
-    placeholder: '搜索会话标题、预览或论文名…',
-    'aria-label': '搜索会话',
+    placeholder: tr("搜索会话标题、预览或论文名…"),
+    'aria-label': tr("搜索会话"),
     oninput: (e) => { st.histQuery = e.target.value; renderHistoryList(); },
   });
   box.replaceChildren(
     el('div', { class: 'sess-hist-head' },
-      sessButton('back', '返回对话', 'sess-hist-back', closeHistory),
-      el('div', { class: 'sess-hist-title', text: '会话历史' }),
-      el('button', { type: 'button', class: 'sess-hist-new', text: '＋ 新建', onclick: doNewSession })),
+      sessButton('back', tr("返回对话"), 'sess-hist-back', closeHistory),
+      el('div', { class: 'sess-hist-title', text: tr("会话历史") }),
+      el('button', { type: 'button', class: 'sess-hist-new', text: tr("＋ 新建"), onclick: doNewSession })),
     el('div', { class: 'sess-hist-searchrow' }, search),
     el('div', { class: 'sess-hist-arrange', id: 'sessHistArrange' },
-      el('div', { class: 'sess-arrange-chips', role: 'group', 'aria-label': '会话排列方式' },
-        arrangeChip('file', '按文件', 'doc', '同一篇论文的会话归在一起：问过它的每个会话都在该论文下显示一次'),
-        arrangeChip('time', '按时间', 'clock', '全部会话按时间排列，并标出按顺序问过哪些论文')),
+      el('div', { class: 'sess-arrange-chips', role: 'group', 'aria-label': tr("会话排列方式") },
+        arrangeChip('file', tr("按文件"), 'doc', tr("同一篇论文的会话归在一起：问过它的每个会话都在该论文下显示一次")),
+        arrangeChip('time', tr("按时间"), 'clock', tr("全部会话按时间排列，并标出按顺序问过哪些论文"))),
       el('span', { class: 'sess-hist-summary', id: 'sessHistSummary' })),
     el('div', { class: 'sess-hist-list', id: 'sessHistList' }),
     el('div', { class: 'sess-hist-foot' },
       el('button', { type: 'button', class: 'sess-foot-btn', id: 'sessHistMemory', onclick: () => st.ctx.togglePaperMemory?.() }),
-      el('button', { type: 'button', class: 'sess-foot-btn', text: '会话设置', title: '会话归属、进入方式与标题策略', onclick: () => st.ctx.openSessionSettings?.() }),
-      el('button', { type: 'button', class: 'sess-foot-btn', text: '清空当前会话', onclick: clearCurrent })),
+      el('button', { type: 'button', class: 'sess-foot-btn', text: tr("会话设置"), title: tr("会话归属、进入方式与标题策略"), onclick: () => st.ctx.openSessionSettings?.() }),
+      el('button', { type: 'button', class: 'sess-foot-btn', text: tr("清空当前会话"), onclick: clearCurrent })),
   );
   renderHistoryList();
   renderMemoryBtn();
@@ -662,9 +663,9 @@ function renderMemoryBtn() {
   const btn = st.ui?.history?.querySelector('#sessHistMemory');
   if (!btn) return;
   const off = !!st.ctx?.paperMemoryOff?.();
-  btn.textContent = off ? '论文记忆：关' : '论文记忆：开';
+  btn.textContent = off ? tr("论文记忆：关") : tr("论文记忆：开");
   btn.setAttribute('aria-pressed', String(!off));
-  btn.title = '新会话是否参考这篇论文之前会话的摘要；不影响各会话自己的历史';
+  btn.title = tr("新会话是否参考这篇论文之前会话的摘要；不影响各会话自己的历史");
 }
 
 async function openHistory() {
@@ -822,7 +823,7 @@ function docLabel(row, id, index) {
   if (hit?.name) return hit.name;
   const i = (row.docIds || []).map(String).indexOf(id);
   const title = i >= 0 ? String((row.docTitles || [])[i] || '') : '';
-  return title || '未知论文';
+  return title || tr("未知论文");
 }
 
 /** 按论文分组；同一会话在它问过的每篇论文下各出现一次（文件内按 sid 去重）。
@@ -830,7 +831,7 @@ function docLabel(row, id, index) {
 function fileGroups(rows) {
   const index = docNameIndex(rows);
   const groups = new Map();
-  const misc = { id: '', name: '未关联论文', folder: '', rows: [], latest: 0 };
+  const misc = { id: '', name: tr("未关联论文"), folder: '', rows: [], latest: 0 };
   for (const r of rows) {
     const ids = Array.from(new Set((r.docIds || []).map(String).filter(Boolean)));
     if (!ids.length) {
@@ -897,10 +898,10 @@ function renderHistoryList() {
   const globalScope = scopeMode() === 'global';
   const summary = st.ui?.history?.querySelector('#sessHistSummary');
   if (summary) {
-    summary.textContent = rows.length ? `${rows.length} 个会话` : '';
+    summary.textContent = rows.length ? tr("{0} 个会话", rows.length) : '';
   }
   if (st.allLoading && !st.allList.length) {
-    box.replaceChildren(el('div', { class: 'sess-empty', text: '正在读取全部会话…' }));
+    box.replaceChildren(el('div', { class: 'sess-empty', text: tr("正在读取全部会话…") }));
     return;
   }
   const active = rows.filter((r) => !r.archived);
@@ -916,14 +917,14 @@ function renderHistoryList() {
       // 全局共用：所有会话都属于同一段跨论文对话，只分一组，论文顺序用 trail 标出
       const gids = Array.from(new Set(active.flatMap((r) => (r.docIds || []).map(String).filter(Boolean))));
       const gindex = docNameIndex(active);
-      const gnames = gids.map((id) => gindex.get(id)?.name || '未知论文');
+      const gnames = gids.map((id) => gindex.get(id)?.name || tr("未知论文"));
       const subText = gnames.length
-        ? `所有论文共用一段对话 · 读过 ${gnames.length} 篇：${gnames.slice(0, 3).join('、')}${gnames.length > 3 ? ' 等' : ''}`
-        : '所有论文共用一段对话';
+        ? tr("所有论文共用一段对话 · 读过 {0} 篇：{1}{2}", gnames.length, gnames.slice(0, 3).join('、'), gnames.length > 3 ? tr(" 等") : '')
+        : tr("所有论文共用一段对话");
       nodes.push(el('div', { class: 'sess-fileblock' },
         el('div', { class: 'sess-filegroup' },
           el('span', { class: 'sess-filegroup-ic', html: ICONS.doc }),
-          el('span', { class: 'sess-filegroup-name', text: '共用会话' }),
+          el('span', { class: 'sess-filegroup-name', text: tr("共用会话") }),
           el('span', { class: 'sess-filegroup-count', text: String(active.length) })),
         el('div', { class: 'sess-filegroup-sub', text: subText, title: gnames.join(' → ') })));
       const rowsBox = el('div', { class: 'sess-fileblock-rows' });
@@ -947,13 +948,13 @@ function renderHistoryList() {
   } else {
     const pinned = active.filter((r) => r.pinned).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
     if (pinned.length) {
-      nodes.push(groupHead('置顶', pinned.length));
+      nodes.push(groupHead(tr("置顶"), pinned.length));
       nodes.push(...pinned.map((r) => historyRow(r, { trail: true, renameShown, currentShown })));
     }
     const rest = active.filter((r) => !r.pinned);
     const buckets = [[], [], [], []];
     for (const r of rest) buckets[bucketOf(r.updatedAt)].push(r);
-    const labels = ['今天', '昨天', '最近 7 天', '更早'];
+    const labels = [tr("今天"), tr("昨天"), tr("最近 7 天"), tr("更早")];
     for (let i = 0; i < buckets.length; i++) {
       if (!buckets[i].length) continue;
       nodes.push(groupHead(labels[i], buckets[i].length));
@@ -961,7 +962,7 @@ function renderHistoryList() {
     }
   }
   if (archived.length) {
-    nodes.push(groupHead(`${st.showArchived ? '▾' : '▸'} 已归档`, archived.length, {
+    nodes.push(groupHead(tr("{0} 已归档", st.showArchived ? '▾' : '▸'), archived.length, {
       button: true,
       onclick: () => { st.showArchived = !st.showArchived; renderHistoryList(); },
     }));
@@ -973,10 +974,10 @@ function renderHistoryList() {
     nodes.push(el('div', {
       class: 'sess-empty',
       text: st.histQuery.trim()
-        ? '没有匹配的会话'
+        ? tr("没有匹配的会话")
         : st.histMode === 'file'
-          ? '还没有带论文记录的会话；发出第一条消息后会归到对应论文下。'
-          : '还没有会话',
+          ? tr("还没有带论文记录的会话；发出第一条消息后会归到对应论文下。")
+          : tr("还没有会话"),
     }));
   }
   box.replaceChildren(...nodes);
@@ -991,14 +992,14 @@ function historyTrail(row) {
   const index = docNameIndex([row]);
   const names = ids.map((id) => docLabel(row, id, index));
   const MAX = 3;
-  const chips = [el('span', { class: 'sess-htrail-label', text: '读过' })];
+  const chips = [el('span', { class: 'sess-htrail-label', text: tr("读过") })];
   names.slice(0, MAX).forEach((name, i) => {
-    chips.push(el('span', { class: 'sess-htrail-doc', title: `第 ${i + 1} 篇：${name}` },
+    chips.push(el('span', { class: 'sess-htrail-doc', title: tr("第 {0} 篇：{1}", i + 1, name) },
       el('span', { class: 'sess-htrail-n', text: String(i + 1) }),
       el('span', { class: 'sess-htrail-name', text: name })));
   });
   if (names.length > MAX) chips.push(el('span', { class: 'sess-htrail-more', text: `+${names.length - MAX}` }));
-  return el('span', { class: 'sess-htrail', title: `按提问顺序：${names.join(' → ')}` }, ...chips);
+  return el('span', { class: 'sess-htrail', title: tr("按提问顺序：{0}", names.join(' → ')) }, ...chips);
 }
 
 function historyRow(row, { trail = false, group = null, renameShown = null, currentShown = null } = {}) {
@@ -1018,10 +1019,10 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
     && !(currentShown && currentShown.has(row.sid));
   const on = canMarkCurrent;
   if (on && currentShown) currentShown.add(row.sid);
-  const title = row.title || (row.count ? '（无标题会话）' : '新会话');
+  const title = row.title || (row.count ? tr("（无标题会话）") : tr("新会话"));
   const docCount = Array.from(new Set((row.docIds || []).map(String).filter(Boolean))).length;
   const metaParts = [
-    row.count ? `${row.count} 条` : '空会话',
+    row.count ? tr("{0} 条", row.count) : tr("空会话"),
     relTime(row.updatedAt),
   ];
   if (st.histMode === 'time') {
@@ -1032,8 +1033,8 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
   const meta = metaParts.filter(Boolean).join(' · ');
 
   const badges = [];
-  if (on) badges.push(el('span', { class: 'sess-badge on', text: '当前' }));
-  if (st.histMode === 'time' && row.pinned) badges.push(el('span', { class: 'sess-badge', text: '置顶' }));
+  if (on) badges.push(el('span', { class: 'sess-badge on', text: tr("当前") }));
+  if (st.histMode === 'time' && row.pinned) badges.push(el('span', { class: 'sess-badge', text: tr("置顶") }));
 
   const wrap = el('div', { class: `sess-hrow${on ? ' on' : ''}${row.archived ? ' archived' : ''}`, dataset: { sid: row.sid } });
 
@@ -1074,10 +1075,10 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
     el('span', { class: 'sess-hmeta', text: meta }),
     trailEl),
     el('span', { class: 'sess-hacts' },
-      sessButton('pin', row.pinned ? '取消置顶' : '置顶', `sess-hact pin${row.pinned ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { pinned: !row.pinned }); }),
-      sessButton('archive', row.archived ? '取消归档' : '归档', `sess-hact archive${row.archived ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { archived: !row.archived }); }),
-      sessButton('rename', '重命名（F2）', 'sess-hact rename', (e) => { e.stopPropagation(); startRename(row.sid); }),
-      sessButton('trash', '删除会话', 'sess-hact danger', (e) => { e.stopPropagation(); confirmDeleteRow(row); }),
+      sessButton('pin', row.pinned ? tr("取消置顶") : tr("置顶"), `sess-hact pin${row.pinned ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { pinned: !row.pinned }); }),
+      sessButton('archive', row.archived ? tr("取消归档") : tr("归档"), `sess-hact archive${row.archived ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { archived: !row.archived }); }),
+      sessButton('rename', tr("重命名（F2）"), 'sess-hact rename', (e) => { e.stopPropagation(); startRename(row.sid); }),
+      sessButton('trash', tr("删除会话"), 'sess-hact danger', (e) => { e.stopPropagation(); confirmDeleteRow(row); }),
     ),
   );
   return wrap;
@@ -1089,12 +1090,12 @@ function startRename(sid) {
 }
 
 async function confirmDeleteRow(row) {
-  if (!guardBusy('删除会话')) return;
-  const title = row.title || (row.count ? '（无标题会话）' : '新会话');
+  if (!guardBusy(tr("删除会话"))) return;
+  const title = row.title || (row.count ? tr("（无标题会话）") : tr("新会话"));
   const ok = await sessionsConfirm({
-    title: '删除这个会话？',
-    body: `「${title}」的对话和 AI 功能记录会被删除；论文、笔记、译文都不受影响，删除后不可恢复。`,
-    okText: '删除会话',
+    title: tr("删除这个会话？"),
+    body: tr("「{0}」的对话和 AI 功能记录会被删除；论文、笔记、译文都不受影响，删除后不可恢复。", title),
+    okText: tr("删除会话"),
     danger: true,
   });
   if (!ok) return;
@@ -1117,16 +1118,16 @@ async function confirmDeleteRow(row) {
     renderMemoryBtn();
     renderHeader();
   } catch (e) {
-    toast(`删除失败：${e.message}`, 'err', 4200);
+    toast(tr("删除失败：{0}", e.message), 'err', 4200);
   }
 }
 
 async function clearCurrent() {
-  if (!guardBusy('清空会话')) return;
+  if (!guardBusy(tr("清空会话"))) return;
   const ok = await sessionsConfirm({
-    title: '清空当前会话？',
-    body: '当前会话里的问答和 AI 功能记录会清空（会话本身保留）；译文不属于会话，不会被清空。',
-    okText: '清空',
+    title: tr("清空当前会话？"),
+    body: tr("当前会话里的问答和 AI 功能记录会清空（会话本身保留）；译文不属于会话，不会被清空。"),
+    okText: tr("清空"),
     danger: true,
   });
   if (!ok) return;
@@ -1143,8 +1144,8 @@ function ensureConfirm() {
   const mask = el('div', { class: 'sess-confirm-mask hidden', role: 'dialog', 'aria-modal': 'true' });
   const title = el('div', { class: 'sess-confirm-title' });
   const body = el('div', { class: 'sess-confirm-body' });
-  const ok = el('button', { type: 'button', class: 'sess-confirm-btn danger', text: '确定' });
-  const cancel = el('button', { type: 'button', class: 'sess-confirm-btn ghost', text: '取消' });
+  const ok = el('button', { type: 'button', class: 'sess-confirm-btn danger', text: tr("确定") });
+  const cancel = el('button', { type: 'button', class: 'sess-confirm-btn ghost', text: tr("取消") });
   ok.addEventListener('click', () => resolveConfirm(true));
   cancel.addEventListener('click', () => resolveConfirm(false));
   mask.addEventListener('click', (e) => { if (e.target === mask) resolveConfirm(false); });
@@ -1168,7 +1169,7 @@ function resolveConfirm(ok) {
   if (fn) fn(!!ok);
 }
 
-function sessionsConfirm({ title = '确认', body = '', okText = '确定', cancelText = '取消', danger = false } = {}) {
+function sessionsConfirm({ title = tr("确认"), body = '', okText = tr("确定"), cancelText = tr("取消"), danger = false } = {}) {
   ensureConfirm();
   st.ui.confirmTitle.textContent = title;
   st.ui.confirmBody.textContent = body;
@@ -1214,7 +1215,7 @@ export async function sessionsMigrateFolder(fromPath, toPath) {
       await sessionsOnFolderRenamed();
     }
   } catch (e) {
-    toast(`会话迁移失败：${e.message}（旧文件夹下的会话文件已保留）`, 'err', 5200);
+    toast(tr("会话迁移失败：{0}（旧文件夹下的会话文件已保留）", e.message), 'err', 5200);
   }
 }
 
@@ -1294,7 +1295,7 @@ export function initSessions(ctx) {
     class: 'entry-card hidden',
     id: 'sessEntryCard',
     dataset: { show: '0' },
-    'aria-label': '选择进入哪个会话',
+    'aria-label': tr("选择进入哪个会话"),
   });
 
   buildQuick();

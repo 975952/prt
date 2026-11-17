@@ -2,6 +2,8 @@
 
 [返回项目首页](../README.md)
 
+[English home](../README.en.md) · [English quick start](quick-start.en.md) · [Language implementation](internationalization.md)
+
 ## 使用 prt
 
 | 文档 | 你可以找到 |

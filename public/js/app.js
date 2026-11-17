@@ -1,3 +1,4 @@
+import { t as tr, locale, localizeStaticDocument, LOCALE_KEY, RESPONSE_LANGUAGE_KEY, storedLocale, responseLanguage } from './i18n.js';
 import { windowStorage as localStorage, storageKey, windowId, startWindows, finishWindowBoot, windowReady, openReaderWindow, canWrite, allowEdit, isWindowClosed, releaseDocument, notifySessionSaved } from './windows.js';
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
@@ -11,7 +12,7 @@ import { OPS, opById } from './ops.js';
 import {
   TEACHING_OPS, teachingOpById, TEACHING_PROMPT_VERSION, PROMPT_SYSTEM_VERSION, WALK_CONTINUE_SYS, walkReteachSys,
   PREREQ_ONE_SYS, splitPrtBlock, hideStreamTail, parsePrereqItems, detectPageObjects,
-  pageTextOf, collectDocObjects, sanitiseChips,
+  pageTextOf, collectDocObjects, sanitiseChips, clipChipLabel,
 } from './teaching.js';
 import { profileStore, buildProfileBlock, nowISO, nowContext, findItem, selectProfileItems } from './profile.js';
 import { createLearningMemory, parseMemorySuggestions, explicitIdentityFacts, withMemoryObservations } from './learning-memory.js';
@@ -58,8 +59,8 @@ function nextFrame(ms = 120) {
 
 /** AI 区的分块定义。默认一个都不显示，用到哪块就自动出现，也可以手动增删。 */
 const AI_BLOCKS = [
-  { id: 'translate', title: '译文', hint: '翻译选文、粘贴的文字或截图' },
-  { id: 'chat', title: '问答', hint: '围绕论文提问，或选中一段文字深入讨论' },
+  { id: 'translate', title: tr("译文"), hint: tr("翻译选文、粘贴的文字或截图") },
+  { id: 'chat', title: tr("问答"), hint: tr("围绕论文提问，或选中一段文字深入讨论") },
 ];
 
 
@@ -129,16 +130,16 @@ function parkRightPanel(id, target) {
 
 /** 六个面板的固定 id 与默认值：左栏文件/目录/笔记/参考文献，右栏译文/问答 */
 const PANEL_DEFS = [
-  { id: 'files', title: '文件', dock: 'left' },
-  { id: 'outline', title: '目录', dock: 'left', visible: false },
-  { id: 'notes', title: '笔记', dock: 'left', visible: false },
+  { id: 'files', title: tr("文件"), dock: 'left' },
+  { id: 'outline', title: tr("目录"), dock: 'left', visible: false },
+  { id: 'notes', title: tr("笔记"), dock: 'left', visible: false },
   // 参考文献同理：默认只留图标入口；列表按需解析
   //（见 ensureRelationsBuilt），打开论文时不再后台跑全文引用抽取。
   // 老用户保存过 reader.panels 的展开状态仍按存档恢复（见 readPanelDescriptor），
   // 但会被 normalizeLeftPanels() 收敛成「只有一块可见」。
-  { id: 'relations', title: '参考文献', dock: 'left', visible: false, collapsed: true },
-  { id: 'translate', title: '译文', dock: 'right', visible: false },
-  { id: 'chat', title: '问答', dock: 'right', visible: false },
+  { id: 'relations', title: tr("参考文献"), dock: 'left', visible: false, collapsed: true },
+  { id: 'translate', title: tr("译文"), dock: 'right', visible: false },
+  { id: 'chat', title: tr("问答"), dock: 'right', visible: false },
 ];
 const PANEL_IDS = PANEL_DEFS.map((d) => d.id);
 /** 右栏面板 id（顺序与旧 AI_BLOCKS 一致，兼容老 reader.ai 的 order 数组） */
@@ -561,7 +562,7 @@ function bindPanelHead(id, head) {
       e.preventDefault();
       e.stopPropagation();
       setPanelVisible(id, false);
-      toast(`已隐藏「${panelTitle(id)}」`, '', 1600);
+      toast(tr("已隐藏「{0}」", panelTitle(id)), '', 1600);
     }
   });
 }
@@ -582,7 +583,7 @@ function panelIcon(iconId, title, onclick, extra) {
 function panelActions(id) {
   const title = panelTitle(id);
   return el('div', { class: 'panel-actions' },
-    panelIcon('close', `隐藏「${title}」`, () => setPanelVisible(id, false), 'panel-hide'),
+    panelIcon('close', tr("隐藏「{0}」", title), () => setPanelVisible(id, false), 'panel-hide'),
   );
 }
 
@@ -788,6 +789,7 @@ let serverState = {};
 
 
 (async function boot() {
+  localizeStaticDocument();
   await Settings.load();
   // 清理 R1 以前可能留下的持久化偏好；「整篇」不再跨论文 / 跨会话记忆。
   try { localStorage.removeItem('reader.fullText'); } catch { /* ignore */ }
@@ -823,7 +825,7 @@ let serverState = {};
     } : {},
     save: async () => {
       if (!state.doc) return;
-      if (state.busy) throw new Error('请先停止生成，再打开新窗口');
+      if (state.busy) throw new Error(tr("请先停止生成，再打开新窗口"));
       persistSession.cancel?.();
       if (sessionSaveInFlight) await sessionSaveInFlight;
       await saveSessionNow();
@@ -838,7 +840,7 @@ let serverState = {};
       await saveProgressNow({ silent: true });
       tabsPersist();
       try { await flushComposerDrafts(); }
-      catch { throw new Error('草稿尚未保存，请稍后重试关闭窗口。'); }
+      catch { throw new Error(tr("草稿尚未保存，请稍后重试关闭窗口。")); }
     },
   });
   initWindowChrome();     // 应用内标题栏：窗口按钮 / 拖动 / 八向缩放（无 IPC 时整块隐藏）
@@ -881,6 +883,20 @@ let serverState = {};
   else await maybeReopenLast();
   finishWindowBoot();
   checkConfigWarning();
+  if (sessionStorage.getItem('reader.reopenLanguageSettings')) {
+    const resume = JSON.parse(sessionStorage.getItem('reader.languageResume') || 'null');
+    sessionStorage.removeItem('reader.languageResume');
+    if (resume?.docId === state.doc?.docId) {
+      if (!resume.entryMode) {
+        sessionsHideEntryCard();
+        await switchSession(resume.sid, { force: true });
+      }
+      if (resume.page) viewer.goToPage(resume.page);
+    }
+    sessionStorage.removeItem('reader.reopenLanguageSettings');
+    await openSettings();
+    showSettingsPane('language');
+  }
 })();
 
 
@@ -1239,7 +1255,7 @@ function syncSideToggleButtons() {
     const btn = document.getElementById(side === 'left' ? 'topbarLeftToggle' : 'topbarRightToggle');
     if (!btn) continue;
     const collapsed = document.body.classList.contains(`no-${side}`);
-    const label = collapsed ? `展开${side === 'left' ? '左' : '右'}栏` : `收起${side === 'left' ? '左' : '右'}栏`;
+    const label = collapsed ? tr("展开{0}栏", side === 'left' ? tr("左") : tr("右")) : tr("收起{0}栏", side === 'left' ? tr("左") : tr("右"));
     const icon = collapsed
       ? (side === 'left' ? 'panel-expand-left' : 'panel-expand-right')
       : (side === 'left' ? 'panel-collapse-left' : 'panel-collapse-right');
@@ -1389,8 +1405,8 @@ function applyFullscreenUi(on) {
   if (!btn) return;
   btn.classList.toggle('on', active);
   btn.setAttribute('aria-pressed', active ? 'true' : 'false');
-  btn.setAttribute('aria-label', active ? '退出全屏' : '进入全屏');
-  btn.title = active ? '退出全屏（Esc）' : '全屏　F11';
+  btn.setAttribute('aria-label', active ? tr("退出全屏") : tr("进入全屏"));
+  btn.title = active ? tr("退出全屏（Esc）") : tr("全屏　F11");
 }
 
 async function toggleFullscreen(force) {
@@ -1402,14 +1418,14 @@ async function toggleFullscreen(force) {
         await document.documentElement.requestFullscreen();
       }
       applyFullscreenUi(true);
-      flashHint('已进入全屏 · 按 Esc 退出');
+      flashHint(tr("已进入全屏 · 按 Esc 退出"));
     } else {
       if (document.fullscreenElement && document.exitFullscreen) await document.exitFullscreen();
       applyFullscreenUi(false);
     }
   } catch {
     // 浏览器拒绝（比如没有用户手势）不假装成功
-    flashHint('当前窗口不允许全屏');
+    flashHint(tr("当前窗口不允许全屏"));
   }
 }
 
@@ -1550,7 +1566,7 @@ function ensurePanel(id, def) {
   // 其它面板保留原来的标题栏行为，避免误触改变文件/目录/笔记的布局。
   if (id === 'relations' && head && !head.dataset.relationClickBound) {
     head.dataset.relationClickBound = '1';
-    head.title = '点击展开或收起参考文献';
+    head.title = tr("点击展开或收起参考文献");
     head.addEventListener('click', (e) => {
       if (e.target?.closest?.('button, input, select, a')) return;
       togglePanelCollapsed(id);
@@ -1835,7 +1851,7 @@ function initViewer() {
       const busy = done < total;
       $('#pageInput')?.classList.toggle('busy', busy);
       const box = $('#pageInput');
-      if (box) box.title = busy ? `正在解析 ${done}/${total} 页…` : '';
+      if (box) box.title = busy ? tr("正在解析 {0}/{1} 页…", done, total) : '';
     },
     onScale: (scale) => syncZoom(scale),
     /* 双指缩放速度：开局就把存档里的值交给 viewer（触摸屏捏合的跟手倍率），
@@ -2028,8 +2044,8 @@ function refreshReturnButton() {
   const stack = state.doc ? state.jumpHistory.get(state.doc.docId) || [] : [];
   button.classList.toggle('hidden', !viewer?.pdf || state.viewerDocId !== state.doc?.docId || !stack.length);
   button.title = stack.length > 1
-    ? `逐步返回之前的 ${stack.length} 个阅读位置`
-    : '返回跳转前的阅读位置';
+    ? tr("逐步返回之前的 {0} 个阅读位置", stack.length)
+    : tr("返回跳转前的阅读位置");
 }
 
 function recordReaderJump() {
@@ -2093,8 +2109,8 @@ function syncTwoUpButton() {
   const on = !!uiStyle.twoUp;
   btn.classList.toggle('on', on);
   btn.setAttribute('aria-pressed', String(on));
-  btn.setAttribute('aria-label', on ? '切换为单页显示' : '双页显示');
-  btn.title = on ? '切换为单页显示' : '双页显示（两页并排）';
+  btn.setAttribute('aria-label', on ? tr("切换为单页显示") : tr("双页显示"));
+  btn.title = on ? tr("切换为单页显示") : tr("双页显示（两页并排）");
 }
 
 
@@ -2118,7 +2134,7 @@ const saveProgress = debounce(async () => {
     });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
   } catch (e) {
-    toastAction('阅读进度保存失败，当前进度仍在内存中。', '重试', () => saveProgressNow(), 'err', 10000);
+    toastAction(tr("阅读进度保存失败，当前进度仍在内存中。"), tr("重试"), () => saveProgressNow(), 'err', 10000);
   }
 }, 500);
 
@@ -2130,7 +2146,7 @@ async function saveProgressNow({ silent = false } = {}) {
   const r = await fetch('/api/state', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
   if (!r.ok) throw new Error(`HTTP ${r.status}`);
   serverState = payload;
-  if (!silent) toast('阅读进度已保存', 'ok');
+  if (!silent) toast(tr("阅读进度已保存"), 'ok');
 }
 
 function setView(view) {
@@ -2159,13 +2175,13 @@ function syncFootEnabled(on) {
 /** 相对时间：首页每行只给「刚看过 / N 分钟前 / N 小时前 / N 天前」 */
 function relTime(ts) {
   const ms = Date.now() - (Number(ts) || 0);
-  if (!Number.isFinite(ms) || ms < 0) return '刚看过';
+  if (!Number.isFinite(ms) || ms < 0) return tr("刚看过");
   const min = Math.floor(ms / 60000);
-  if (min < 1) return '刚看过';
-  if (min < 60) return `${min} 分钟前`;
+  if (min < 1) return tr("刚看过");
+  if (min < 60) return tr("{0} 分钟前", min);
   const hour = Math.floor(min / 60);
-  if (hour < 24) return `${hour} 小时前`;
-  return `${Math.floor(hour / 24)} 天前`;
+  if (hour < 24) return tr("{0} 小时前", hour);
+  return tr("{0} 天前", Math.floor(hour / 24));
 }
 
 /**
@@ -2195,7 +2211,7 @@ function recentDocs() {
 
 /** 移除一条阅读记录（只删记录，**不删 papers/ 里的文件**） */
 async function removeRecent(docId) {
-  const file = (serverState.docs || {})[docId]?.name || '这条记录';
+  const file = (serverState.docs || {})[docId]?.name || tr("这条记录");
   try {
     const r = await fetch(`/api/state?doc=${encodeURIComponent(docId)}`, { method: 'DELETE' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
@@ -2206,9 +2222,9 @@ async function removeRecent(docId) {
       serverState = { ...serverState, lastDoc: null, lastUrl: null, lastName: null };
     }
     renderHome();
-    toast(`已移除「${file}」的最近记录（文件还在 papers/）`, 'ok', 2600);
+    toast(tr("已移除「{0}」的最近记录（文件还在 papers/）", file), 'ok', 2600);
   } catch (e) {
-    toast(`移除失败：${e.message}`, 'err', 4000);
+    toast(tr("移除失败：{0}", e.message), 'err', 4000);
   }
 }
 
@@ -2228,12 +2244,12 @@ function renderHome() {
   contWrap.replaceChildren();
   const last = rows.find((r) => r.docId === serverState.lastDoc) || rows[0];
   if (last) {
-    const go = el('button', { type: 'button', class: 'home-continue', 'aria-label': `继续阅读「${last.name}」，从第 ${last.page} 页开始` },
+    const go = el('button', { type: 'button', class: 'home-continue', 'aria-label': tr("继续阅读「{0}」，从第 {1} 页开始", last.name, last.page) },
       el('span', { class: 'hc-main' },
-        el('span', { class: 'hc-label', text: '继续阅读' }),
+        el('span', { class: 'hc-label', text: tr("继续阅读") }),
         el('span', { class: 'hc-name', text: last.name.replace(/\.pdf$/i, ''), title: last.name }),
-        el('span', { class: 'hc-meta', text: `第 ${last.page} 页 · ${relTime(last.ts)}` })),
-      el('span', { class: 'hc-go' }, '继续 →'));
+        el('span', { class: 'hc-meta', text: tr("第 {0} 页 · {1}", last.page, relTime(last.ts)) })),
+      el('span', { class: 'hc-go' }, tr("继续 →")));
     go.onclick = () => openDoc({ name: last.name, url: last.url, docId: last.docId });
     contWrap.append(go);
   }
@@ -2241,17 +2257,17 @@ function renderHome() {
   // ── 书架：**按文件夹分组**列出 papers 里全部论文（用户口径：不要全部散着铺开） ──
   list.replaceChildren();
   const allPapers = state.papers || [];
-  if (title) title.textContent = allPapers.length ? `书架 · ${allPapers.length} 篇` : '书架';
+  if (title) title.textContent = allPapers.length ? tr("书架 · {0} 篇", allPapers.length) : tr("书架");
   if (!allPapers.length) {
     list.append(el('li', { class: 'home-empty' },
-      el('div', { text: '还没有论文' }),
-      el('div', { class: 'home-empty-sub', text: '点「打开 PDF」选一个，或直接把 PDF 拖进来' })));
+      el('div', { text: tr("还没有论文") }),
+      el('div', { class: 'home-empty-sub', text: tr("点「打开 PDF」选一个，或直接把 PDF 拖进来") })));
     return;
   }
   const recById = new Map(rows.map((r) => [r.docId, r]));
   const groups = [];
   const rootFiles = allPapers.filter((p) => !p.folder);
-  if (rootFiles.length) groups.push({ path: '', name: '未分组', files: rootFiles });
+  if (rootFiles.length) groups.push({ path: '', name: tr("未分组"), files: rootFiles });
   for (const f of (state.folders || [])) {
     const files = allPapers.filter((p) => p.folder === f.path);
     if (files.length) groups.push({ path: f.path, name: f.name, files });
@@ -2259,13 +2275,13 @@ function renderHome() {
   // 兜底：papers 的 folder 不在 folders 清单里（理论上不会）→ 归到「其它」
   const grouped = new Set(groups.flatMap((g) => g.files));
   const restFiles = allPapers.filter((p) => !grouped.has(p));
-  if (restFiles.length) groups.push({ path: '?', name: '其它', files: restFiles });
+  if (restFiles.length) groups.push({ path: '?', name: tr("其它"), files: restFiles });
   for (const group of groups) {
     const depth = group.path && group.path !== '?' ? group.path.split('/').length - 1 : 0;
     list.append(el('li', {
       class: 'home-folder',
       style: `--depth:${depth}`,
-      title: group.path === '?' ? '其它' : `papers/${group.path ? `${group.path}/` : ''}（${group.files.length} 篇）`,
+      title: group.path === '?' ? tr("其它") : tr("papers/{0}（{1} 篇）", group.path ? `${group.path}/` : '', group.files.length),
     },
     el('span', { class: 'hf-ico', 'aria-hidden': 'true', html: FOLDER_ICON_SVG }),
     el('span', { class: 'hf-name', text: group.name }),
@@ -2273,15 +2289,15 @@ function renderHome() {
     for (const paper of group.files) {
       const rec = recById.get(paper.docId);
       const page = rec ? Math.max(1, Number(rec.page) || 1) : 0;
-      const meta = rec ? `第 ${page} 页 · ${relTime(rec.ts)}` : '未读';
+      const meta = rec ? tr("第 {0} 页 · {1}", page, relTime(rec.ts)) : tr("未读");
       const item = el('li', { class: 'home-item', dataset: { id: paper.docId }, style: `--depth:${depth}` },
         el('button', { type: 'button', class: 'home-item-go', title: paper.name },
           el('span', { class: 'hi-name', text: paper.name.replace(/\.pdf$/i, '') }),
           el('span', { class: 'hi-meta', text: meta })),
         rec ? el('button', {
           type: 'button', class: 'home-item-x', text: '×',
-          title: `移除「${paper.name}」的最近记录（不删除文件）`,
-          'aria-label': `移除「${paper.name}」的最近记录`,
+          title: tr("移除「{0}」的最近记录（不删除文件）", paper.name),
+          'aria-label': tr("移除「{0}」的最近记录", paper.name),
           onclick: (e) => { e.stopPropagation(); removeRecent(paper.docId); },
         }) : null);
       item.querySelector('.home-item-go').onclick = () => openDoc({ name: paper.name, url: paper.url, docId: paper.docId, path: paper.path });
@@ -2324,7 +2340,7 @@ function paperRow(p, flat) {
   const display = (flat && p.folder ? `${p.folder}/${p.name}` : p.name).replace(/\.pdf$/i, '');
   const path = p.path || p.name;
   const li = el('li', {
-    title: `${flat && p.folder ? p.folder + '/' : ''}${p.name}\n${fmtSize(p.size)}\n按住拖动：同目录调整顺序，拖到文件夹行移入；Ctrl/Shift 点击可多选`,
+    title: tr("{0}{1}\n{2}\n按住拖动：同目录调整顺序，拖到文件夹行移入；Ctrl/Shift 点击可多选", flat && p.folder ? p.folder + '/' : '', p.name, fmtSize(p.size)),
     dataset: { id: p.docId, name: p.name, path },
     draggable: 'true',
     onclick: (e) => {
@@ -2337,12 +2353,12 @@ function paperRow(p, flat) {
     },
   },
     // 左侧细条 = 框选起点（文件管理器式：按住拖出矩形批量选文件）
-    el('span', { class: 'file-grip', title: '按住拖动框选多个文件', 'aria-hidden': 'true', html: PAPER_GRIP_SVG }),
+    el('span', { class: 'file-grip', title: tr("按住拖动框选多个文件"), 'aria-hidden': 'true', html: PAPER_GRIP_SVG }),
     el('span', { class: 'file-name', text: display }),
     el('button', {
       type: 'button', class: 'file-row-x', html: PAPER_X_SVG,
-      title: `删除「${p.name}」（只删 papers/ 里的这个文件）`,
-      'aria-label': `删除「${p.name}」`,
+      title: tr("删除「{0}」（只删 papers/ 里的这个文件）", p.name),
+      'aria-label': tr("删除「{0}」", p.name),
       onclick: (e) => { e.stopPropagation(); deletePaper(p); },
     }));
   if (state.doc?.docId === p.docId) li.classList.add('active');
@@ -2380,7 +2396,7 @@ function renderTreeLevel(folderPath, depth) {
       el('span', { class: 'folder-ico', 'aria-hidden': 'true', html: FOLDER_ICON_SVG }),
       el('span', {
         class: 'folder-name', text: f.name,
-        title: `${f.path}（${f.count} 篇 PDF）`,
+        title: tr("{0}（{1} 篇 PDF）", f.path, f.count),
         ondblclick: (e) => { e.stopPropagation(); startInlineRename(f.path, f.name); },
       }),
       el('span', { class: 'folder-count', text: f.count ? String(f.count) : '' }));
@@ -2417,7 +2433,7 @@ function renderPaperList() {
     if (!hits.length) {
       list.append(el('li', {
         class: 'empty',
-        text: state.papers.length ? '没有找到论文，试试其他关键词' : '导入 PDF，开始阅读',
+        text: state.papers.length ? tr("没有找到论文，试试其他关键词") : tr("导入 PDF，开始阅读"),
       }));
       syncFileSelection();
       return;
@@ -2429,7 +2445,7 @@ function renderPaperList() {
 
   const frag = renderTreeLevel('', 0);
   if (!frag) {
-    list.append(el('li', { class: 'empty', text: '导入 PDF，开始阅读' }));
+    list.append(el('li', { class: 'empty', text: tr("导入 PDF，开始阅读") }));
     syncFileSelection();
     return;
   }
@@ -2491,7 +2507,7 @@ function selectFileRangeTo(path) {
 async function deleteSelectedFiles() {
   const paths = [...state.fileSel];
   if (!paths.length) return;
-  if (!confirm(`删除所选的 ${paths.length} 个 PDF？\n只删 papers/ 里的文件，笔记和会话保留。`)) return;
+  if (!confirm(tr("删除所选的 {0} 个 PDF？\n只删 papers/ 里的文件，笔记和会话保留。", paths.length))) return;
   let ok = 0;
   let failed = 0;
   for (const rel of paths) {
@@ -2502,7 +2518,7 @@ async function deleteSelectedFiles() {
   }
   clearFileSelection();
   await refreshPaperList();
-  toast(`已删除 ${ok} 个文件${failed ? `（${failed} 个失败）` : ''}`, failed ? 'err' : 'ok', 3200);
+  toast(tr("已删除 {0} 个文件{1}", ok, failed ? tr("（{0} 个失败）", failed) : ''), failed ? 'err' : 'ok', 3200);
 }
 
 /** 批量移动所选 PDF 到某个文件夹（''=根目录） */
@@ -2761,7 +2777,7 @@ function bindPaperDrag(list) {
     const filterActive = ($('#fileFilter').value || '').trim() !== '';
     if (filterActive) {
       e.preventDefault();
-      toast('请先清空筛选，再进行拖拽排序/移动', 'err', 3600);
+      toast(tr("请先清空筛选，再进行拖拽排序/移动"), 'err', 3600);
       return;
     }
     const path = li.dataset.path || li.dataset.name || '';
@@ -2836,7 +2852,7 @@ function bindPaperDrag(list) {
     clearMarks();
     if (!payload && !isExternalFileDrag(e)) return;
     const filterActive = ($('#fileFilter').value || '').trim() !== '';
-    if (filterActive) { toast('请先清空筛选，再进行拖拽排序/移动', 'err', 3600); return; }
+    if (filterActive) { toast(tr("请先清空筛选，再进行拖拽排序/移动"), 'err', 3600); return; }
 
     // 外部拖入（资源管理器）
     if (!payload) {
@@ -2898,7 +2914,7 @@ function bindPaperDrag(list) {
     if (payload.kind === 'folder') {
       const to = folderLi ? folderLi.dataset.path : (blankFolder || '');
       if (to === payload.path || to.startsWith(`${payload.path}/`)) {
-        toast('不能把文件夹移到自己的子目录里', 'err', 3600);
+        toast(tr("不能把文件夹移到自己的子目录里"), 'err', 3600);
         return;
       }
       await moveItem(payload.path, to);
@@ -2923,7 +2939,7 @@ async function moveFilesTo(paths, to) {
   }
   clearFileSelection();
   await refreshPaperList();
-  toast(`已移动 ${ok} 个文件到「${to || '根目录'}」${failed ? `（${failed} 个失败）` : ''}`, failed ? 'err' : 'ok', 3200);
+  toast(tr("已移动 {0} 个文件到「{1}」{2}", ok, to || tr("根目录"), failed ? tr("（{0} 个失败）", failed) : ''), failed ? 'err' : 'ok', 3200);
 }
 
 /** POST /api/move 移动 PDF / 文件夹；成功后刷新列表并同步打开中文件的内部路径 */
@@ -2940,7 +2956,7 @@ async function moveItem(from, to) {
     const label = from.split('/').pop();
     const finalName = j.name || label;
     const renamed = finalName !== label ? `（${finalName}）` : '';
-    toast(`已移动 ${label} → ${to || '根目录'}${renamed}`, 'ok', 3000);
+    toast(tr("已移动 {0} → {1}{2}", label, to || tr("根目录"), renamed), 'ok', 3000);
     // 正在打开的文件被移动：不打断阅读，只更新内部 url / path（active 按 docId 判定，不受影响）
     if (from === (state.doc?.path || state.doc?.name)) {
       const newPath = to ? `${to}/${finalName}` : finalName;
@@ -2962,7 +2978,7 @@ async function moveItem(from, to) {
     }
     await refreshPaperList();
   } catch (e) {
-    toast(`移动失败：${e.message}`, 'err', 5000);
+    toast(tr("移动失败：{0}", e.message), 'err', 5000);
     await refreshPaperList();
   }
 }
@@ -2995,7 +3011,7 @@ function applyPaperOrder(from, target, after) {
       try { j = await r.json(); } catch { /* 非 JSON */ }
       if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
     } catch (e) {
-      toast(`顺序保存失败：${e.message}`, 'err', 4200);
+      toast(tr("顺序保存失败：{0}", e.message), 'err', 4200);
       await refreshPaperList();
     }
   });
@@ -3052,10 +3068,10 @@ function showBatchFileCtx(x, y) {
     text: label,
     onclick: (e) => { e.stopPropagation(); menu.hidden = true; fn(); },
   });
-  menu.append(el('div', { class: 'ctx-title', text: `已选 ${paths.length} 个文件` }));
-  menu.append(item(`删除所选（${paths.length}）`, () => deleteSelectedFiles(), true));
-  menu.append(item('移动到…', () => showBatchMoveTargets(menu, paths)));
-  menu.append(item('取消选择', () => clearFileSelection()));
+  menu.append(el('div', { class: 'ctx-title', text: tr("已选 {0} 个文件", paths.length) }));
+  menu.append(item(tr("删除所选（{0}）", paths.length), () => deleteSelectedFiles(), true));
+  menu.append(item(tr("移动到…"), () => showBatchMoveTargets(menu, paths)));
+  menu.append(item(tr("取消选择"), () => clearFileSelection()));
   const r = menu.getBoundingClientRect();
   menu.style.left = `${Math.min(x, window.innerWidth - r.width - 8)}px`;
   menu.style.top = `${Math.min(y, window.innerHeight - r.height - 8)}px`;
@@ -3065,9 +3081,9 @@ function showBatchFileCtx(x, y) {
 function showBatchMoveTargets(menu, paths) {
   menu.hidden = false;   // 同 showMoveTargets：换列表时把菜单重新显示出来
   menu.innerHTML = '';
-  menu.append(el('div', { class: 'ctx-title', text: `移动 ${paths.length} 个文件到` }));
+  menu.append(el('div', { class: 'ctx-title', text: tr("移动 {0} 个文件到", paths.length) }));
   const pick = (to) => { menu.hidden = true; moveSelectedFiles(to); };
-  menu.append(el('button', { type: 'button', class: 'ctx-item', text: '根目录', onclick: () => pick('') }));
+  menu.append(el('button', { type: 'button', class: 'ctx-item', text: tr("根目录"), onclick: () => pick('') }));
   for (const f of state.folders || []) {
     menu.append(el('button', { type: 'button', class: 'ctx-item', text: f.path, onclick: () => pick(f.path) }));
   }
@@ -3087,16 +3103,16 @@ function showFileCtx(x, y, target) {
     onclick: (e) => { e.stopPropagation(); menu.hidden = true; fn(); },
   });
   if (target.kind === 'blank') {
-    menu.append(item('新建文件夹', () => startInlineCreate('')));
+    menu.append(item(tr("新建文件夹"), () => startInlineCreate('')));
   } else if (target.kind === 'folder') {
-    menu.append(item('新建文件夹', () => startInlineCreate('')));
-    menu.append(item('重命名', () => startInlineRename(target.path, target.name)));
-    menu.append(item('删除文件夹', () => deleteFolder(target.path, target.name), true));
-    menu.append(item('移动到…', () => showMoveTargets(menu, target)));
+    menu.append(item(tr("新建文件夹"), () => startInlineCreate('')));
+    menu.append(item(tr("重命名"), () => startInlineRename(target.path, target.name)));
+    menu.append(item(tr("删除文件夹"), () => deleteFolder(target.path, target.name), true));
+    menu.append(item(tr("移动到…"), () => showMoveTargets(menu, target)));
   } else {
-    menu.append(item('在新窗口打开', () => openReaderWindow((state.papers || []).find((p) => (p.path || p.name) === target.path))));
-    menu.append(item('移动到…', () => showMoveTargets(menu, target)));
-    menu.append(item('删除', () => {
+    menu.append(item(tr("在新窗口打开"), () => openReaderWindow((state.papers || []).find((p) => (p.path || p.name) === target.path))));
+    menu.append(item(tr("移动到…"), () => showMoveTargets(menu, target)));
+    menu.append(item(tr("删除"), () => {
       const p = (state.papers || []).find((pp) => (pp.path || pp.name) === target.path);
       if (p) deletePaper(p);
     }, true));
@@ -3110,9 +3126,9 @@ function showFileCtx(x, y, target) {
 function showMoveTargets(menu, target) {
   menu.hidden = false;   // 菜单项点击时先 hidden=true 再回调：换目标列表必须重新显示，否则看起来「没反应」
   menu.innerHTML = '';
-  menu.append(el('div', { class: 'ctx-title', text: `移动「${target.name}」到` }));
+  menu.append(el('div', { class: 'ctx-title', text: tr("移动「{0}」到", target.name) }));
   const pick = (to) => { menu.hidden = true; moveItem(target.path, to); };
-  menu.append(el('button', { type: 'button', class: 'ctx-item', text: '根目录', onclick: () => pick('') }));
+  menu.append(el('button', { type: 'button', class: 'ctx-item', text: tr("根目录"), onclick: () => pick('') }));
   for (const f of state.folders || []) {
     if (target.kind === 'folder' && (f.path === target.path || f.path.startsWith(`${target.path}/`))) continue;
     menu.append(el('button', { type: 'button', class: 'ctx-item', text: f.path, onclick: () => pick(f.path) }));
@@ -3130,7 +3146,7 @@ function startInlineCreate(parentPath) {
   renderPaperList();
   const list = $('#fileList');
   if (!list) return;
-  const input = el('input', { class: 'inline-name', placeholder: '新文件夹名，Enter 确认' });
+  const input = el('input', { class: 'inline-name', placeholder: tr("新文件夹名，Enter 确认") });
   const li = el('li', { class: 'folder inline-create' }, input);
   if (!parentPath) {
     list.prepend(li);
@@ -3154,9 +3170,9 @@ function startInlineCreate(parentPath) {
       if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
       if (parentPath && !state.folderOpen.has(parentPath)) { state.folderOpen.add(parentPath); saveFolderOpen(); }
       await refreshPaperList();
-      toast(`已创建文件夹「${j.path || j.name}」`, 'ok', 2400);
+      toast(tr("已创建文件夹「{0}」", j.path || j.name), 'ok', 2400);
     } catch (e) {
-      toast(`创建文件夹失败：${e.message}`, 'err', 4200);
+      toast(tr("创建文件夹失败：{0}", e.message), 'err', 4200);
       renderPaperList();
     }
   };
@@ -3209,9 +3225,9 @@ function startInlineRename(folderPath, name) {
       }
       try { await sessionsMigrateFolder(folderPath, newPath); } catch { /* 会话迁移失败不影响改名 */ }
       await refreshPaperList();
-      toast(`已重命名「${name}」→「${to}」`, 'ok', 2600);
+      toast(tr("已重命名「{0}」→「{1}」", name, to), 'ok', 2600);
     } catch (e) {
-      toast(`重命名失败：${e.message}`, 'err', 4200);
+      toast(tr("重命名失败：{0}", e.message), 'err', 4200);
       renderPaperList();
     }
   };
@@ -3226,14 +3242,14 @@ async function deleteFolder(folderPath, name) {
   const f = (state.folders || []).find((x) => x.path === folderPath);
   const count = f?.count || 0;
   if (!count) {
-    if (!confirm(`删除文件夹「${name}」？`)) return;
+    if (!confirm(tr("删除文件夹「{0}」？", name))) return;
     return doDeleteFolder(folderPath, 'recursive');
   }
   // 非空：默认推荐「PDF 移到根再删」；取消则问是否彻底删
-  if (confirm(`删除文件夹「${name}」？\n\n里面有 ${count} 篇 PDF。\n确定 = PDF 移到根目录再删（推荐，不丢文件）\n取消 = 改为彻底删除`)) {
+  if (confirm(tr("删除文件夹「{0}」？\n\n里面有 {1} 篇 PDF。\n确定 = PDF 移到根目录再删（推荐，不丢文件）\n取消 = 改为彻底删除", name, count))) {
     return doDeleteFolder(folderPath, 'to-root');
   }
-  if (confirm(`彻底删除「${name}」？\n\n连同里面 ${count} 篇 PDF 一起删除，不可恢复。`)) {
+  if (confirm(tr("彻底删除「{0}」？\n\n连同里面 {1} 篇 PDF 一起删除，不可恢复。", name, count))) {
     return doDeleteFolder(folderPath, 'recursive');
   }
 }
@@ -3246,8 +3262,8 @@ async function doDeleteFolder(folderPath, mode) {
     if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
     const label = folderPath.split('/').pop();
     toast(mode === 'to-root'
-      ? `已删除文件夹「${label}」，其中 ${j.moved || 0} 篇 PDF 移到根目录`
-      : `已删除文件夹「${label}」`, 'ok', 3200);
+      ? tr("已删除文件夹「{0}」，其中 {1} 篇 PDF 移到根目录", label, j.moved || 0)
+      : tr("已删除文件夹「{0}」", label), 'ok', 3200);
     state.folderOpen.delete(folderPath);
     saveFolderOpen();
     // 正在读的文件受影响：to-root 换 name 回退 url；recursive 收掉阅读态
@@ -3263,16 +3279,16 @@ async function doDeleteFolder(folderPath, mode) {
     await refreshPaperList();
     renderHome();
   } catch (e) {
-    toast(`删除文件夹失败：${e.message}`, 'err', 5000);
+    toast(tr("删除文件夹失败：{0}", e.message), 'err', 5000);
   }
 }
 
 /** 删除一篇 PDF（只删文件；笔记 / 会话 / 进度留在 data/，重新导入还能看到） */
 async function deletePaper(p) {
   const opened = !!state.doc && (state.doc.docId === p.docId || state.doc.url === p.url);
-  const ok = confirm(`删除「${p.name}」？\n\n只删除 papers/ 里的这个 PDF 文件`
-    + `${opened ? '（这篇正在阅读，删除后会回到首页）' : ''}。\n`
-    + '笔记、问答会话与阅读进度会保留：重新导入同一个文件仍能看到。');
+  const ok = confirm(tr("删除「{0}」？\n\n只删除 papers/ 里的这个 PDF 文件", p.name)
+    + `${opened ? tr("（这篇正在阅读，删除后会回到首页）") : ''}。\n`
+    + tr("笔记、问答会话与阅读进度会保留：重新导入同一个文件仍能看到。"));
   if (!ok) return;
   try {
     const q = new URLSearchParams({ path: p.path || p.name });
@@ -3284,9 +3300,9 @@ async function deletePaper(p) {
     if (opened) closeDeletedDoc();
     renderPaperList();
     renderHome();
-    toast(`已删除「${p.name}」`, 'ok', 2800);
+    toast(tr("已删除「{0}」", p.name), 'ok', 2800);
   } catch (e) {
-    toast(`删除失败：${e.message}`, 'err', 5000);
+    toast(tr("删除失败：{0}", e.message), 'err', 5000);
   }
 }
 
@@ -3298,7 +3314,7 @@ function closeDeletedDoc() {
   state.viewerDocId = null;
   document.title = 'prt';
   const nameEl = $('#docName');
-  if (nameEl) { nameEl.textContent = '未打开文档'; nameEl.title = ''; }
+  if (nameEl) { nameEl.textContent = tr("未打开文档"); nameEl.title = ''; }
   const page = $('#pageInput');
   if (page) page.value = '–';
   const count = $('#pageCount');
@@ -3361,7 +3377,7 @@ async function importExternalDrop(dt, targetFolder) {
 /** 外部文件夹 → papers/ 下建同名夹（重名自动 (2)），导入直接含有的 PDF（只读一层） */
 async function importExternalFolder(entry, parent) {
   const name = sanitizeClientFolderName(entry.name);
-  if (!name) { toast(`忽略非法文件夹名「${entry.name}」`, 'err', 3600); return; }
+  if (!name) { toast(tr("忽略非法文件夹名「{0}」", entry.name), 'err', 3600); return; }
   let j = {};
   try {
     const q = new URLSearchParams({ name });
@@ -3370,7 +3386,7 @@ async function importExternalFolder(entry, parent) {
     try { j = await r.json(); } catch { /* 非 JSON */ }
     if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
   } catch (e) {
-    toast(`创建文件夹「${name}」失败：${e.message}`, 'err', 4200);
+    toast(tr("创建文件夹「{0}」失败：{1}", name, e.message), 'err', 4200);
     return;
   }
   const folderPath = j.path || j.name;
@@ -3397,7 +3413,7 @@ async function importExternalFolder(entry, parent) {
     }
   }
   if (pdfs.length) await importPdfsToFolder(pdfs, folderPath);
-  if (subdirs) toast(`「${name}」里有 ${subdirs} 个子文件夹，v1 只导入一层，已忽略`, 'info', 4200);
+  if (subdirs) toast(tr("「{0}」里有 {1} 个子文件夹，v1 只导入一层，已忽略", name, subdirs), 'info', 4200);
 }
 
 async function importPdfsToFolder(pdfs, folder) {
@@ -3405,7 +3421,7 @@ async function importPdfsToFolder(pdfs, folder) {
     try {
       await uploadPdfFile(f, folder);
     } catch (e) {
-      toast(`导入 ${f.name} 失败：${e.message}`, 'err', 4000);
+      toast(tr("导入 {0} 失败：{1}", f.name, e.message), 'err', 4000);
     }
   }
 }
@@ -3416,15 +3432,15 @@ async function importPdfsToFolder(pdfs, folder) {
  * 万一上传失败（比如 papers/ 不可写），退回临时打开，至少还能看。
  */
 async function openLocalFile(file) {
-  if (!/\.pdf$/i.test(file.name)) { toast('只支持 PDF 文件', 'err'); return; }
-  setBusy(true, '正在导入…');
+  if (!/\.pdf$/i.test(file.name)) { toast(tr("只支持 PDF 文件"), 'err'); return; }
+  setBusy(true, tr("正在导入…"));
   try {
     const j = await uploadPdfFile(file);
     await refreshPaperList();
     await openDoc({ name: j.name, url: j.url, docId: j.docId, path: j.path || j.name });
-    toast(`已存到 papers/：${j.name}`, 'ok', 2600);
+    toast(tr("已存到 papers/：{0}", j.name), 'ok', 2600);
   } catch (e) {
-    toast(`导入失败（${e.message}），先用临时方式打开`, 'err', 5000);
+    toast(tr("导入失败（{0}），先用临时方式打开", e.message), 'err', 5000);
     if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
     localObjectUrl = URL.createObjectURL(file);
     await openDoc({ name: file.name, url: localObjectUrl, docId: `local-${file.name}-${file.size}` });
@@ -3435,13 +3451,13 @@ async function openLocalFile(file) {
 
 async function importLocalFiles(files) {
   const pdfs = pdfFilesFrom(files);
-  if (!pdfs.length) { toast('只支持 PDF 文件', 'err'); return; }
+  if (!pdfs.length) { toast(tr("只支持 PDF 文件"), 'err'); return; }
   if (pdfs.length === 1) return openLocalFile(pdfs[0]);
-  setBusy(true, `正在导入 1/${pdfs.length}…`);
+  setBusy(true, tr("正在导入 1/{0}…", pdfs.length));
   const imported = [];
   const failed = [];
   for (let i = 0; i < pdfs.length; i++) {
-    setBusy(true, `正在导入 ${i + 1}/${pdfs.length}…`);
+    setBusy(true, tr("正在导入 {0}/{1}…", i + 1, pdfs.length));
     try {
       imported.push(await uploadPdfFile(pdfs[i]));
     } catch (e) {
@@ -3451,10 +3467,10 @@ async function importLocalFiles(files) {
   setBusy(false);
   await refreshPaperList();
   if (imported.length) {
-    const note = failed.length ? `，${failed.length} 篇失败（${failed[0].name}：${failed[0].msg}）` : '';
-    toast(`已导入 ${imported.length} 篇 PDF${note}`, failed.length ? 'err' : 'ok', failed.length ? 6000 : 3400);
+    const note = failed.length ? tr("，{0} 篇失败（{1}：{2}）", failed.length, failed[0].name, failed[0].msg) : '';
+    toast(tr("已导入 {0} 篇 PDF{1}", imported.length, note), failed.length ? 'err' : 'ok', failed.length ? 6000 : 3400);
   } else {
-    toast(`导入失败：${failed[0]?.name || ''} ${failed[0]?.msg || '未知错误'}`, 'err', 6000);
+    toast(tr("导入失败：{0} {1}", failed[0]?.name || '', failed[0]?.msg || tr("未知错误")), 'err', 6000);
   }
   if (failed.length) console.warn('[import] 导入失败的 PDF：', failed);
 }
@@ -3484,7 +3500,7 @@ async function openDoc(target = {}) {
     return;
   }
   if (tabsStore.tabs.length >= TABS_MAX) {
-    toast('最多同时打开 ' + TABS_MAX + ' 篇论文，先关掉一个标签再打开', 'err', 4000);
+    toast(tr("最多同时打开 ") + TABS_MAX + tr(" 篇论文，先关掉一个标签再打开"), 'err', 4000);
     return;
   }
   await openDocColdSwitch(target);
@@ -3507,7 +3523,7 @@ async function closeTab(docId) {
       if (sessionSaveInFlight) await sessionSaveInFlight;
       await saveSessionNow(); await saveProgressNow({ silent: true });
     } catch {
-      toast('保存失败，标签已保留，请重试', 'err', 5000); return;
+      toast(tr("保存失败，标签已保留，请重试"), 'err', 5000); return;
     }
   }
   const [tab] = tabsStore.tabs.splice(idx, 1);
@@ -3591,7 +3607,7 @@ async function goWelcome({ skipSave = false } = {}) {
   state.folderClosed = true;   // 这个文件夹已完全关闭：下次打开默认新会话
   cleanStaleLastDoc();
   setView('home');
-  $('#docName').textContent = '未打开文档';
+  $('#docName').textContent = tr("未打开文档");
   $('#docName').title = '';
   document.title = 'prt';
   refreshReturnButton();
@@ -3669,8 +3685,8 @@ async function bootTabWorkspace() {
   const named = openId ? papers.find((paper) => paper.docId === openId) || null : openName
     ? papers.find((paper) => paper.name === openName || paper.name.replace(/\.pdf$/i, '') === openName) || null
     : null;
-  if (openId && !named) toast('未找到指定文档，可能已经移动或删除', 'err', 4500);
-  if (openName && !named) toast('papers/ 里没有找到 ' + openName, 'err', 4000);
+  if (openId && !named) toast(tr("未找到指定文档，可能已经移动或删除"), 'err', 4500);
+  if (openName && !named) toast(tr("papers/ 里没有找到 ") + openName, 'err', 4000);
 
   // ① 先恢复上次的工作区（文件还在的标签才恢复；打开顺序不变）
   const restorable = ws.tabs.filter((t) => byId.has(t.docId) && folderOfDoc(t.docId) === currentFolderPath());
@@ -3713,9 +3729,9 @@ async function openDocColdSwitch({ name, url, docId, path }) {
       if (sessionSaveInFlight) await sessionSaveInFlight;
       await saveSessionNow();
     } catch (e) {
-      toastAction(`当前会话保存失败，仍停留在「${state.doc.name}」。`, '重试', async () => {
+      toastAction(tr("当前会话保存失败，仍停留在「{0}」。", state.doc.name), tr("重试"), async () => {
         await saveSessionNow();
-        toast('会话已保存，现在可以切换论文', 'ok');
+        toast(tr("会话已保存，现在可以切换论文"), 'ok');
       }, 'err', 12000);
       return;
     }
@@ -3848,14 +3864,14 @@ async function openDocColdSwitch({ name, url, docId, path }) {
     // 给一句可执行的解释：这是本地文件服务没返回 200/206，而不是论文损坏 /
     // 网络问题（如果同时开着两个阅读器窗口，它们会抢同一份 data，关掉多余的再试）。
     const hint = code
-      ? `：本地文件服务返回 ${code}，请确认文件仍在书架中后重试`
+      ? tr("：本地文件服务返回 {0}，请确认文件仍在书架中后重试", code)
       : '';
-    toast(`打开失败：${msg}${hint}`, 'err', code ? 9000 : 6000);
+    toast(tr("打开失败：{0}{1}", msg, hint), 'err', code ? 9000 : 6000);
     console.warn('[openDoc] 打开失败', { docId, err: e });
     state.doc = null;
     state.viewerDocId = null;
     document.title = 'prt';
-    $('#docName').textContent = '未打开文档';
+    $('#docName').textContent = tr("未打开文档");
     $('#docName').title = '';
     // 打开失败退回首页（不再是一个既不像欢迎页、又不像错误页的模糊容器）
     setView('home');
@@ -3976,14 +3992,14 @@ async function renderOutline() {
   try { items = await viewer.getOutline(); } catch { items = []; }
   if (state.doc?.docId !== myDoc) return;
   if (!items.length) {
-    list.append(el('li', { class: 'empty', text: '这篇论文没有内置目录，可用全文搜索定位内容' }));
+    list.append(el('li', { class: 'empty', text: tr("这篇论文没有内置目录，可用全文搜索定位内容") }));
     return;
   }
   $('#outlineCount').textContent = `(${items.length})`;
   for (const it of items) {
     list.append(el('li', {
       class: `lv${Math.min(5, it.level)}`,
-      title: it.top !== null && it.top !== undefined ? `${it.title}（点它标题会顶到最上面）` : it.title,
+      title: it.top !== null && it.top !== undefined ? tr("{0}（点它标题会顶到最上面）", it.title) : it.title,
       text: it.title,
       // 有目标 Y 就精确停在标题上；没有（Fit/FitV 这类）才退回滚到页顶
       onclick: () => { if (it.page) jumpToDestWithHistory(it, { smooth: true }); },
@@ -4007,7 +4023,7 @@ async function renderNotes() {
   // 笔记可能在别处被删（左栏删除 / 换论文），回答卡片上的图标要跟着回到「未保存」
   syncAllAnswerNoteButtons();
   if (!state.highlights.length) {
-    list.append(el('li', { class: 'empty', text: '选中文字或收藏回答，留下第一条笔记' }));
+    list.append(el('li', { class: 'empty', text: tr("选中文字或收藏回答，留下第一条笔记") }));
     return;
   }
   for (const h of [...state.highlights].sort((a, b) => (b.ts || 0) - (a.ts || 0))) {
@@ -4019,14 +4035,14 @@ async function renderNotes() {
         if (h.page) jumpToPageWithHistory(h.page, { smooth: true });
       },
     },
-      el('div', { class: 'np', text: `p.${h.page}${h.note ? ' · 有笔记' : ''}` }),
+      el('div', { class: 'np', text: `p.${h.page}${h.note ? tr(" · 有笔记") : ''}` }),
       // 回答存下来的笔记标一下来源，免得和「正文划选收藏」混在一起（只是一个提示词，不是新数据）
-      h.source === 'answer' ? el('div', { class: 'nflag', text: '来自回答' }) : null,
+      h.source === 'answer' ? el('div', { class: 'nflag', text: tr("来自回答") }) : null,
       el('div', { class: 'nt', text: h.text }),
       h.note ? el('div', { class: 'nt nnote', text: h.note }) : null,
       el('div', { class: 'nact' },
-        el('button', { title: '写 / 改笔记', onclick: () => openNoteEditor(h) }, iconEl('pencil', { size: 14 })),
-        el('button', { class: 'del', title: '删除', onclick: () => deleteNoteItem(h.id) }, iconEl('close', { size: 14 })),
+        el('button', { title: tr("写 / 改笔记"), onclick: () => openNoteEditor(h) }, iconEl('pencil', { size: 14 })),
+        el('button', { class: 'del', title: tr("删除"), onclick: () => deleteNoteItem(h.id) }, iconEl('close', { size: 14 })),
       ),
     ));
   }
@@ -4044,7 +4060,7 @@ async function saveNotes() {
 }
 
 async function addHighlight(sel, note = '') {
-  if (!await allowEdit('笔记')) return;
+  if (!await allowEdit(tr("笔记"))) return;
   if (!sel) return;
   const text = sel.cleanText || cleanText(sel.text || '');
   const groups = sel.rectsByPage && Object.keys(sel.rectsByPage).length
@@ -4079,7 +4095,7 @@ function findAnswerNote(byId) {
 /** 回答卡片的笔记按钮：已保存态用同一张纸把加号换成对勾，并常亮强调色 */
 function answerNoteButton(entry) {
   const saved = !!findAnswerNote(entry.root.__noteId);
-  const label = saved ? '已在笔记中' : '添加到笔记';
+  const label = saved ? tr("已在笔记中") : tr("添加到笔记");
   const btn = el('button', {
     class: `act-icon note-act${saved ? ' saved' : ''}`,
     title: label,
@@ -4099,20 +4115,20 @@ function openAnswerNoteEditor(entry) {
     class: 'note-title',
     type: 'text',
     value: (existing?.text || root.__question || '').slice(0, 120),
-    placeholder: '笔记标题（默认用你的问题）',
-    'aria-label': '笔记标题',
+    placeholder: tr("笔记标题（默认用你的问题）"),
+    'aria-label': tr("笔记标题"),
   });
   const row = el('div', { class: 'note-edit' },
     el('span', { class: 'ic' }, iconEl('note-plus', { size: 14 })),
     input,
     el('span', { class: 'note-edit-acts' },
       el('button', {
-        class: 'act-icon', title: '保存笔记', 'aria-label': '保存笔记',
+        class: 'act-icon', title: tr("保存笔记"), 'aria-label': tr("保存笔记"),
         onclick: () => confirmAnswerNote(entry),
       }, iconEl('check')),
       el('button', {
-        class: 'act-icon', title: '取消', 'aria-label': '取消保存笔记',
-        onclick: () => { closeAnswerNoteEditor(entry); toast('已取消，没有写入笔记', '', 1400); },
+        class: 'act-icon', title: tr("取消"), 'aria-label': tr("取消保存笔记"),
+        onclick: () => { closeAnswerNoteEditor(entry); toast(tr("已取消，没有写入笔记"), '', 1400); },
       }, iconEl('close')),
     ),
   );
@@ -4132,15 +4148,15 @@ function closeAnswerNoteEditor(entry) {
 
 /** 状态 3/4：写进 notes 存储 → 按钮变已保存 → 左栏列表同步增加一项 */
 async function confirmAnswerNote(entry) {
-  if (!await allowEdit('笔记')) return;
+  if (!await allowEdit(tr("笔记"))) return;
   const root = entry.root;
   const row = root.__noteEditor;
   if (!row) return;
   const rec = root.__sessionRecord || {};
   const question = String(root.__question || rec.quote || '').trim();
   const answer = String(rec.text || '').trim();
-  if (!answer) { toast('这条回答还没有内容，先等它生成完', 'err', 2200); return; }
-  const title = (row.querySelector('input')?.value || '').trim() || question || '来自回答的笔记';
+  if (!answer) { toast(tr("这条回答还没有内容，先等它生成完"), 'err', 2200); return; }
+  const title = (row.querySelector('input')?.value || '').trim() || question || tr("来自回答的笔记");
   // 只记一个主依据页：优先记录里那一页（发问时那一页 / 引用所在页），退回当前页
   const page = Number(rec.page || viewer?.current || 0) || 0;
 
@@ -4163,10 +4179,10 @@ async function confirmAnswerNote(entry) {
     await saveNotes();
     await renderNotes();
     syncAnswerNoteButton(root);
-    toast('已存进笔记', 'ok', 1300);
+    toast(tr("已存进笔记"), 'ok', 1300);
   } catch (e) {
-    toastAction(`笔记保存失败：${e.message}，内容仍保留在这一条上。`, '重试',
-      async () => { await saveNotes(); await renderNotes(); syncAnswerNoteButton(root); toast('已存进笔记', 'ok'); },
+    toastAction(tr("笔记保存失败：{0}，内容仍保留在这一条上。", e.message), tr("重试"),
+      async () => { await saveNotes(); await renderNotes(); syncAnswerNoteButton(root); toast(tr("已存进笔记"), 'ok'); },
       'err', 12000);
   }
 }
@@ -4175,7 +4191,7 @@ function syncAnswerNoteButton(root) {
   const btn = root.__noteBtn;
   if (!btn) return;
   const saved = !!findAnswerNote(root.__noteId);
-  const label = saved ? '已在笔记中' : '添加到笔记';
+  const label = saved ? tr("已在笔记中") : tr("添加到笔记");
   btn.replaceChildren(iconEl(saved ? 'note-check' : 'note-plus'));
   btn.title = label;
   btn.setAttribute('aria-label', label);
@@ -4224,7 +4240,7 @@ async function handleCite({ nums, page, anchor }) {
   const ref = await viewer.findReference(n);
   // 连点不同引用时，旧请求不能把新卡片覆盖掉。
   if (citeSeq !== state.citeSeq) return;
-  if (!ref) { toast(`正文里没找到 [${n}] 对应的文献条目`, 'err', 3000); return; }
+  if (!ref) { toast(tr("正文里没找到 [{0}] 对应的文献条目", n), 'err', 3000); return; }
   // 只比较「这一个编号的条目」是否就在当前页。不能因为同页存在其它参考文献条目，
   // 就把结论段/表格里的正文引用误判成已经在文献表页。
   const onReferencePage = ref.page === page;
@@ -4252,7 +4268,7 @@ function showCiteBox(n, ref, anchor, { canReturn = true } = {}) {
   const box = $('#citeBox');
   box.classList.remove('hidden');
   $('#citeReturn').classList.toggle('hidden', !canReturn);
-  $('#citeTitle').textContent = `参考文献 [${n}] · p.${ref.page}`;
+  $('#citeTitle').textContent = tr("参考文献 [{0}] · p.{1}", n, ref.page);
   $('#citeText').textContent = ref.text;
   $('#citeResult').innerHTML = '';
   renderCiteDetail();
@@ -4269,11 +4285,11 @@ function renderCiteDetail() {
 
   if (ref.lib) {
     out.append(el('div', { class: 'cite-item' },
-      el('div', { class: 'ci-top' }, el('span', { class: 'ci-badge', text: '书架已有' })),
+      el('div', { class: 'ci-top' }, el('span', { class: 'ci-badge', text: tr("书架已有") })),
       el('div', { class: 'cd-name', text: ref.lib.name.replace(/\.pdf$/i, '') }),
       el('div', { class: 'ci-acts' },
         el('button', {
-          text: '打开',
+          text: tr("打开"),
           onclick: () => {
             $('#citeBox').classList.add('hidden');
             openDoc({ name: ref.lib.name, url: ref.lib.url, docId: ref.lib.docId });
@@ -4284,17 +4300,17 @@ function renderCiteDetail() {
   const slot = docId ? relSlotIfAny(docId, ref) : null;
   if (!slot || slot.status === 'idle' || slot.status === 'local') return;
   if (slot.status === 'loading') {
-    out.append(el('div', { class: 'cite-msg', text: '正在查 arXiv / OpenAlex / Crossref…' }));
+    out.append(el('div', { class: 'cite-msg', text: tr("正在查 arXiv / OpenAlex / Crossref…") }));
     return;
   }
   if (slot.status === 'none') {
-    out.append(el('div', { class: 'cite-msg', text: '公开库里没查到这篇的开放版本；可以点下面的「找这篇的 PDF」再搜一遍。' }));
+    out.append(el('div', { class: 'cite-msg', text: tr("公开库里没查到这篇的开放版本；可以点下面的「找这篇的 PDF」再搜一遍。") }));
     return;
   }
   if (slot.status === 'error') {
-    out.append(el('div', { class: 'cite-msg err', text: `上次查询失败：${slot.fail || '未知原因'}` }));
+    out.append(el('div', { class: 'cite-msg err', text: tr("上次查询失败：{0}", slot.fail || tr("未知原因")) }));
     out.append(el('button', {
-      class: 'cd-btn', text: '重试',
+      class: 'cd-btn', text: tr("重试"),
       onclick: () => lookupRefPdf(state.cite?.ref),
     }));
     return;
@@ -4305,14 +4321,14 @@ function renderCiteDetail() {
     el('div', { class: 'ci-top' },
       el('span', {
         class: 'ci-badge' + (slot.found?.pdfUrl ? ' pdf' : ''),
-        text: slot.found?.pdfUrl ? 'PDF 直链' : (slot.found?.source || '落地页'),
+        text: slot.found?.pdfUrl ? tr("PDF 直链") : (slot.found?.source || tr("落地页")),
       }),
       slot.found?.year ? el('span', { text: slot.found.year }) : null,
       slot.found?.venue ? el('span', { text: String(slot.found.venue).slice(0, 26) }) : null),
-    el('div', { class: 'ci-title', text: slot.found?.title || slot.guessed || '(无标题)' }),
+    el('div', { class: 'ci-title', text: slot.found?.title || slot.guessed || tr("(无标题)") }),
     el('div', { class: 'ci-acts' },
-      link ? el('a', { href: link, target: '_blank', rel: 'noopener noreferrer', text: '打开链接' }) : null,
-      link ? el('button', { text: '复制链接', onclick: () => copyText(link) }) : null)));
+      link ? el('a', { href: link, target: '_blank', rel: 'noopener noreferrer', text: tr("打开链接") }) : null,
+      link ? el('button', { text: tr("复制链接"), onclick: () => copyText(link) }) : null)));
 }
 
 async function searchCite() {
@@ -4323,7 +4339,7 @@ async function searchCite() {
   const btn = $('#citeSearch');
   const out = $('#citeResult');
   btn.disabled = true;
-  out.innerHTML = '<div class="cite-msg">正在查 arXiv / OpenAlex / Crossref…</div>';
+  out.innerHTML = tr("<div class=\"cite-msg\">正在查 arXiv / OpenAlex / Crossref…</div>");
   try {
     const r = await fetch(`/api/ref-search?q=${encodeURIComponent(ref.text)}`);
     const data = await r.json();
@@ -4335,7 +4351,7 @@ async function searchCite() {
     renderCiteDetail();
   } catch (e) {
     if (relStale(docId, myGen)) return;
-    out.innerHTML = `<div class="cite-msg err">检索失败：${esc(e.message)}</div>`;
+    out.innerHTML = tr("<div class=\"cite-msg err\">检索失败：{0}</div>", esc(e.message));
     markSlotError(docId, ref, e.message);
     renderRelations();
     renderCiteDetail();
@@ -4352,35 +4368,35 @@ function renderCiteResults(data) {
   if (got) {
     const hint = el('div', { class: 'cite-msg' });
     hint.append(document.createTextNode(data?.titleGuessed === false
-      ? '没能从这条文献里认出标题，这次用整条文献串检索：'
-      : '按标题检索：'));
+      ? tr("没能从这条文献里认出标题，这次用整条文献串检索：")
+      : tr("按标题检索：")));
     hint.append(el('b', { text: got }));
     out.append(hint);
   }
   if (!list.length) {
-    const why = data?.dropped ? `（已丢掉 ${data.dropped} 条与标题无关的结果）` : '';
-    out.append(el('div', { class: 'cite-msg', text: `几家公开库里都没查到这个标题的开放版本${why}，可以直接用下面的搜索引擎链接。` }));
+    const why = data?.dropped ? tr("（已丢掉 {0} 条与标题无关的结果）", data.dropped) : '';
+    out.append(el('div', { class: 'cite-msg', text: tr("几家公开库里都没查到这个标题的开放版本{0}，可以直接用下面的搜索引擎链接。", why) }));
   }
   for (const r of list) {
     const link = r.pdfUrl || r.url || '';
     if (!link) continue;
     out.append(el('div', { class: 'cite-item' },
       el('div', { class: 'ci-top' },
-        el('span', { class: 'ci-badge' + (r.pdfUrl ? ' pdf' : ''), text: r.pdfUrl ? 'PDF 直链' : r.source }),
+        el('span', { class: 'ci-badge' + (r.pdfUrl ? ' pdf' : ''), text: r.pdfUrl ? tr("PDF 直链") : r.source }),
         r.year ? el('span', { text: r.year }) : null,
         r.venue ? el('span', { text: r.venue.slice(0, 26) }) : null,
       ),
-      el('div', { class: 'ci-title', text: r.title || '(无标题)' }),
+      el('div', { class: 'ci-title', text: r.title || tr("(无标题)") }),
       el('div', { class: 'ci-acts' },
-        el('a', { href: link, target: '_blank', rel: 'noopener noreferrer', text: '打开链接' }),
-        el('button', { text: '复制链接', onclick: () => copyText(link) }),
+        el('a', { href: link, target: '_blank', rel: 'noopener noreferrer', text: tr("打开链接") }),
+        el('button', { text: tr("复制链接"), onclick: () => copyText(link) }),
       ),
     ));
   }
   const extra = el('div', { class: 'cite-acts' });
   if (data?.scholarUrl) extra.append(el('a', { href: data.scholarUrl, target: '_blank', rel: 'noopener noreferrer', text: 'Google Scholar' }));
-  if (data?.searchUrl) extra.append(el('a', { href: data.searchUrl, target: '_blank', rel: 'noopener noreferrer', text: '网页搜索 PDF' }));
-  if (extra.children.length) out.append(el('div', { class: 'cite-item' }, el('div', { class: 'ci-top' }, el('span', { text: '没找到？' })), extra));
+  if (data?.searchUrl) extra.append(el('a', { href: data.searchUrl, target: '_blank', rel: 'noopener noreferrer', text: tr("网页搜索 PDF") }));
+  if (extra.children.length) out.append(el('div', { class: 'cite-item' }, el('div', { class: 'ci-top' }, el('span', { text: tr("没找到？") })), extra));
 }
 /* 点气泡上的「✎」= 收藏这段文字，然后立刻弹出编辑框写笔记；
    正文右边缘会出现一个小书签，点它就能随时读 / 改这条笔记。 */
@@ -4406,10 +4422,10 @@ function openNoteEditor(item, anchorBox) {
   state.editingId = item.id;
   const box = $('#noteBox');
   box.classList.remove('hidden');
-  $('#noteTitle').textContent = `笔记 · p.${item.page}`;
+  $('#noteTitle').textContent = tr("笔记 · p.{0}", item.page);
   $('#noteQuote').textContent = item.text || '';
   $('#noteText').value = item.note || '';
-  $('#noteHint').textContent = 'Ctrl+Enter 保存 · 留空也会保存这段文字';
+  $('#noteHint').textContent = tr("Ctrl+Enter 保存 · 留空也会保存这段文字");
 
   const vw = window.innerWidth;
   const vh = window.innerHeight;
@@ -4437,7 +4453,7 @@ function closeNoteBox() {
 }
 
 async function saveNoteBox() {
-  if (!await allowEdit('笔记')) return;
+  if (!await allowEdit(tr("笔记"))) return;
   const id = state.editingId;
   if (!id) { closeNoteBox(); return; }
   const item = state.highlights.find((x) => x.id === id);
@@ -4450,23 +4466,23 @@ async function saveNoteBox() {
     await saveNotes();
     viewer?.setHighlights(state.highlights);
     await renderNotes();
-    toast(val ? '笔记已保存' : '已收藏这段文字', 'ok', 1300);
+    toast(val ? tr("笔记已保存") : tr("已收藏这段文字"), 'ok', 1300);
   } catch (e) {
-    toastAction(`笔记保存失败：${e.message}，内容仍保留。`, '重试', async () => {
-      await saveNotes(); viewer?.setHighlights(state.highlights); await renderNotes(); toast('笔记已保存', 'ok');
+    toastAction(tr("笔记保存失败：{0}，内容仍保留。", e.message), tr("重试"), async () => {
+      await saveNotes(); viewer?.setHighlights(state.highlights); await renderNotes(); toast(tr("笔记已保存"), 'ok');
     }, 'err', 12000);
   }
 }
 
 async function deleteNoteBox() {
-  if (!await allowEdit('笔记')) return;
+  if (!await allowEdit(tr("笔记"))) return;
   const id = state.editingId;
   closeNoteBox();
   if (id) await deleteNoteItem(id);
 }
 
 async function deleteNoteItem(id) {
-  if (!await allowEdit('笔记')) return;
+  if (!await allowEdit(tr("笔记"))) return;
   const previous = state.highlights;
   state.highlights = state.highlights.filter((x) => x.id !== id);
   viewer?.setHighlights(state.highlights);
@@ -4476,7 +4492,7 @@ async function deleteNoteItem(id) {
     viewer?.setHighlights(previous);
     await renderNotes();
     syncAllAnswerNoteButtons();
-    toastAction(`删除未保存：${e.message}，笔记已恢复。`, '重试', () => deleteNoteItem(id), 'err', 12000);
+    toastAction(tr("删除未保存：{0}，笔记已恢复。", e.message), tr("重试"), () => deleteNoteItem(id), 'err', 12000);
   }
 }
 
@@ -4683,10 +4699,10 @@ function showBubble(sel) {
   const add = b.querySelector('button[data-act="add"]');
   if (add) {
     const label = add.querySelector('span');
-    if (label) label.textContent = right ? '加入问答' : '对话';
+    if (label) label.textContent = right ? tr("加入问答") : tr("对话");
     add.title = right
-      ? '加入问答区：可以继续加多段文字（不改正文选区）'
-      : '加入对话：可以连续加多段文字，也可以加图片 (Q)';
+      ? tr("加入问答区：可以继续加多段文字（不改正文选区）")
+      : tr("加入对话：可以连续加多段文字，也可以加图片 (Q)");
   }
   b.classList.remove('hidden');
   const w = b.offsetWidth || 158;
@@ -4997,12 +5013,12 @@ function clearChatBlock() {
 function createReadingWelcome(id) {
   const translating = id === 'translate';
   const actions = translating
-    ? [el('button', { type: 'button', class: 'welcome-action', text: '截图翻译', onclick: () => {
+    ? [el('button', { type: 'button', class: 'welcome-action', text: tr("截图翻译"), onclick: () => {
       if (!state.busy) state.startRegion?.('translate');
     } })]
     : [
-      ['解释当前页', '请解释当前页的核心概念。'],
-      ['梳理论文思路', '请梳理这篇论文的问题、方法和主要结论。'],
+      [tr("解释当前页"), tr("请解释当前页的核心概念。")],
+      [tr("梳理论文思路"), tr("请梳理这篇论文的问题、方法和主要结论。")],
     ].map(([text, prompt]) => el('button', { type: 'button', class: 'welcome-action', text, onclick: () => {
       if (state.busy) return;
       const input = $('#chatInput');
@@ -5011,8 +5027,8 @@ function createReadingWelcome(id) {
       input.focus();
     } }));
   return el('div', { class: 'ai-hint reading-welcome' },
-    el('h3', { text: translating ? '读懂每一段' : '从这里读懂论文' }),
-    el('p', { text: translating ? '选中原文即可翻译，也可以在下方粘贴文字。' : '在下方提问，或选中正文中的一段深入讨论。' }),
+    el('h3', { text: translating ? tr("读懂每一段") : tr("从这里读懂论文") }),
+    el('p', { text: translating ? tr("选中原文即可翻译，也可以在下方粘贴文字。") : tr("在下方提问，或选中正文中的一段深入讨论。") }),
     el('div', { class: 'welcome-actions' }, ...actions));
 }
 
@@ -5080,7 +5096,7 @@ function ensureSplit(belowId) {
     startAbove = null;
     savePanels();
   };
-  const node = el('div', { class: 'ai-split', title: '拖动调整上下两块的高度', tabIndex: 0, role: 'separator', 'aria-orientation': 'horizontal' });
+  const node = el('div', { class: 'ai-split', title: tr("拖动调整上下两块的高度"), tabIndex: 0, role: 'separator', 'aria-orientation': 'horizontal' });
   node.addEventListener('keydown', (e) => {
     if (!['ArrowUp', 'ArrowDown'].includes(e.key)) return;
     const pair = visibleSplitPair(belowId);
@@ -5227,8 +5243,8 @@ function renderDraftStorage() {
   const status = info.error ? 'error' : info.loading ? 'loading' : info.dirty || info.saving ? 'saving' : 'saved';
   row.dataset.status = status;
   row.classList.toggle('hidden', status === 'saved');
-  $('#draftStorageText').textContent = info.error === 'load' ? '上次草稿未能读取，当前输入已保留'
-    : info.error ? '草稿尚未保存，关闭前请重试' : status === 'loading' ? '正在恢复草稿…' : '正在保存草稿…';
+  $('#draftStorageText').textContent = info.error === 'load' ? tr("上次草稿未能读取，当前输入已保留")
+    : info.error ? tr("草稿尚未保存，关闭前请重试") : status === 'loading' ? tr("正在恢复草稿…") : tr("正在保存草稿…");
   const retry = $('#draftStorageRetry');
   retry.classList.toggle('hidden', !info.error);
   retry.onclick = () => {
@@ -5380,22 +5396,24 @@ function syncComposerMode(id = rightPanelInCol(1)) {
   const clip = $('#clipBtn');
   const sendBtn = $('#sendBtn');
   if (input) {
-    input.placeholder = translating ? '粘贴原文…' : '问点什么…';
-    input.setAttribute('aria-label', translating ? '翻译原文' : '问题');
+    input.placeholder = translating ? tr("粘贴原文…") : tr("问点什么…");
+    input.setAttribute('aria-label', translating ? tr("翻译原文") : tr("问题"));
     if (translating) input.maxLength = 20000;
     else input.removeAttribute('maxlength');
   }
   if (clip) {
     // 问答 / 译文都用同一个截图入口：截图先放进下方输入框，和问答一致（用户 m05190）。
-    clip.title = translating ? '截图翻译：框选后放进输入框，再按 Enter 翻译' : '截图 / 长截图，加进对话';
+    clip.title = translating ? tr("截图翻译：框选后放进输入框，再按 Enter 翻译") : tr("截图 / 长截图，加进对话");
     clip.classList.remove('hidden');
   }
-  if (sendBtn) sendBtn.title = translating ? '翻译（Enter）· Shift+Enter 换行' : '发送（Enter）· Shift+Enter 换行';
+  if (sendBtn) sendBtn.title = translating ? tr("翻译（Enter）· Shift+Enter 换行") : tr("发送（Enter）· Shift+Enter 换行");
   const target = $('#translateTargetLang');
   if (target && !target.dataset.ready) {
     try {
       const saved = localStorage.getItem('reader.translate.targetLang');
       if (saved === '中文' || saved === 'English') target.value = saved;
+      else target.value = locale === 'en' ? 'English' : '中文';
+      if (!saved) localStorage.setItem('reader.translate.targetLang', target.value);
     } catch { /* 忽略 */ }
     target.addEventListener('change', () => { try { localStorage.setItem('reader.translate.targetLang', target.value); } catch { /* 忽略 */ } });
     target.dataset.ready = '1';
@@ -5422,13 +5440,13 @@ function renderCol(n) {
       const empty = area.querySelector(':scope > .ai-empty');
       if (empty && area.children.length === 1) return;
       area.replaceChildren(el('div', { class: 'ai-empty' },
-        el('div', { text: '结果会出现在这里' }),
-        el('div', { text: '选中正文，开始翻译或提问。' }),
+        el('div', { text: tr("结果会出现在这里") }),
+        el('div', { text: tr("选中正文，开始翻译或提问。") }),
       ));
     } else {
       area.replaceChildren(el('div', { class: 'ai-empty' },
-        el('div', { text: '这一栏还空着' }),
-        el('div', { text: '选择一个工具，开始阅读。' }),
+        el('div', { text: tr("这一栏还空着") }),
+        el('div', { text: tr("选择一个工具，开始阅读。") }),
       ));
     }
     return;
@@ -5489,7 +5507,7 @@ function renderAiBar() {
       'aria-pressed': on ? 'true' : 'false',
       dataset: { block: id, col: '1' },
       text: label,
-      title: on ? `「${label}」（当前）` : `打开「${label}」 —— ${meta.hint || ''}`,
+      title: on ? tr("「{0}」（当前）", label) : tr("打开「{0}」 —— {1}", label, meta.hint || ''),
     });
     bindPanelToggleGestures(btn, id, {
       onClick: () => { if (!on) setPanelVisible(id, true); },
@@ -5532,19 +5550,19 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     return qref?.dataset.fragment || refText;
   };
   const role = el('div', { class: `role${!isUser && !page ? ' hidden' : ''}` },
-    tag ? el('span', { class: 'tag', text: tag, 'aria-hidden': 'true' }) : null,
+    tag ? el('span', { class: 'tag', text: tr(tag), 'aria-hidden': 'true' }) : null,
     page && uiStyle.showPage ? el('button', {
-      class: 'pg', type: 'button', text: `第${page}页`,
-      title: `回到第${page}页原文并高亮对应内容`,
-      'aria-label': `回到第${page}页原文并高亮对应内容`,
+      class: 'pg', type: 'button', text: tr("第{0}页", page),
+      title: tr("回到第{0}页原文并高亮对应内容", page),
+      'aria-label': tr("回到第{0}页原文并高亮对应内容", page),
       onclick: (e) => { e.preventDefault(); e.stopPropagation(); jumpAndHighlight(page, quoteForPage(e.currentTarget)); },
     }) : null,
     // 译文块不要动作按钮（「最纯净的界面」）：连 role 行里这个「回原文」图标也去掉，
     // 跳回原文统一由下面那块可点击的原文引用承担。
     !isUser && page && uiStyle.showPage && !isTranslateEntry ? el('button', {
       class: 'tbtn',
-      title: `回到第${page}页原文`,
-      'aria-label': `回到第${page}页原文`,
+      title: tr("回到第{0}页原文", page),
+      'aria-label': tr("回到第{0}页原文", page),
       onclick: () => jumpToPageWithHistory(page, { smooth: true }),
     }, iconEl('jump-back')) : null,
   );
@@ -5553,22 +5571,22 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     ? el(refClickable ? 'button' : 'div', {
       class: `ref${refClickable ? ' ref-jump' : ''}`,
       type: refClickable ? 'button' : null,
-      title: refClickable ? `回到第 ${page} 页并高亮原文：${refText}` : refText,
-      'aria-label': refClickable ? `回到第 ${page} 页并高亮原文` : null,
+      title: refClickable ? tr("回到第 {0} 页并高亮原文：{1}", page, refText) : refText,
+      'aria-label': refClickable ? tr("回到第 {0} 页并高亮原文", page) : null,
       onclick: refClickable ? (e) => { e.preventDefault(); jumpAndHighlight(page, refText); } : null,
     }, refText)
     : null;
   const shots = (imageSrc ? [imageSrc] : (thumbs || [])).filter(Boolean);
   const shot = shots.length
     ? el('div', { class: 'shots' }, ...shots.map((src, i) => el('div', { class: 'shot-item' },
-      el('span', { class: 'shot-index', text: `图 ${i + 1}` }),
-      el('img', { class: 'shot-img', src, alt: `附件图片 ${i + 1}` }),
+      el('span', { class: 'shot-index', text: tr("图 {0}", i + 1) }),
+      el('img', { class: 'shot-img', src, alt: tr("附件图片 {0}", i + 1) }),
     )))
     : null;
   const textEl = el('div', {
     class: 'text',
     // 还没有任何输出时先显示「思考中…」：用户口径「没输出在思考就显示思考中或者什么」
-    html: text !== undefined ? renderAnswerHTML(text) : '<span class="thinking">思考中…</span>',
+    html: text !== undefined ? renderAnswerHTML(text) : tr("<span class=\"thinking\">思考中…</span>"),
   });
   const acts = el('div', { class: 'acts hidden' });
   const root = el('div', { class: `msg ${isUser ? 'user' : 'assistant'}`, dataset: { operation: tag || '', page: page || '' } }, role, ref, shot, textEl, acts);
@@ -5577,22 +5595,22 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     const targetLang = retry?.targetLang || (retry?.kind === 'translate' ? targetLangFor(String(quote || '')) : '中文');
     const sourceText = retry?.kind === 'translate-text' || retry?.kind === 'translate'
       ? String(retry.text || quote || '') : (!shots.length ? String(quote || '') : '');
-    const originLang = sourceText && targetLang === 'English' && /[\u4e00-\u9fff]/.test(sourceText) ? '中文' : '原文';
+    const originLang = sourceText && targetLang === 'English' && /[\u4e00-\u9fff]/.test(sourceText) ? '中文' : tr("原文");
     const sourceSegments = snapshotTranslationSegments(retry?.segments);
-    const direction = el('div', { class: 'translation-direction', text: `${sourceSegments.length ? `${sourceSegments.length} 段合并翻译`
-      : retry?.kind === 'translate-text' ? '文本翻译' : '译文'} · ${originLang} → ${targetLang}` });
+    const direction = el('div', { class: 'translation-direction', text: `${sourceSegments.length ? tr("{0} 段合并翻译", sourceSegments.length)
+      : retry?.kind === 'translate-text' ? tr("文本翻译") : tr("译文")} · ${tr(originLang)} → ${tr(targetLang)}` });
     root.insertBefore(direction, ref || shot || textEl);
     if (sourceText) {
       root.querySelector('.ref')?.remove();
       const original = el('details', { class: 'translation-original' },
-        el('summary', { text: '原文对照' }),
+        el('summary', { text: tr("原文对照") }),
         el('div', { class: 'translation-source', text: sourceText }),
         sourceSegments.length ? el('div', { class: 'translation-segment-sources' }, ...sourceSegments.filter((part) => part.page).map((part, index) =>
-          el('button', { type: 'button', class: 'translation-locate', text: `选段 ${index + 1} · 第${(part.pages.length ? part.pages : [part.page]).join('、')}页`,
+          el('button', { type: 'button', class: 'translation-locate', text: tr("选段 {0} · 第{1}页", index + 1, (part.pages.length ? part.pages : [part.page]).join('、')),
             onclick: () => jumpAndHighlight(part.page, part.text),
           }))) : null,
         page && retry?.kind !== 'translate-text' ? el('button', {
-          type: 'button', class: 'translation-locate', text: '定位原文',
+          type: 'button', class: 'translation-locate', text: tr("定位原文"),
           onclick: () => jumpAndHighlight(page, sourceText),
         }) : null,
       );
@@ -5655,28 +5673,28 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
   entry.acts.classList.remove('hidden');
   const bare = entry.root.dataset.operation === 'translation';
   const translationCopy = bare
-    ? el('button', { class: 'act-icon', title: '复制译文', 'aria-label': '复制译文', onclick: () => copyText(fullText) }, iconEl('copy'))
+    ? el('button', { class: 'act-icon', title: tr("复制译文"), 'aria-label': tr("复制译文"), onclick: () => copyText(fullText) }, iconEl('copy'))
     : null;
   appendAll(entry.acts,
     bare ? translationCopy : el('button', {
-      class: 'act-icon', title: '复制这段回答', 'aria-label': '复制这段回答',
+      class: 'act-icon', title: tr("复制这段回答"), 'aria-label': tr("复制这段回答"),
       onclick: () => copyText(fullText),
     }, iconEl('copy')),
     // 回答存笔记：与复制、回原文并排的小图标；已保存态变对勾
     bare ? null : answerNoteButton(entry),
     !bare && page ? el('button', {
-      class: 'act-icon', title: `回到第 ${page} 页原文`, 'aria-label': `回到第 ${page} 页原文`,
+      class: 'act-icon', title: tr("回到第 {0} 页原文", page), 'aria-label': tr("回到第 {0} 页原文", page),
       onclick: () => jumpToPageWithHistory(page, { smooth: true }),
     }, iconEl('jump-back')) : null,
-    bare ? null : (onAsk ? el('button', { text: '接着问', onclick: onAsk }) : null),
-    onRetry ? el('button', { text: retryLabel || (status === 'stopped' ? '重新生成' : '重试'), onclick: onRetry }) : null,
+    bare ? null : (onAsk ? el('button', { text: tr("接着问"), onclick: onAsk }) : null),
+    onRetry ? el('button', { text: retryLabel || (status === 'stopped' ? tr("重新生成") : tr("重试")), onclick: onRetry }) : null,
   );
   const extra = [];
   if (sources?.length) extra.push(renderSources(sources));
   // 精简层级：正文写完本身就是「完成」信号，不再单独占一行播报「回答完成」。
   // 只有在「被停止」或有实质元信息（已带全文 N 字 / 联网 N 条）时才渲染这一行，两者都空就整行不渲染。
   const stateParts = [];
-  if (status === 'stopped') stateParts.push(bare ? '已停止 · 已保留当前译文' : '已停止 · 已保留当前回答');
+  if (status === 'stopped') stateParts.push(bare ? tr("已停止 · 已保留当前译文") : tr("已停止 · 已保留当前回答"));
   if (stateParts.length) extra.push(el('div', { class: `entry-meta${status === 'stopped' ? ' stopped' : ''}`, text: stateParts.join(' · ') }));
   if (extra.length) entry.root.append(...extra);
   if (!restore) scheduleSessionSave();
@@ -5688,10 +5706,10 @@ function addFailureRetry(entry, message, onRetry) {
   const partial = entry.root.__partialText || '';
   if (rec) { rec.status = 'failed'; rec.text = partial; rec.meta = ''; }
   entry.root.classList.toggle('err', !partial);
-  entry.acts.replaceChildren(el('button', { text: '重试这次发送', onclick: onRetry }));
+  entry.acts.replaceChildren(el('button', { text: tr("重试这次发送"), onclick: onRetry }));
   entry.acts.classList.remove('hidden');
   entry.root.querySelectorAll('.entry-meta').forEach((node) => node.remove());
-  entry.root.append(el('div', { class: 'entry-meta failed', text: `生成中断：${message}${partial ? ' · 已保留收到的内容' : ''} · 可重试本次请求` }));
+  entry.root.append(el('div', { class: 'entry-meta failed', text: tr("生成中断：{0}{1} · 可重试本次请求", message, partial ? tr(" · 已保留收到的内容") : '') }));
   scheduleSessionSave();
 }
 
@@ -5719,7 +5737,7 @@ function serialiseRetryPayload(raw) {
         const draftId = String(a?.draftId || (a?.screenshot ? '' : a?.id) || '').slice(0, 80);
         return kind0 === 'image'
           ? {
-            kind: 'image', draftId, page: a?.page || null, label: String(a?.label || '截图').slice(0, 120),
+            kind: 'image', draftId, page: a?.page || null, label: String(a?.label || tr("截图")).slice(0, 120),
             w: Number(a?.w) || 0, h: Number(a?.h) || 0,
             // 图片单独存：只记 id（32 位十六进制）；取不到 id 的旧附件保留 screenshot 标记走旧提示
             id: validAttachmentId(a?.ref) ? a.ref : (a?.screenshot && validAttachmentId(a?.id) ? a.id : ''),
@@ -5739,7 +5757,7 @@ function serialiseRetryPayload(raw) {
     // 截图翻译：不存图片本体（单独存附件），只记附件 id + 页码 + 标签，重试/恢复时按 id 取回原图
     return {
       kind, docId: String(raw.docId || '').slice(0, 240), sid: String(raw.sid || '').slice(0, 40),
-      page: raw.page || null, label: String(raw.label || '截图').slice(0, 120),
+      page: raw.page || null, label: String(raw.label || tr("截图")).slice(0, 120),
       targetLang: raw.targetLang === 'English' ? 'English' : (raw.targetLang === '中文' ? '中文' : ''),
       refId: validAttachmentId(raw.refId) ? raw.refId : '',
     };
@@ -5759,6 +5777,7 @@ function serialiseRetryPayload(raw) {
   if (kind === 'teaching') {
     return {
       kind, docId: String(raw.docId || '').slice(0, 240), opId: String(raw.opId || '').slice(0, 120),
+      responseLanguage: raw.responseLanguage === 'en' ? 'en' : 'zh-CN',
       block: String(raw.block || 'chat').slice(0, 40),
       ask: String(raw.ask || '').slice(0, 500),
       extraUser: String(raw.extraUser || '').slice(0, 4000),
@@ -5778,7 +5797,7 @@ let sessionEditVersion = 0;
 let savedSessionEditVersion = 0;
 const persistSession = debounce(() => {
   sessionSaveInFlight = saveSessionNow().catch((e) => {
-    toastAction('会话保存失败，当前内容仍保留。', '重试', saveSessionNow, 'err', 12000);
+    toastAction(tr("会话保存失败，当前内容仍保留。"), tr("重试"), saveSessionNow, 'err', 12000);
   });
 }, 800);
 function scheduleSessionSave() {
@@ -5821,7 +5840,7 @@ function folderOfDoc(docId) {
   return p ? String(p.folder || '') : '';
 }
 function folderDisplayName(path) {
-  if (!path) return '未分组';
+  if (!path) return tr("未分组");
   return path.replace(/\//g, ' / ');
 }
 function persistCurrentFolder() {
@@ -5949,7 +5968,7 @@ function blobToDataUrl(blob) {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onload = () => resolve(String(reader.result || ''));
-    reader.onerror = () => reject(reader.error || new Error('读取图片失败'));
+    reader.onerror = () => reject(reader.error || new Error(tr("读取图片失败")));
     reader.readAsDataURL(blob);
   });
 }
@@ -5987,7 +6006,7 @@ async function hydrateShotThumbs(shots, docId, sid) {
     ? fetchAttachmentDataUrl(s.id, docId, sid) : Promise.resolve('')));
   // 保留原始索引；过滤缺失项会把图 2 挪成图 1，重新生成时造成错配。
   const missingThumb = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(
-    '<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="100%" height="100%" fill="#888" opacity=".12"/><text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="#777" font-size="14">截图文件缺失</text></svg>',
+    `<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="100%" height="100%" fill="#888" opacity=".12"/><text x="50%" y="50%" text-anchor="middle" dominant-baseline="middle" fill="#777" font-size="14">${tr('截图文件缺失')}</text></svg>`,
   );
   const thumbs = urls.map((url) => url || missingThumb);
   return { thumbs, missing: urls.some((url) => !url) };
@@ -6000,7 +6019,7 @@ function shotRefOf(im) {
     id: im.ref,
     w: Number(im.w) || 0,
     h: Number(im.h) || 0,
-    label: String(im.label || '截图').slice(0, 120),
+    label: String(im.label || tr("截图")).slice(0, 120),
   };
 }
 
@@ -6040,14 +6059,14 @@ function buildSessionPayload() {
     shots: (Array.isArray(x.shots) ? x.shots : [])
       .filter((s) => s && validAttachmentId(s.id))
       .slice(0, 6)
-      .map((s) => ({ id: s.id, w: Number(s.w) || 0, h: Number(s.h) || 0, label: String(s.label || '截图').slice(0, 120) })),
+      .map((s) => ({ id: s.id, w: Number(s.w) || 0, h: Number(s.h) || 0, label: String(s.label || tr("截图")).slice(0, 120) })),
     status: ['pending', 'complete', 'stopped', 'failed', 'user'].includes(x.status) ? x.status : (x.kind === 'user' ? 'user' : 'complete'),
     sources: (Array.isArray(x.sources) ? x.sources : []).slice(0, 8).map((s) => ({ title: String(s.title || '').slice(0, 500), url: String(s.url || '').slice(0, 2000), number: s.number || null })),
     meta: String(x.meta || '').slice(0, 500),
     basis: String(x.basis || '').slice(0, 240),
     retry: serialiseRetryPayload(x.retry),
     // 「读懂论文」的教学按钮 / 教学对象：恢复会话后「继续下一步 / 这个我懂了」仍然可用
-    chips: (Array.isArray(x.chips) ? x.chips : []).slice(0, 4).map((c) => ({ label: String(c.label || '').slice(0, 12), prompt: String(c.prompt || '').slice(0, 200), op: ['evidence', 'limits'].includes(c.op) ? c.op : '' })),
+    chips: (Array.isArray(x.chips) ? x.chips : []).slice(0, 4).map((c) => ({ label: clipChipLabel(c.label), prompt: String(c.prompt || '').slice(0, 200), op: ['evidence', 'limits'].includes(c.op) ? c.op : '' })),
     teaching: x.teaching && typeof x.teaching === 'object' ? {
       kind: String(x.teaching.kind || '').slice(0, 40), name: String(x.teaching.name || '').slice(0, 160),
       boundary: String(x.teaching.boundary || '').slice(0, 2000), page: x.teaching.page || null,
@@ -6122,7 +6141,7 @@ async function saveSessionNow() {
     fetch(translateURL, { method: 'POST', headers, body: both.translate }),
   ]);
   if (!chatRes.ok) throw new Error(`HTTP ${chatRes.status}`);
-  if (!translateRes.ok) throw new Error(`译文保存失败 HTTP ${translateRes.status}`);
+  if (!translateRes.ok) throw new Error(tr("译文保存失败 HTTP {0}", translateRes.status));
   // 记住「刚存进去的文件夹会话指纹」：下次冷恢复读到同样的内容时就不用作废停放视图（热切换仍可复用 DOM）
   try { globalChatSig = chatSigOf(sid, JSON.parse(both.chat).entries); } catch { globalChatSig = ''; }
   // 通知其它窗口：只有「当前正显示同一会话」的窗口会刷新（见 applyRemoteSessionSaved）
@@ -6354,7 +6373,7 @@ function ensureFolderForDoc(docId) {
   closeTabsNotInFolder(path);
   beginFolderEntry();
   renderFolderSwitch();
-  flashHint(`已切换文件夹：${folderDisplayName(path)}`);
+  flashHint(tr("已切换文件夹：{0}", folderDisplayName(path)));
   return true;
 }
 
@@ -6362,7 +6381,7 @@ function ensureFolderForDoc(docId) {
 async function switchFolder(path) {
   const target = String(path || '');
   if (target === currentFolderPath()) return;
-  if (state.busy) { toast('正在生成中，先等它跑完或点停止再换文件夹', 'err', 3200); return; }
+  if (state.busy) { toast(tr("正在生成中，先等它跑完或点停止再换文件夹"), 'err', 3200); return; }
   // 先把旧文件夹会话存盘，再关旧标签、开新会话
   try { if (state.doc && state.sessionEntries.length) await saveSessionNow(); } catch { /* 存不下也允许切 */ }
   state.currentFolder = target;
@@ -6378,7 +6397,7 @@ async function switchFolder(path) {
   } else if (state.doc && folderOfDoc(state.doc.docId) === target) {
     await openDoc({ docId: tabsStore.tabs[0].docId, name: tabsStore.tabs[0].name, url: tabsStore.tabs[0].url, path: tabsStore.tabs[0].path });
   }
-  flashHint(`已切换文件夹：${folderDisplayName(target)}`);
+  flashHint(tr("已切换文件夹：{0}", folderDisplayName(target)));
 }
 
 /** 左栏「当前文件夹」按钮的文案 */
@@ -6386,7 +6405,7 @@ function renderFolderSwitch() {
   const btn = $('#folderSwitch');
   if (!btn) return;
   btn.replaceChildren(iconEl('folder'), el('span', { text: folderDisplayName(currentFolderPath()) }));
-  btn.title = `切换文件夹 · ${folderDisplayName(currentFolderPath())}`;
+  btn.title = tr("切换文件夹 · {0}", folderDisplayName(currentFolderPath()));
 }
 
 /** 左栏文件夹切换菜单 */
@@ -6397,7 +6416,7 @@ function initFolderSwitch() {
   btn.addEventListener('click', (e) => {
     e.stopPropagation();
     if (!menu.classList.contains('hidden')) { menu.classList.add('hidden'); return; }
-    const rows = [{ path: '', name: '未分组' }];
+    const rows = [{ path: '', name: tr("未分组") }];
     for (const f of (state.folders || [])) rows.push({ path: f.path, name: `${f.path.replace(/\//g, ' / ')}/` });
     menu.replaceChildren(...rows.map((row) => {
       const count = (state.papers || []).filter((p) => String(p.folder || '') === row.path).length;
@@ -6409,8 +6428,8 @@ function initFolderSwitch() {
         onclick: () => { menu.classList.add('hidden'); switchFolder(row.path); },
       },
       el('span', { class: 'fsi-name', text: row.name }),
-      el('span', { class: 'fsi-count', text: `${count} 篇` }),
-      on ? el('span', { class: 'fsi-on', text: '当前' }) : null);
+      el('span', { class: 'fsi-count', text: tr("{0} 篇", count) }),
+      on ? el('span', { class: 'fsi-on', text: tr("当前") }) : null);
     }));
     menu.classList.remove('hidden');
   });
@@ -6507,7 +6526,7 @@ function focusExistingResult(entry, label = '') {
   };
   apply();
   setTimeout(apply, 80);
-  if (label) toast(`「${label}」已在结果区（已定位过去），点「重新生成」才会重跑`, 'ok', 3000);
+  if (label) toast(tr("「{0}」已在结果区（已定位过去），点「重新生成」才会重跑", label), 'ok', 3000);
   return true;
 }
 
@@ -6541,12 +6560,12 @@ function restoreRetryCallback(row, entry, priorUser) {
   if (!payload) {
     return () => {
       restoreComposerFallback(fallbackQuestion);
-      toast('已恢复问题到输入框；旧会话没有保存可自动重试的范围。', 'ok', 4200);
+      toast(tr("已恢复问题到输入框；旧会话没有保存可自动重试的范围。"), 'ok', 4200);
     };
   }
   return async () => {
     if (payload.docId && payload.docId !== state.doc?.docId) {
-      toast('这条请求属于另一篇论文，请切回原论文后重试', 'err', 3200);
+      toast(tr("这条请求属于另一篇论文，请切回原论文后重试"), 'err', 3200);
       return;
     }
     if (payload.kind === 'translate' || payload.kind === 'explain') {
@@ -6596,23 +6615,23 @@ function restoreRetryCallback(row, entry, priorUser) {
       if (!readingRequestCurrent({ docId, openSeq, sid })) return;
       if (urls.some((u) => !u)) {
         if (retryOwner !== composerOwner || retryRevision !== composerRevision) {
-          toast('截图文件已不在；已保留当前草稿，请重新添加截图后发送', 'err', 4200);
+          toast(tr("截图文件已不在；已保留当前草稿，请重新添加截图后发送"), 'err', 4200);
           return;
         }
         // 图片文件被清掉了（比如另一个会话清空时 GC 掉了）：退回「重新添加」的老路
         restoreComposerFallback(payload.question || fallbackQuestion, payload);
-        toast('截图文件已不在，问题和文字附件已恢复；请重新添加截图后再发送。', 'ok', 5200);
+        toast(tr("截图文件已不在，问题和文字附件已恢复；请重新添加截图后再发送。"), 'ok', 5200);
         return;
       }
       imageAttachments = recoverable.map((a, i) => ({
         id: String(a.draftId || '') || uid(), kind: 'image', page: a.page || null, dataUrl: urls[i],
         w: Number(a.w) || 0, h: Number(a.h) || 0,
-        label: String(a.label || '截图').slice(0, 120), ref: a.id,
+        label: String(a.label || tr("截图")).slice(0, 120), ref: a.id,
       }));
     }
     if (lostShots && !imageAttachments.length) {
       restoreComposerFallback(payload.question || fallbackQuestion, payload);
-      toast('问题和文字附件已恢复；截图未保存，请重新添加截图后再发送。', 'ok', 5200);
+      toast(tr("问题和文字附件已恢复；截图未保存，请重新添加截图后再发送。"), 'ok', 5200);
       return;
     }
     const attachments = [
@@ -6624,9 +6643,9 @@ function restoreRetryCallback(row, entry, priorUser) {
     ];
     const pending = {
       inputValue: String(payload.inputValue ?? payload.question ?? ''),
-      question: String(payload.question || fallbackQuestion || '请解释我加进来的这段内容。'),
+      question: String(payload.question || fallbackQuestion || tr("请解释我加进来的这段内容。")),
       attachments,
-      quoteText: String(payload.quoteText || attachments.map((a) => (a.page ? `[第${a.page}页] ` : '') + (a.text || '')).join('\n\n')),
+      quoteText: String(payload.quoteText || attachments.map((a) => (a.page ? tr("[第{0}页] ", a.page) : '') + (a.text || '')).join('\n\n')),
       firstPage: payload.firstPage || attachments[0]?.page || entry.root.dataset.page || null,
       pageRole: ['selection', 'explicit', 'topic', 'screen'].includes(payload.pageRole) ? payload.pageRole : null,
       selectionSource: payload.selectionSource === 'right' ? 'right' : '',
@@ -6644,7 +6663,7 @@ function restoreRetryCallback(row, entry, priorUser) {
     if (!ensureReady()) {
       if (retryOwner !== composerOwner || retryRevision !== composerRevision) return;
       restoreComposerFallback(pending.question, payload);
-      toast('已恢复问题；先配置模型接口，再点发送。', 'ok', 4200);
+      toast(tr("已恢复问题；先配置模型接口，再点发送。"), 'ok', 4200);
       return;
     }
     send(pending, retryDraft);
@@ -6749,7 +6768,10 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
         if (!op?.id || typeof op.text !== 'string') continue;
         const key = String(op.id).includes(':') ? String(op.id) : `${docId}:${op.id}`;
         state.opsCache.set(key, { text: op.text.slice(0, 12000), at: op.at || Date.now(), page: op.page || null });
-        if (key.startsWith(`${docId}:`)) state.opsDone[key.slice(docId.length + 1)] = true;
+        if (key.startsWith(`${docId}:`)) {
+          const [opId, language = 'zh-CN'] = key.slice(docId.length + 1).split(':');
+          if (language === responseLanguage()) state.opsDone[opId] = true;
+        }
       }
     }
     for (let rowIndex = 0; rowIndex < state.sessionEntries.length; rowIndex += 1) {
@@ -6788,7 +6810,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
           shotsLost = true;   // 老会话：只存了「有过截图」的标记，没有图片本体
         }
       }
-      const text = `${String(row.text || '').slice(0, 48000)}${shotsLost ? '\n\n【截图附件未保存，请重新添加截图】' : ''}`;
+      const text = `${String(row.text || '').slice(0, 48000)}${shotsLost ? tr("\n\n【截图附件未保存，请重新添加截图】") : ''}`;
       const entry = addEntry({ ...row, text, thumbs, restore: true });
       entry.root.__sessionRecord = row;
       // 截图翻译条目：恢复后也要让失败/停止时的「重试截图翻译」按钮可见
@@ -6806,20 +6828,20 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
         page: row.page, sources: row.sources, meta: row.meta, basis: row.basis,
         status: row.status === 'stopped' ? 'stopped' : 'complete',
         onRetry: (row.status === 'stopped' || (row.status === 'complete' && canRegenerate)) ? retry : null,
-        retryLabel: row.block === 'translate' ? '重新翻译' : '重新生成', restore: true,
+        retryLabel: row.block === 'translate' ? tr("重新翻译") : tr("重新生成"), restore: true,
       });
       else if (row.kind !== 'user' && row.status === 'failed') {
-        if (!row.text) entry.body.textContent = '上次生成未完成。问题和附件保留在请求中，可以重试。';
+        if (!row.text) entry.body.textContent = tr("上次生成未完成。问题和附件保留在请求中，可以重试。");
         entry.root.classList.toggle('err', !row.text);
-        entry.acts.replaceChildren(el('button', { text: '重试这次发送', onclick: retry }));
+        entry.acts.replaceChildren(el('button', { text: tr("重试这次发送"), onclick: retry }));
         entry.acts.classList.remove('hidden');
-        entry.root.append(el('div', { class: 'entry-meta failed', text: `上次生成中断${row.text ? ' · 已保留收到的内容' : ''} · 问题和附件仍保留在请求里` }));
+        entry.root.append(el('div', { class: 'entry-meta failed', text: tr("上次生成中断{0} · 问题和附件仍保留在请求里", row.text ? tr(" · 已保留收到的内容") : '') }));
       } else if (row.kind !== 'user' && row.status === 'pending') {
-        entry.body.textContent = canApply ? '正在等待另一窗口的回答…' : '上次回答尚未完成。';
+        entry.body.textContent = canApply ? tr("正在等待另一窗口的回答…") : tr("上次回答尚未完成。");
         if (canApply) continue;
-        entry.acts.replaceChildren(el('button', { text: '恢复并重试', onclick: retry }));
+        entry.acts.replaceChildren(el('button', { text: tr("恢复并重试"), onclick: retry }));
         entry.acts.classList.remove('hidden');
-        entry.root.append(el('div', { class: 'entry-meta stopped', text: '未完成 · 点「恢复并重试」继续' }));
+        entry.root.append(el('div', { class: 'entry-meta stopped', text: tr("未完成 · 点「恢复并重试」继续") }));
       }
       // 教学类条目：补回「继续下一步 / 讲第 N 项 / 这个我懂了」等按钮
       if (row.kind !== 'user' && row.status !== 'pending' && row.status !== 'failed') restoreTeachingEntry(entry, row);
@@ -6828,7 +6850,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     if (replayChat) chatDomSig = sig;
     // AI 自动标题：只有「服务端自动标题」（首条问题）才升级；手动改名（user）绝不覆盖
     if (!canApply && String(savedChat.titleSource || 'auto') === 'auto') scheduleSessionTitle();
-  } catch (e) { toast(`读取当前论文会话失败：${e.message}`, 'err', 5000); }
+  } catch (e) { toast(tr("读取当前论文会话失败：{0}", e.message), 'err', 5000); }
 }
 
 /** 当前会话里有没有「问答」内容（只剩译文条目不算）：空会话不落盘，避免列表被空会话刷屏 */
@@ -6899,9 +6921,9 @@ async function followCurrentSession() {
 }
 
 async function clearCurrentSession({ confirm: askConfirm = true } = {}) {
-  if (!await allowEdit('问答')) return;
+  if (!await allowEdit(tr("问答"))) return;
   if (!state.doc) return;
-  if (askConfirm && !confirm(`清空「${state.doc.name}」的对话和 AI 结果？`)) return;
+  if (askConfirm && !confirm(tr("清空「{0}」的对话和 AI 结果？", state.doc.name))) return;
   closeSessionMenu();
   persistSession.cancel?.();
   // 只清问答；译文条目留在内存里（文档级，不属于任何会话），下次保存不会被覆盖成空
@@ -6920,10 +6942,10 @@ async function clearCurrentSession({ confirm: askConfirm = true } = {}) {
     // 只清全局问答会话；本文档译文（__translate）不动
     const r = await fetch(`/api/session?${sessionQuery(sessionScopeKey(), activeSidFor(state.doc.docId))}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ entries: [], history: [], ops: [], teaching: null, summary: '', summaryCovered: 0, updatedAt: Date.now() }) });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    toast('当前论文会话已清空', 'ok');
+    toast(tr("当前论文会话已清空"), 'ok');
     loadPaperMemory();
     sessionsOnSessionChanged({ refresh: false });
-  } catch (e) { toastAction(`清空失败：${e.message}`, '重试', clearCurrentSession, 'err', 10000); }
+  } catch (e) { toastAction(tr("清空失败：{0}", e.message), tr("重试"), clearCurrentSession, 'err', 10000); }
 }
 
 
@@ -6952,9 +6974,9 @@ async function loadSessionList() {
 /** 会话菜单标题：按「会话归属方式」说清楚这段会话属于谁 */
 function sessionListHeadText() {
   const mode = readSessionScopeMode();
-  if (mode === 'global') return '全部论文共用的会话';
-  if (mode === 'paper') return `「${state.doc?.name || ''}」的会话`;
-  return `「${folderDisplayName(currentFolderPath())}」的会话`;
+  if (mode === 'global') return tr("全部论文共用的会话");
+  if (mode === 'paper') return tr("「{0}」的会话", state.doc?.name || '');
+  return tr("「{0}」的会话", folderDisplayName(currentFolderPath()));
 }
 
 /** 画会话菜单：一行一个会话（标题 + 条数 + 时间），底部是「新建会话」 */
@@ -6964,14 +6986,14 @@ function renderSessionMenu() {
   const cur = activeSidFor(state.doc?.docId || '');
   const rel = (ts) => {
     const min = Math.floor((Date.now() - (Number(ts) || 0)) / 60000);
-    if (!Number.isFinite(min) || min < 1) return '刚看过';
-    if (min < 60) return `${min} 分钟前`;
+    if (!Number.isFinite(min) || min < 1) return tr("刚看过");
+    if (min < 60) return tr("{0} 分钟前", min);
     const h = Math.floor(min / 60);
-    return h < 24 ? `${h} 小时前` : `${Math.floor(h / 24)} 天前`;
+    return h < 24 ? tr("{0} 小时前", h) : tr("{0} 天前", Math.floor(h / 24));
   };
   const rows = sessionStore.list.map((s) => {
     const on = (s.sid || '') === cur;
-    const label = s.title || (s.count ? '（无标题会话）' : '新会话');
+    const label = s.title || (s.count ? tr("（无标题会话）") : tr("新会话"));
     const row = el('div', { class: `sess-row${on ? ' on' : ''}` },
       el('button', {
         type: 'button', class: 'sess-go', title: label,
@@ -6979,31 +7001,31 @@ function renderSessionMenu() {
       },
       el('span', { class: 'sess-title', text: label }),
       // 条数与时间放在标题下面一行：菜单里要能一眼看出哪条是刚才在聊的
-      el('span', { class: 'sess-meta', text: [s.count ? `${s.count} 条` : '', rel(s.ts)].filter(Boolean).join(' · ') })),
+      el('span', { class: 'sess-meta', text: [s.count ? tr("{0} 条", s.count) : '', rel(s.ts)].filter(Boolean).join(' · ') })),
       el('button', {
         type: 'button', class: 'sess-del',
-        title: '删除这个会话（不影响论文和笔记）',
-        'aria-label': `删除会话「${label}」`,
+        title: tr("删除这个会话（不影响论文和笔记）"),
+        'aria-label': tr("删除会话「{0}」", label),
         onclick: (e) => { e.stopPropagation(); deleteSession(s.sid || ''); },
       }, iconEl('close', { size: 14 })));
     return row;
   });
-  if (!rows.length) rows.push(el('div', { class: 'sess-empty', text: '还没有会话' }));
+  if (!rows.length) rows.push(el('div', { class: 'sess-empty', text: tr("还没有会话") }));
   menu.replaceChildren(
     el('div', { class: 'sess-head', text: sessionListHeadText() }),
     ...rows,
     el('button', {
       type: 'button', class: 'sess-mem',
-      text: isPaperMemoryOff(state.doc?.docId || '') ? '本篇对话记忆：已关闭（点开启）' : '本篇对话记忆：开（点关闭）',
-      title: '新会话是否参考这篇论文之前会话的摘要；不影响各会话自己的历史',
+      text: isPaperMemoryOff(state.doc?.docId || '') ? tr("本篇对话记忆：已关闭（点开启）") : tr("本篇对话记忆：开（点关闭）"),
+      title: tr("新会话是否参考这篇论文之前会话的摘要；不影响各会话自己的历史"),
       onclick: () => togglePaperMemory(),
     }),
     el('button', {
-      type: 'button', class: 'sess-clear', text: '清空当前会话',
+      type: 'button', class: 'sess-clear', text: tr("清空当前会话"),
       onclick: () => clearCurrentSession(),
     }),
     el('button', {
-      type: 'button', class: 'sess-new', text: '新建会话',
+      type: 'button', class: 'sess-new', text: tr("新建会话"),
       onclick: () => newSession(),
     }),
   );
@@ -7018,9 +7040,9 @@ function togglePaperMemory() {
   renderSessionMenu();
   if (off) {
     state.paperMemory = '';
-    toast('已关闭：新会话不再参考本篇之前的讨论', 'ok', 2200);
+    toast(tr("已关闭：新会话不再参考本篇之前的讨论"), 'ok', 2200);
   } else {
-    loadPaperMemory().then(() => toast('已开启：新会话会参考本篇之前的讨论', 'ok', 2200));
+    loadPaperMemory().then(() => toast(tr("已开启：新会话会参考本篇之前的讨论"), 'ok', 2200));
   }
 }
 
@@ -7031,7 +7053,7 @@ async function toggleSessionMenu() {
   sessionStore.open = true;
   menu.classList.remove('hidden');
   $('#sessBtn')?.setAttribute('aria-expanded', 'true');
-  menu.replaceChildren(el('div', { class: 'sess-empty', text: '读取中…' }));
+  menu.replaceChildren(el('div', { class: 'sess-empty', text: tr("读取中…") }));
   await loadSessionList();
   if (sessionStore.open) renderSessionMenu();
 }
@@ -7041,7 +7063,7 @@ async function toggleSessionMenu() {
 async function switchSession(sid, { force = false } = {}) {
   if (!state.doc) return;
   if (state.busy) {
-    toast('正在生成中，先等它跑完或点停止再切换会话', 'err', 3200);
+    toast(tr("正在生成中，先等它跑完或点停止再切换会话"), 'err', 3200);
     return;
   }
   const docId = state.doc.docId;
@@ -7067,7 +7089,7 @@ async function switchSession(sid, { force = false } = {}) {
   closeSessionMenu();
   renderSessionBar();
   updateSendScope();
-  toast('已切换会话', 'ok', 1600);
+  toast(tr("已切换会话"), 'ok', 1600);
   // 从历史里打开的会话可能刚被 adopt 到当前归属键，当前列表里还没有它：刷新一次，
   // 会话头 / 快速切换才能显示正确标题（否则会短暂显示「（无标题会话）」）。
   const known = !sid || (sessionsGetList() || []).some((r) => r.sid === sid);
@@ -7129,7 +7151,7 @@ async function adoptRowIntoScope(row) {
 async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {}) {
   if (!row || !state.doc) return;
   if (state.busy) {
-    toast('正在生成中，先等它跑完或点停止再切换会话', 'err', 3200);
+    toast(tr("正在生成中，先等它跑完或点停止再切换会话"), 'err', 3200);
     return;
   }
   const sid = String(row.sid || '');
@@ -7152,7 +7174,7 @@ async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {
     try {
       await switchSession(sid, { force: true });
     } catch {
-      toast('这段会话读取失败（文件可能已被删除），历史列表已刷新', 'err', 3800);
+      toast(tr("这段会话读取失败（文件可能已被删除），历史列表已刷新"), 'err', 3800);
       await loadSessionList().catch(() => {});
     }
   };
@@ -7179,7 +7201,7 @@ async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {
   const paper = (state.papers || []).find((p) => String(p.docId) === targetId);
   if (!paper) {
     const where = `papers/${folder ? `${folder}/` : ''}`;
-    toast(`这个会话属于 ${where}，论文已不在书架上，无法直接打开；会话记录仍保留`, 'err', 4600);
+    toast(tr("这个会话属于 {0}，论文已不在书架上，无法直接打开；会话记录仍保留", where), 'err', 4600);
     return;
   }
   // 打开论文会顺带切换文件夹（ensureFolderForDoc）。这里已明确指定了要打开的会话，
@@ -7201,7 +7223,7 @@ async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {
   try {
     await switchSession(sid, { force: true });
   } catch {
-    toast('这段会话读取失败（文件可能已被删除），历史列表已刷新', 'err', 3800);
+    toast(tr("这段会话读取失败（文件可能已被删除），历史列表已刷新"), 'err', 3800);
     await loadSessionList().catch(() => {});
   }
 }
@@ -7211,7 +7233,7 @@ async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {
 async function newSession({ silent = false, fromEntry = false } = {}) {
   if (!state.doc) return;
   if (state.busy) {
-    toast('正在生成中，先等它跑完或点停止再新建会话', 'err', 3200);
+    toast(tr("正在生成中，先等它跑完或点停止再新建会话"), 'err', 3200);
     return;
   }
   const docId = state.doc.docId;
@@ -7238,7 +7260,7 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   closeSessionMenu();
   renderSessionBar();
   updateSendScope();
-  if (!silent) toast('已新建会话', 'ok', 1600);
+  if (!silent) toast(tr("已新建会话"), 'ok', 1600);
   sessionsOnSessionChanged({ refresh: false });
 }
 
@@ -7247,15 +7269,15 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
 async function deleteSession(sid, { confirm: askConfirm = true } = {}) {
   if (!state.doc) return;
   if (state.busy) {
-    toast('正在生成中，先等它跑完或点停止再删除会话', 'err', 3200);
+    toast(tr("正在生成中，先等它跑完或点停止再删除会话"), 'err', 3200);
     return;
   }
   const docId = state.doc.docId;
-  if (askConfirm && !confirm('删除这个会话？论文和笔记不受影响。')) return;
+  if (askConfirm && !confirm(tr("删除这个会话？论文和笔记不受影响。"))) return;
   try {
     const r = await fetch(`/api/session?${sessionQuery(sessionScopeKey(), sid)}`, { method: 'DELETE' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  } catch (e) { toast(`删除失败：${e.message}`, 'err', 4000); return; }
+  } catch (e) { toast(tr("删除失败：{0}", e.message), 'err', 4000); return; }
   if (activeSidFor(docId) === (sid || '')) {
     setActiveSidFor(docId, '');
     clearChatBlock();
@@ -7271,7 +7293,7 @@ async function deleteSession(sid, { confirm: askConfirm = true } = {}) {
   await loadSessionList();
   renderSessionMenu();
   renderSessionBar();
-  toast('会话已删除', 'ok', 1600);
+  toast(tr("会话已删除"), 'ok', 1600);
   sessionsOnSessionChanged({ refresh: false });
 }
 
@@ -7296,11 +7318,11 @@ function renderSources(sources) {
       title: `${s.title || ''}\n${s.url}`,
     });
     // 标成「来源1」而不是「[1]」：论文正文里的 [27] 是它自己的参考文献编号，两者不能混
-    const li = el('li', {}, el('span', { class: 'src-n', text: `[来源${s.number || i + 1}]` }), a);
+    const li = el('li', {}, el('span', { class: 'src-n', text: tr('[来源{0}]', s.number || i + 1) }), a);
     return li;
   }));
   const details = el('details', { class: 'source-details' },
-    el('summary', { text: `来源 ${sources.length} 条` }), list,
+    el('summary', { text: tr("来源 {0} 条", sources.length) }), list,
   );
   if (uiStyle.showSources) details.open = true;
   return details;
@@ -7438,7 +7460,7 @@ function makeDraggable(el, handleSel, { fromAnywhere = false, remember = true } 
     if (e.target.closest('input, textarea')) return;
     if (!cardPos.has(el.id)) return;
     cardPos.delete(el.id);
-    toast('已恢复自动位置');
+    toast(tr("已恢复自动位置"));
   });
 
   if (handleSel) handle.style.cursor = 'grab';
@@ -7477,13 +7499,13 @@ function initOps() {
     menu.replaceChildren();
     menu.append(
       el('div', { class: 'ops-head' },
-        el('div', { class: 'ops-head-title', text: `读懂论文${state.doc ? '' : '（先打开一篇）'}` }),
-        el('div', { class: 'ops-head-note', text: '结果会进右侧问答栏；每一项都能接着追问' })),
+        el('div', { class: 'ops-head-title', text: tr("读懂论文{0}", state.doc ? '' : tr("（先打开一篇）")) }),
+        el('div', { class: 'ops-head-note', text: tr("结果会进右侧问答栏；每一项都能接着追问") })),
     );
 
     const opButton = (op) => {
       const walk = activeWalk();
-      const progress = op.id === 'walk' && walk ? ` · 进行到第 ${walk.step} 步` : '';
+      const progress = op.id === 'walk' && walk ? tr(" · 进行到第 {0} 步", walk.step) : '';
       return el('button', {
         class: 'ops-item',
         type: 'button',
@@ -7497,7 +7519,7 @@ function initOps() {
       },
       el('span', { class: 'ops-icon' }, iconEl(hasIcon(op.icon) ? op.icon : 'ops')),
       el('span', { class: 'ops-text' },
-        el('span', { class: 'ops-title', text: op.title + progress }),
+        el('span', { class: 'ops-title', text: tr(op.title) + progress }),
         el('span', { class: 'ops-hint', text: op.hint })));
     };
     for (const op of TEACHING_OPS) menu.append(opButton(op));
@@ -7539,6 +7561,7 @@ function teachingEntryFor(opId) {
   const docId = state.doc?.docId || '';
   if (!docId) return null;
   return [...state.sessionEntries].reverse().find((x) => x?.block === 'chat' && x?.tag === op.title
+    && (x.retry?.responseLanguage || 'zh-CN') === responseLanguage()
     && (x.status === 'complete' || x.status === 'stopped') && x?.kind !== 'user'
     && (x.docId || '') === docId) || null;
 }
@@ -7638,7 +7661,7 @@ async function loadPaperMemory() {
       if (!r.ok) continue;
       const data = await r.json();
       const summary = String(data?.summary || '').trim();
-      if (summary) parts.push(`· ${s.title || '之前会话'}：${summary.slice(0, 700)}`);
+      if (summary) parts.push(`· ${s.title || tr("之前会话")}：${summary.slice(0, 700)}`);
     }
     if (state.doc?.docId !== docId) return '';
     state.paperMemory = parts.join('\n').slice(0, 1800);
@@ -7785,7 +7808,7 @@ function cleanSessionTitle(raw, paperName = '') {
 
 function teachingCacheKey(docId, opId, suffix = '') {
   // A 线 P3：缓存键统一带系统版本（改提示词 → 自动失效；旧键自然不再命中）
-  return `${docId}:${opId}:@${PROMPT_SYSTEM_VERSION}:p${profileStore.data.revision}${suffix ? `:${suffix}` : ''}`;
+  return `${docId}:${opId}:@${PROMPT_SYSTEM_VERSION}:p${profileStore.data.revision}:${responseLanguage()}${suffix ? `:${suffix}` : ''}`;
 }
 
 function teachingCacheGet(docId, opId) {
@@ -7826,11 +7849,11 @@ async function runTeaching(opId, {
   force = false, retryEntry = null, extraUser = '', ask = '', history = [],
   tag = '', teaching = null,
 } = {}) {
-  if (!await allowEdit('问答')) return;
+  if (!await allowEdit(tr("问答"))) return;
   const op = teachingOpById(opId);
   if (!op) return null;
-  if (!state.doc || !viewer?.pdf) { toast('先打开一篇论文', 'err', 3000); return null; }
-  if (state.busy) { toast('正在生成中，等它跑完或者点停止', 'err', 3000); return null; }
+  if (!state.doc || !viewer?.pdf) { toast(tr("先打开一篇论文"), 'err', 3000); return null; }
+  if (state.busy) { toast(tr("正在生成中，等它跑完或者点停止"), 'err', 3000); return null; }
 
   const docId = state.doc.docId;
   const entryTag = tag || op.title;
@@ -7848,7 +7871,7 @@ async function runTeaching(opId, {
       if (!left) return null;
     } else {
       const existing = opId !== 'visual' ? teachingEntryFor(opId) : null;
-      if (existing && focusExistingResult(existing, autoDirected ? '先给我讲明白' : op.title)) {
+      if (existing && focusExistingResult(existing, autoDirected ? tr("先给我讲明白") : tr(op.title))) {
         return { text: String(existing.text || '') };
       }
     }
@@ -7857,7 +7880,7 @@ async function runTeaching(opId, {
   if (!ensureReady()) return null;
   const entry = retryEntry || addEntry({
     block: 'chat', tag: entryTag, kind: 'assistant',
-    retry: { kind: 'teaching', docId, opId, block: 'chat', ask: String(ask || '').slice(0, 500), extraUser: String(extraUser || '').slice(0, 4000), ...(teaching ? { teaching } : {}) },
+    retry: { kind: 'teaching', docId, opId, responseLanguage: responseLanguage(), block: 'chat', ask: String(ask || '').slice(0, 500), extraUser: String(extraUser || '').slice(0, 4000), ...(teaching ? { teaching } : {}) },
   });
   if (retryEntry) {
     entry.body.replaceChildren();
@@ -7871,7 +7894,7 @@ async function runTeaching(opId, {
   const target = streamTarget(entry.body);
   const ctl = makeController();
   if (!ctl) return null;
-  setBusy(true, `0s · ${entryTag}`);
+  setBusy(true, `0s · ${tr(entryTag)}`);
   let received = '';
   try {
     // 「先给我讲明白」：最近几轮对话算记忆，读者的当前位置、当前页对象也算材料
@@ -7904,7 +7927,7 @@ async function runTeaching(opId, {
       messages,
       signal: ctl.signal,
       onDelta: (piece, all) => { received = all; target.push(all); },
-      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s · ${entryTag}`),
+      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s · ${tr(entryTag)}`),
     });
     if (state.doc?.docId !== docId) return null;
     const split = splitPrtBlock(full);
@@ -7913,7 +7936,7 @@ async function runTeaching(opId, {
     if (state.doc?.docId !== docId) return null;
     target.done(clean);
     finishEntry(entry, clean, {
-      page: teachPage, retryLabel: '重新生成', basis: citationMat.basis,
+      page: teachPage, retryLabel: tr("重新生成"), basis: citationMat.basis,
       onRetry: () => runTeaching(opId, { force: true, retryEntry: entry, extraUser, ask, tag, teaching }),
     });
     renderTeachingExtras(entry, { opId, chips: split.chips, teaching });
@@ -7986,44 +8009,44 @@ function renderTeachingExtras(entry, { opId, chips = [], teaching = null } = {})
   const walk = activeWalk();
 
   if (opId === 'intro') {
-    add('讲简单一点', () => sendTeachingPrompt('上面这一段讲得太细了，请用更简单的话把「这篇论文在做什么」再讲一遍，保留关键页码。'));
-    add('给个例子', () => sendTeachingPrompt('给一个更具体的教学例子，把这篇论文要解决的问题说明白（标明是教学例子，不是论文实验）。'));
-    add('再压短', () => condenseEntry(entry));
-    add('看实验够不够', () => runOperation('evidence', { force: false }), 'deep');
-    add('它有什么局限', () => runOperation('limits', { force: false }), 'deep');
+    add(tr("讲简单一点"), () => sendTeachingPrompt(tr("上面这一段讲得太细了，请用更简单的话把「这篇论文在做什么」再讲一遍，保留关键页码。")));
+    add(tr("给个例子"), () => sendTeachingPrompt(tr("给一个更具体的教学例子，把这篇论文要解决的问题说明白（标明是教学例子，不是论文实验）。")));
+    add(tr("再压短"), () => condenseEntry(entry));
+    add(tr("看实验够不够"), () => runOperation('evidence', { force: false }), 'deep');
+    add(tr("它有什么局限"), () => runOperation('limits', { force: false }), 'deep');
     renderChips(entry, chips.filter((c) => c.op !== 'evidence' && c.op !== 'limits'));
   } else if (opId === 'prereq' && teaching?.kind === 'prereq-item') {
     // 单项前置知识：只留「再讲一次 / 再压短」；没有「讲第 N 项」（这一条就是从清单点进来的）
     renderChips(entry, chips);
-    add('再压短', () => condenseEntry(entry));
+    add(tr("再压短"), () => condenseEntry(entry));
   } else if (opId === 'prereq') {
     // 优先用模型给的 chips；没有再解析回答里的加粗名称兜底
     const chipItems = chips.filter((c) => c.prompt && !c.op);
     if (chipItems.length) renderChips(entry, chipItems);
     else {
       const names = parsePrereqItems(record?.text || '');
-      names.forEach((name, i) => add(`讲第 ${i + 1} 项`, () => runPrereqItem(name, entry)));
+      names.forEach((name, i) => add(tr("讲第 {0} 项", i + 1), () => runPrereqItem(name, entry)));
     }
-    add('大概都懂了，开始读', () => runTeaching('walk', { force: false }));
-    add('再压短', () => condenseEntry(entry));
+    add(tr("大概都懂了，开始读"), () => runTeaching('walk', { force: false }));
+    add(tr("再压短"), () => condenseEntry(entry));
     renderChips(entry, chips.filter((c) => c.op));
   } else if (opId === 'walk') {
-    add('继续下一步', () => continueWalk('continue', entry));
-    add('讲简单一点', () => continueWalk('simpler', entry));
-    add('给个例子', () => continueWalk('example', entry));
-    add('重新规划路线', () => { state.teaching.walk = null; scheduleSessionSave(); runTeaching('walk', { force: true }); });
-    add('再压短', () => condenseEntry(entry));
+    add(tr("继续下一步"), () => continueWalk('continue', entry));
+    add(tr("讲简单一点"), () => continueWalk('simpler', entry));
+    add(tr("给个例子"), () => continueWalk('example', entry));
+    add(tr("重新规划路线"), () => { state.teaching.walk = null; scheduleSessionSave(); runTeaching('walk', { force: true }); });
+    add(tr("再压短"), () => condenseEntry(entry));
     renderChips(entry, chips.filter((c) => c.op));
   } else if (opId === 'visual') {
-    add('换一个对象', () => openVisualPicker({ replace: true }));
-    add('讲简单一点', () => sendTeachingPrompt('刚才这个图表/公式讲得有点难，请用更简单的说法再讲一遍重点。'));
-    add('再压短', () => condenseEntry(entry));
+    add(tr("换一个对象"), () => openVisualPicker({ replace: true }));
+    add(tr("讲简单一点"), () => sendTeachingPrompt(tr("刚才这个图表/公式讲得有点难，请用更简单的说法再讲一遍重点。")));
+    add(tr("再压短"), () => condenseEntry(entry));
     renderChips(entry, chips);
   } else {
     renderChips(entry, chips);
   }
 
-  if (teaching?.name) add('这里没懂', () => reexplainTeaching(teaching), 'dunno');
+  if (teaching?.name) add(tr("这里没懂"), () => reexplainTeaching(teaching), 'dunno');
 }
 
 /* 后台任务不占用前台 busy/stop 状态；失败静默，绝不污染回答或主动确认。 */
@@ -8059,7 +8082,7 @@ function scheduleMemoryExtraction({ question = '', answer = '', history = [], to
 /** 反馈直接走正常追问，由后台从用户的明确原话更新理解边界。 */
 function reexplainTeaching(teaching) {
   state.teaching.current = teaching;
-  sendTeachingPrompt('这里没懂：「' + teaching.name + '」没听懂。请先不往下推进，换一种更基础的说法，从我可能缺的最基础的一步讲起，并给一个最小例子。');
+  sendTeachingPrompt(tr("这里没懂：「") + teaching.name + tr("」没听懂。请先不往下推进，换一种更基础的说法，从我可能缺的最基础的一步讲起，并给一个最小例子。"));
 }
 
 /** 点列表里的某一项：单独讲这一项前置知识 */
@@ -8077,7 +8100,7 @@ async function runPrereqItem(name, listEntry) {
     '【要求】只讲这一项，不要重复整份清单；结尾回到论文原文（章节 + 页码）。',
   ].join('\n');
   await runTeaching('prereq', {
-    force: true, extraUser, ask: `讲第几项：${name}`, tag: `先懂一点：${name}`,
+    force: true, extraUser, ask: tr("讲第几项：{0}", name), tag: `先懂一点：${name}`,
     teaching,
   });
 }
@@ -8093,14 +8116,14 @@ async function condenseEntry(entry) {
   const target = streamTarget(shortEntry.body);
   const ctl = makeController();
   if (!ctl) return;
-  setBusy(true, '0s · 精简版');
+  setBusy(true, tr("0s · 精简版"));
   let received = '';
   try {
     const full = await chat({
       messages: condenseMessages({ answer, docTitle: state.doc?.name }),
       signal: ctl.signal,
       onDelta: (piece, all) => { received = all; target.push(all); },
-      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s · 精简版`),
+      onTick: (ms) => setBusy(true, tr("{0}s · 精简版", (ms / 1000).toFixed(0))),
     });
     target.done(full);
     finishEntry(shortEntry, full, { page: rec?.page || viewer.current, onRetry: () => condenseEntry(entry) });
@@ -8118,17 +8141,17 @@ async function condenseEntry(entry) {
  * 三类操作共用一条续讲链路，只有 system 与用户指令不同；「继续」才推进 step。
  */
 async function continueWalk(kind, entry) {
-  if (!await allowEdit('问答')) return;
+  if (!await allowEdit(tr("问答"))) return;
   if (!state.doc || state.busy) return;
   const walk = activeWalk();
-  if (!walk) { toast('教学进度已失效，请重新点「带我一步步读」', 'err', 3200); return; }
+  if (!walk) { toast(tr("教学进度已失效，请重新点「带我一步步读」"), 'err', 3200); return; }
   if (!ensureReady()) return;
   const nextStep = walk.step + 1;
-  const instruction = kind === 'continue' ? '继续下一步。'
-    : kind === 'example' ? '这一步给一个具体例子，不要推进到下一步。'
-      : '这一步讲简单一点，不要推进到下一步。';
+  const instruction = kind === 'continue' ? tr("继续下一步。")
+    : kind === 'example' ? tr("这一步给一个具体例子，不要推进到下一步。")
+      : tr("这一步讲简单一点，不要推进到下一步。");
   const sys = kind === 'continue' ? WALK_CONTINUE_SYS : walkReteachSys(kind);
-  const tag = kind === 'continue' ? `第 ${nextStep} 步` : (kind === 'example' ? '给个例子' : '讲简单一点');
+  const tag = kind === 'continue' ? tr("第 {0} 步", nextStep) : (kind === 'example' ? tr("给个例子") : tr("讲简单一点"));
   const newEntry = addEntry({ block: 'chat', tag, kind: 'assistant', retry: { kind: 'teaching', docId: state.doc.docId, opId: 'walk', block: 'chat' } });
   const target = streamTarget(newEntry.body);
   const ctl = makeController();
@@ -8136,7 +8159,7 @@ async function continueWalk(kind, entry) {
   setBusy(true, `0s · ${tag}`);
   let received = '';
   try {
-    const ctx = await buildDocContext('继续下一步', '', { forTeaching: true, page: viewer.current });
+    const ctx = await buildDocContext(tr("继续下一步"), '', { forTeaching: true, page: viewer.current });
     const history = walk.messages.map((m) => ({ role: m.role, content: String(m.content || '').slice(0, 12000) }));
     const messages = teachMessages({ sys, ask: instruction }, {
       docTitle: state.doc?.name,
@@ -8189,7 +8212,7 @@ function startWalkSession(cleanText, entry) {
   walk.routeCount = (String(cleanText).match(/^\s*(?:\d+[.、)]|[-*])\s+/gm) || []).length || null;
   // 首轮消息：用户初始任务 + 助手回答（续讲时作为历史发回模型）
   walk.messages = [
-    { role: 'user', content: '带我一步步读这篇论文：先给路线，再开始第一步。' },
+    { role: 'user', content: tr("带我一步步读这篇论文：先给路线，再开始第一步。") },
     { role: 'assistant', content: String(cleanText || '').slice(0, 12000) },
   ];
   state.teaching.walk = walk;
@@ -8209,13 +8232,13 @@ async function ensureDocTextForObjects() {
 }
 
 async function openVisualPicker({ replace = false } = {}) {
-  if (!state.doc || !viewer?.pdf) { toast('先打开一篇论文', 'err', 3000); return; }
+  if (!state.doc || !viewer?.pdf) { toast(tr("先打开一篇论文"), 'err', 3000); return; }
   const menu = $('#opsMenu');
   if (!menu) return;
   menu.classList.remove('hidden');
   menu.replaceChildren(el('div', { class: 'ops-head' },
-    el('div', { class: 'ops-head-title', text: '讲懂图表与公式' }),
-    el('div', { class: 'ops-head-note', text: `正在读取第 ${viewer.current} 页的对象…` })));
+    el('div', { class: 'ops-head-title', text: tr("讲懂图表与公式") }),
+    el('div', { class: 'ops-head-note', text: tr("正在读取第 {0} 页的对象…", viewer.current) })));
   const docText = await ensureDocTextForObjects();
   const page = viewer.current;
   const objects = detectPageObjects(pageTextOf(docText, page), page);
@@ -8223,24 +8246,24 @@ async function openVisualPicker({ replace = false } = {}) {
     const all = collectDocObjects(docText);
     menu.replaceChildren(
       el('div', { class: 'ops-head' },
-        el('div', { class: 'ops-head-title', text: '全文的图表与公式' }),
-        el('div', { class: 'ops-head-note', text: '选一个：会先跳到那一页，再讲懂它' })),
-      el('button', { type: 'button', class: 'ops-back', text: '← 回到当前页', onclick: () => openVisualPicker({ replace: true }) }),
+        el('div', { class: 'ops-head-title', text: tr("全文的图表与公式") }),
+        el('div', { class: 'ops-head-note', text: tr("选一个：会先跳到那一页，再讲懂它") })),
+      el('button', { type: 'button', class: 'ops-back', text: tr("← 回到当前页"), onclick: () => openVisualPicker({ replace: true }) }),
       ...(all.length ? all.map((obj) => el('button', {
         type: 'button', class: 'ops-item ops-obj',
         onclick: () => { hideOpsMenu(); jumpToPageWithHistory(Number(obj.page) || page, { smooth: true }); setTimeout(() => runVisual(obj), 260); },
       },
       el('span', { class: 'ops-icon' }, iconEl(obj.kind === 'table' ? 'chart' : obj.kind === 'formula' ? 'formula' : 'explain')),
       el('span', { class: 'ops-text' },
-        el('span', { class: 'ops-title', text: `${obj.label}${obj.page ? ` · 第 ${obj.page} 页` : ''}` }),
-        el('span', { class: 'ops-hint', text: obj.title || obj.snippet || '查看并解释' })))) : [
-        el('div', { class: 'ops-empty', text: '未找到图表编号。可以截图提问。' }),
+        el('span', { class: 'ops-title', text: `${obj.label}${obj.page ? tr(" · 第 {0} 页", obj.page) : ''}` }),
+        el('span', { class: 'ops-hint', text: obj.title || obj.snippet || tr("查看并解释") })))) : [
+        el('div', { class: 'ops-empty', text: tr("未找到图表编号。可以截图提问。") }),
       ]),
     );
   };
   const head = [
-    el('div', { class: 'ops-head-title', text: '讲懂图表与公式' }),
-    el('div', { class: 'ops-head-note', text: `第 ${page} 页 · 选择要理解的图表或公式` }),
+    el('div', { class: 'ops-head-title', text: tr("讲懂图表与公式") }),
+    el('div', { class: 'ops-head-note', text: tr("第 {0} 页 · 选择要理解的图表或公式", page) }),
   ];
   const items = objects.map((obj) => el('button', {
     type: 'button', class: 'ops-item ops-obj',
@@ -8249,16 +8272,16 @@ async function openVisualPicker({ replace = false } = {}) {
   el('span', { class: 'ops-icon' }, iconEl(obj.kind === 'table' ? 'chart' : obj.kind === 'formula' ? 'formula' : 'explain')),
   el('span', { class: 'ops-text' },
     el('span', { class: 'ops-title', text: obj.label }),
-    el('span', { class: 'ops-hint', text: obj.title || obj.snippet || '查看并解释' }))));
+    el('span', { class: 'ops-hint', text: obj.title || obj.snippet || tr("查看并解释") }))));
   const extras = [
-    el('button', { type: 'button', class: 'ops-back', text: '看全文的图表清单', onclick: fullList }),
+    el('button', { type: 'button', class: 'ops-back', text: tr("看全文的图表清单"), onclick: fullList }),
   ];
   if (!objects.length) {
     menu.replaceChildren(
       el('div', { class: 'ops-head' }, ...head),
-      el('div', { class: 'ops-empty', text: `第 ${page} 页未找到图表或公式编号。` }),
-      el('button', { type: 'button', class: 'ops-back', text: '看全文的图表清单', onclick: fullList }),
-      el('div', { class: 'ops-empty', text: '用输入框旁的截图按钮，选中想问的区域。' }),
+      el('div', { class: 'ops-empty', text: tr("第 {0} 页未找到图表或公式编号。", page) }),
+      el('button', { type: 'button', class: 'ops-back', text: tr("看全文的图表清单"), onclick: fullList }),
+      el('div', { class: 'ops-empty', text: tr("用输入框旁的截图按钮，选中想问的区域。") }),
     );
     return;
   }
@@ -8272,14 +8295,14 @@ async function openVisualPicker({ replace = false } = {}) {
 
 /** 选中对象后真正跑「讲懂图表与公式」 */
 async function runVisual(obj) {
-  if (!state.doc || !viewer?.pdf) { toast('先打开一篇论文', 'err', 3000); return; }
+  if (!state.doc || !viewer?.pdf) { toast(tr("先打开一篇论文"), 'err', 3000); return; }
   const page = Number(obj.page) || viewer.current;
   let pageText = pageTextOf(state.docText || '', page);
   if (!pageText) {
     await ensureDocTextForObjects();
     pageText = pageTextOf(state.docText || '', page);
   }
-  const kindName = obj.kind === 'table' ? '表格' : obj.kind === 'formula' ? '公式' : obj.kind === 'algorithm' ? '算法' : '图';
+  const kindName = obj.kind === 'table' ? tr("表格") : obj.kind === 'formula' ? tr("公式") : obj.kind === 'algorithm' ? tr("算法") : tr("图");
   const extraUser = [
     `【当前页】p.${page}`,
     `【用户选择的对象】${obj.label}（${kindName}）${obj.title ? `：${obj.title}` : ''}`,
@@ -8291,13 +8314,13 @@ async function runVisual(obj) {
   ].join('\n');
   const teaching = { kind: `visual-${obj.kind}`, name: obj.label, boundary: '知道这个图/表/公式在表达什么、怎么看', page };
   await runTeaching('visual', {
-    force: true, extraUser, ask: `讲懂第 ${page} 页的 ${obj.label}`,
+    force: true, extraUser, ask: tr("讲懂第 {0} 页的 {1}", page, obj.label),
     tag: `讲懂：${obj.label}`, teaching,
   });
 }
 
 /** 深入阅读按钮的「后续建议」标签（保留给自动化测试识别） */
-function teachingDeepButtons() { return ['看实验够不够', '它有什么局限']; }
+function teachingDeepButtons() { return [tr("看实验够不够"), tr("它有什么局限")]; }
 
 /**
  * 恢复会话时给教学条目补回按钮（普通 finishEntry 只画「复制 / 填笔记 / 重新生成」）。
@@ -8327,14 +8350,14 @@ function restoreTeachingEntry(entry, row) {
  * 操作不需要各自再实现一遍。
  */
 async function runOperation(opId, { force = false, block = 'chat', retryEntry = null } = {}) {
-  if (!await allowEdit(block === 'translate' ? '译文' : '问答')) return;
+  if (!await allowEdit(block === 'translate' ? tr("译文") : tr("问答"))) return;
   const op = opById(opId);
   if (!op) return null;
-  if (!state.doc || !viewer?.pdf) { toast('先打开一篇论文', 'err', 3000); return null; }
-  if (state.busy) { toast('正在生成中，等它跑完或者点停止', 'err', 3000); return null; }
+  if (!state.doc || !viewer?.pdf) { toast(tr("先打开一篇论文"), 'err', 3000); return null; }
+  if (state.busy) { toast(tr("正在生成中，等它跑完或者点停止"), 'err', 3000); return null; }
 
   const docId = state.doc.docId;
-  const cacheKey = `${docId}:${opId}`;
+  const cacheKey = `${docId}:${opId}:${responseLanguage()}`;
   const hit = state.opsCache.get(cacheKey);
 
   // 已经跑过就直接用缓存，不再花钱（除非点「重新生成」）
@@ -8343,12 +8366,12 @@ async function runOperation(opId, { force = false, block = 'chat', retryEntry = 
       && x?.status === 'complete' && (x.retry?.opId === opId || String(x.text || '') === String(hit.text || '').slice(0, 12000)));
     if (existing) {
       state.opsDone[opId] = true;
-      focusExistingResult(existing, op.title);
+      focusExistingResult(existing, tr(op.title));
       return hit;
     }
     // 旧会话可能只保留了缓存而没有 DOM 记录：复用缓存，不凭空追加第二条结果。
     state.opsDone[opId] = true;
-    toast(`「${op.title}」已恢复，点「重新生成」可以重跑`, 'ok', 3000);
+    toast(tr("「{0}」已恢复，点「重新生成」可以重跑", tr(op.title)), 'ok', 3000);
     return hit;
   }
 
@@ -8367,7 +8390,7 @@ async function runOperation(opId, { force = false, block = 'chat', retryEntry = 
   const target = streamTarget(entry.body);
   const ctl = makeController();
   if (!ctl) return null;
-  setBusy(true, `0s · ${op.title}`);
+  setBusy(true, `0s · ${tr(op.title)}`);
   let received = '';
   try {
     const ctx = await buildDocContext(op.ask, '', { forTeaching: true, page: viewer.current });
@@ -8390,7 +8413,7 @@ async function runOperation(opId, { force = false, block = 'chat', retryEntry = 
       messages,
       signal: ctl.signal,
       onDelta: (piece, all) => { received = all; target.push(all); },
-      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s · ${op.title}`),
+      onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s · ${tr(op.title)}`),
     });
     if (state.doc?.docId !== docId) return null;
     await auditAnswerCitations(full, { availablePages: citationMat.availablePages, scanned });
@@ -8402,9 +8425,9 @@ async function runOperation(opId, { force = false, block = 'chat', retryEntry = 
     finishEntry(entry, full, {
       page: viewer.current,
       basis: citationMat.basis,
-      onAsk: () => { state.quote = { page: viewer.current, text: full.slice(0, 2000) }; toast('已设为引用，直接提问即可', 'ok', 2500); },
+      onAsk: () => { state.quote = { page: viewer.current, text: full.slice(0, 2000) }; toast(tr("已设为引用，直接提问即可"), 'ok', 2500); },
     });
-    entry.acts.append(el('button', { text: '重新生成', onclick: () => runOperation(opId, { force: true, block, retryEntry: entry }) }));
+    entry.acts.append(el('button', { text: tr("重新生成"), onclick: () => runOperation(opId, { force: true, block, retryEntry: entry }) }));
     return { text: full };
   } catch (e) {
     if (state.doc?.docId !== docId) return null;
@@ -8479,9 +8502,9 @@ const REL_STATUS = {
 };
 
 const REL_GROUPS = [
-  { id: 'lib', title: '书架已有' },
-  { id: 'pdf', title: '已找到开放版本' },
-  { id: 'todo', title: '待查 / 未找到' },
+  { id: 'lib', title: tr("书架已有") },
+  { id: 'pdf', title: tr("已找到开放版本") },
+  { id: 'todo', title: tr("待查 / 未找到") },
 ];
 
 /**
@@ -8536,7 +8559,7 @@ function markSlotError(docId, ref, message) {
   if (!docId || ref?.lib) return null;
   const slot = relSlot(docId, ref);
   slot.status = 'error';
-  slot.fail = String(message || '查询失败');
+  slot.fail = String(message || tr("查询失败"));
   return slot;
 }
 
@@ -8581,12 +8604,12 @@ async function buildRelations({ force = false } = {}) {
   // 「解析 vs 解析」的先后：连点两次 ↻ 时，只有最后发起的这次算数
   const mySeq = (state.refsSeq = (state.refsSeq || 0) + 1);
   const parseStale = () => relStale(docId, myGen) || mySeq !== state.refsSeq;
-  relHint('正在解析本文的参考文献…');
+  relHint(tr("正在解析本文的参考文献…"));
   state.refsParsing = docId;
   try {
     const refs = await viewer.findAllReferences((p, total, n) => {
       if (parseStale()) return;
-      relHint(`正在解析参考文献… p.${p}/${total}（已找到 ${n} 条）`);
+      relHint(tr("正在解析参考文献… p.{0}/{1}（已找到 {2} 条）", p, total, n));
     });
     if (parseStale()) return;                     // 代际 + docId + 本次解析序号，三重校验
     const idx = libIndex();
@@ -8678,22 +8701,22 @@ function relItemRow(docId, row) {
 
   if (status === 'local') {
     rr.append(el('button', {
-      class: 'rbtn primary', text: '打开',
+      class: 'rbtn primary', text: tr("打开"),
       onclick: () => openDoc({ name: r.lib.name, url: r.lib.url, docId: r.lib.docId }),
     }));
   } else if (status === 'pdf' || status === 'landing') {
     const link = searchResultUrl(slot?.found);
     if (link) {
-      rr.append(el('a', { class: 'rbtn primary', href: link, target: '_blank', rel: 'noreferrer', text: '打开链接' }));
-      rr.append(el('button', { class: 'rbtn', text: '复制链接', onclick: () => copyText(link) }));
+      rr.append(el('a', { class: 'rbtn primary', href: link, target: '_blank', rel: 'noreferrer', text: tr("打开链接") }));
+      rr.append(el('button', { class: 'rbtn', text: tr("复制链接"), onclick: () => copyText(link) }));
     }
   } else if (status === 'loading') {
-    rr.append(el('button', { class: 'rbtn', text: '查询中…', disabled: true }));
+    rr.append(el('button', { class: 'rbtn', text: tr("查询中…"), disabled: true }));
   } else {
     // idle 未查 / none 没查到 / error 上次失败 —— 三种都能再查一次
     rr.append(el('button', {
       class: 'rbtn',
-      text: status === 'error' ? '重试' : (status === 'none' ? '重查' : '查 PDF'),
+      text: status === 'error' ? tr("重试") : (status === 'none' ? tr("重查") : tr("查 PDF")),
       onclick: () => lookupRefPdf(r),
     }));
   }
@@ -8705,7 +8728,7 @@ function relItemRow(docId, row) {
     dataset: { key: relKey(r), status },
     onclick: (e) => { if (!e.target.closest('button, a')) showRefDetail(r); },
   },
-    el('div', { class: 'rt', title: `${r.text}\n（点这一行看详情）` },
+    el('div', { class: 'rt', title: tr("{0}\n（点这一行看详情）", r.text) },
       el('span', { class: 'rn', text: `[${r.num}]` }),
       document.createTextNode(r.text)),
     rr);
@@ -8740,7 +8763,7 @@ function renderRelations() {
   syncRelTools(view);
 
   if (!state.doc) {
-    sum.textContent = '打开一篇论文后，打开这一块时整理';
+    sum.textContent = tr("打开一篇论文后，打开这一块时整理");
     list.replaceChildren();
     if (cnt) cnt.textContent = '';
     return;
@@ -8748,7 +8771,7 @@ function renderRelations() {
   const docId = state.doc.docId;
   const refs = state.refsDoc === docId ? state.refs : null;
   if (!refs) {
-    sum.textContent = state.relHint || '还没整理，点右上角 ↻';
+    sum.textContent = state.relHint || tr("还没整理，点右上角 ↻");
     list.replaceChildren();
     if (cnt) cnt.textContent = '';
     return;
@@ -8760,10 +8783,10 @@ function renderRelations() {
   for (const row of rows) (byGroup[REL_STATUS[row.status]?.group || 'todo']).push(row);
 
   const bits = [
-    `本文引用 <b>${refs.length}</b> 篇`,
-    `书架已有 <b>${byGroup.lib.length}</b> 篇`,
-    `查到开放版本 <b>${byGroup.pdf.length}</b> 条`,
-    `待查 <b>${byGroup.todo.length}</b> 条`,
+    tr("本文引用 <b>{0}</b> 篇", refs.length),
+    tr("书架已有 <b>{0}</b> 篇", byGroup.lib.length),
+    tr("查到开放版本 <b>{0}</b> 条", byGroup.pdf.length),
+    tr("待查 <b>{0}</b> 条", byGroup.todo.length),
   ];
   // 进度里可能带文件名，一律走 textContent，不进 innerHTML
   if (state.relHint) sum.textContent = state.relHint;
@@ -8775,8 +8798,8 @@ function renderRelations() {
   if (refs.length) {
     const h = el('li', { class: 'rel-cited' });
     h.innerHTML = byGroup.lib.length
-      ? `本文引用了书架里的：${byGroup.lib.map((x) => `<b>${esc(x.ref.lib.name.replace(/\.pdf$/i, ''))}</b>`).join('、')}`
-      : '本文没有引用书架里已有的论文';
+      ? tr("本文引用了书架里的：{0}", byGroup.lib.map((x) => `<b>${esc(x.ref.lib.name.replace(/\.pdf$/i, ''))}</b>`).join('、'))
+      : tr("本文没有引用书架里已有的论文");
     out.push(h);
   }
 
@@ -8791,7 +8814,7 @@ function renderRelations() {
   list.replaceChildren(...out);
 
   if (!refs.length) {
-    list.append(el('li', { class: 'empty', text: '未识别到参考文献。可选中正文中的引用查询；扫描件可截图提问。' }));
+    list.append(el('li', { class: 'empty', text: tr("未识别到参考文献。可选中正文中的引用查询；扫描件可截图提问。") }));
   }
 }
 
@@ -8831,7 +8854,7 @@ function openExternal(target) {
     .catch(() => {
       // 后端打不开时至少把地址给用户，不至于点了一点反馈都没有
       copyText(u);
-      toast('打不开系统浏览器，链接已复制到剪贴板', 'err', 5000);
+      toast(tr("打不开系统浏览器，链接已复制到剪贴板"), 'err', 5000);
     });
   return true;
 }
@@ -8990,7 +9013,7 @@ function attachAnswerImages(messages, images = [], pageImages = [], question = '
     parts.push({ type: 'image_url', image_url: { url: im.dataUrl } });
   });
   pageImages.forEach((im, i) => {
-    const label = String(im.label || (im.page ? `第 ${im.page} 页` : `论文页图 ${i + 1}`)).replace(/[\r\n]/g, ' ').slice(0, 120);
+    const label = String(im.label || (im.page ? tr("第 {0} 页", im.page) : tr("论文页图 {0}", i + 1))).replace(/[\r\n]/g, ' ').slice(0, 120);
     parts.push({ type: 'text', text: `【论文上下文页图 ${i + 1}/${pageImages.length}；${label}】下一张图片是论文页面上下文，不是用户截图。` });
     parts.push({ type: 'image_url', image_url: { url: im.dataUrl } });
   });
@@ -9101,7 +9124,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
   /** 识读当前页，同页的并发调用共享一次识读。 */
   const attachCurrentPageImage = async (page) => {
     const n = Number(page) || 1;
-    if (n < 1 || (numPages && n > numPages)) return { page: n, error: `页码超出范围（1–${numPages || '?'}）` };
+    if (n < 1 || (numPages && n > numPages)) return { page: n, error: tr("页码超出范围（1–{0}）", numPages || '?') };
     try {
       return { page: n, ...await readImage(`current:${n}`, `当前 PDF 第 ${n} 页`, () => viewer.capturePageImage(n, { maxDim: 1400 })) };
     } catch (e) {
@@ -9137,7 +9160,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
         }));
         return {
           query, scope,
-          scopeLabel: scope === 'all' ? '全部论文' : `当前文件夹（${currentFolderPath() || 'papers/'}）`,
+          scopeLabel: scope === 'all' ? tr("全部论文") : `当前文件夹（${currentFolderPath() || 'papers/'}）`,
           papersScanned: result.scanned, papersTotal: result.total, truncated: result.truncated,
           count: hits.length, hits,
           note: hits.length
@@ -9250,8 +9273,8 @@ function createAgentProgress(entry) {
   return {
     onStep(ev) {
       if (!ev) return;
-      if (ev.type === 'round') show('思考中…');
-      else if (ev.type === 'tool_start') show('正在查阅论文材料…');
+      if (ev.type === 'round') show(tr("思考中…"));
+      else if (ev.type === 'tool_start') show(tr("正在查阅论文材料…"));
       else if (ev.type === 'ready') { current?.remove(); current = null; }
       // tool_done / tools：不更新、不逐条列动作；失败也不在过程里刷细节
     },
@@ -9276,7 +9299,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
   const totalTimeoutMs = Math.max(1000, Number(limits.totalTimeoutMs) || 1800000);
   const callTimeoutMs = Math.max(500, Number(limits.callTimeoutMs) || Number(Settings.data.idleMs) || 60000);
   try {
-    const base = askMessages({ ...baseMaterials, availablePages: baseMaterials.availablePages || [], scopeLabel: 'AI 自行读取', objectLabel: objectLabelFor(pending, reading) });
+    const base = askMessages({ ...baseMaterials, availablePages: baseMaterials.availablePages || [], scopeLabel: tr("AI 自行读取"), objectLabel: objectLabelFor(pending, reading) });
     const system = String(base[0]?.content || '');
     const folderLine = `【当前文件夹】${currentFolderPath() || 'papers/'}。默认只读**当前论文 / 当前文件夹**的材料；` +
       '用户要求在本文件夹的 PDF 中查找时，应检索并读取当前文件夹里的其他 PDF；用户指定全部论文或其他文件夹时才扩大范围。';
@@ -9323,8 +9346,8 @@ async function runAgentReadPath({ pending, reading, context, references, sources
       extraImages: runtime.extraImages || [],
       hasPageReadings: runtime.hasPageReadings,
       imagesProvided: true,
-      basis: stats.calls ? `本次依据：AI 自行读取 ${basisPages.length ? `p.${basisPages.join('、')}` : '（未读页）'}（${run.rounds} 轮 / ${stats.calls} 次工具）`
-        : images.length ? `本次依据：本轮 ${images.length} 张截图与对话` : '本次依据：现有材料与对话',
+      basis: stats.calls ? tr("本次依据：AI 自行读取 {0}（{1} 轮 / {2} 次工具）", basisPages.length ? `p.${basisPages.join('、')}` : tr("（未读页）"), run.rounds, stats.calls)
+        : images.length ? tr("本次依据：本轮 {0} 张截图与对话", images.length) : tr("本次依据：现有材料与对话"),
       stats,
     };
   } catch {
@@ -9383,9 +9406,9 @@ function splitNumberedQuestions(input) {
 /** 本次发送范围（整篇 / 当前页 / 联网 / 截图） */
 function scopeLabelFor(pending, { scanned = false, images = [] } = {}) {
   const bits = [];
-  bits.push(pending?.useFullText ? (scanned ? '整篇页图' : '整篇') : (scanned ? '当前页页图' : '当前页'));
-  if (pending?.useWeb) bits.push('联网');
-  if (images?.length) bits.push(`${images.length} 张截图`);
+  bits.push(pending?.useFullText ? (scanned ? tr("整篇页图") : tr("整篇")) : (scanned ? tr("当前页页图") : tr("当前页")));
+  if (pending?.useWeb) bits.push(tr("联网"));
+  if (images?.length) bits.push(tr("{0} 张截图", images.length));
   return bits.join(' + ');
 }
 
@@ -9410,18 +9433,18 @@ function citationMaterialsFor({ docCtx = null, context = '', references = [], sc
   if (!availablePages.length && pending?.firstPage) availablePages.push(Number(pending.firstPage));
   const basis = [];
   const focusPage = pending?.reading?.focus?.page || null;
-  if (pending?.reading?.selection) basis.push(focusPage ? `p.${focusPage} 选区` : '选区');
+  if (pending?.reading?.selection) basis.push(focusPage ? tr("p.{0} 选区", focusPage) : tr("选区"));
   if (context) {
     const p = pending?.firstPage || viewer?.current || viewer?.currentVisiblePage?.() || null;
-    const who = pageRole === 'topic' ? '话题页' : pageRole === 'explicit' ? '指定页' : '当前页';
+    const who = pageRole === 'topic' ? tr("话题页") : pageRole === 'explicit' ? tr("指定页") : tr("当前页");
     basis.push(p ? `${who} p.${p}` : who);
   }
-  if (docCtx?.mode === 'full') basis.push('整篇原文');
-  else if (docCtx?.mode === 'digest') basis.push('整篇索引');
-  if (pageImages.length) basis.push(`p.${pageImages.map((im) => im.page).join('、')} 页图`);
-  if (sources?.length) basis.push(`联网 ${sources.length} 条`);
-  if (images?.length) basis.push(`${images.length} 张截图`);
-  return { availablePages, basis: `本次依据：${basis.length ? basis.join(' / ') : '仅问题本身'}` };
+  if (docCtx?.mode === 'full') basis.push(tr("整篇原文"));
+  else if (docCtx?.mode === 'digest') basis.push(tr("整篇索引"));
+  if (pageImages.length) basis.push(tr("p.{0} 页图", pageImages.map((im) => im.page).join('、')));
+  if (sources?.length) basis.push(tr("联网 {0} 条", sources.length));
+  if (images?.length) basis.push(tr("{0} 张截图", images.length));
+  return { availablePages, basis: tr("本次依据：{0}", basis.length ? basis.join(' / ') : tr("仅问题本身")) };
 }
 
 /** 引用核验：流式结束后算一次，渲染器按 raw 查表降级/拦截 */
@@ -9477,10 +9500,10 @@ function decoratePageRefs(html) {
       if (decision && decision.level === 'drop') return raw;
       const label = b !== null ? `p.${a}–${b}` : `p.${a}`;
       if (decision && decision.level === 'page-only') {
-        const title = `跳到第 ${a} 页（原文片段未核对，不画高亮）`;
+        const title = tr("跳到第 {0} 页（原文片段未核对，不画高亮）", a);
         buttons.push(`<button type="button" class="page-ref page-ref-unverified" data-page="${a}" data-unverified="1" title="${escapeHtml(title)}">${label}</button>`);
       } else {
-        const title = b !== null ? `跳到第 ${a}–${b} 页` : `跳到第 ${a} 页`;
+        const title = b !== null ? tr("跳到第 {0}–{1} 页", a, b) : tr("跳到第 {0} 页", a);
         buttons.push(`<button type="button" class="page-ref" data-page="${a}" title="${escapeHtml(title)}">${label}</button>`);
       }
     }
@@ -9500,16 +9523,16 @@ function decoratePageRefs(html) {
       if (!Number.isInteger(p) || p < 1 || (pages && p > pages)) return raw;
       const label = b ? `p.${a}–${b}` : `p.${a}`;
       if (decision && decision.level === 'page-only') {
-        const title = `跳到第 ${p} 页（原文片段未核对，不画高亮）`;
+        const title = tr("跳到第 {0} 页（原文片段未核对，不画高亮）", p);
         return `<button type="button" class="page-ref page-ref-unverified" data-page="${p}" data-unverified="1" title="${escapeHtml(title)}">${label}</button>`;
       }
       const parts = aPipe ? quoteFragmentParts(frag) : null;
       const fragment = parts?.text || '';
       if (!fragment) {
-        const title = b ? `跳到第 ${a}–${b} 页` : `跳到第 ${a} 页`;
+        const title = b ? tr("跳到第 {0}–{1} 页", a, b) : tr("跳到第 {0} 页", a);
         return `<button type="button" class="page-ref" data-page="${p}" title="${escapeHtml(title)}">${label}</button>`;
       }
-      const title = `跳到第 ${p} 页并定位原文：${fragment.slice(0, 80)}`;
+      const title = tr("跳到第 {0} 页并定位原文：{1}", p, fragment.slice(0, 80));
       // 片段必须跟着显示出来：之前只塞进 title，渲染后正文只剩 p.5，引用的原句被「吞掉」了
       //（用户实测：老师手写答案变成连续四个 p.5）。文字保持可选中复制；
       // 只有前面的页码按钮负责跳页 + 高亮。
@@ -9530,7 +9553,7 @@ function decorateOtherPaperRefs(html) {
     const parts = frag ? quoteFragmentParts(frag) : null;
     const fragment = parts?.text || '';
     const short = escapeHtml(paper.replace(/\.pdf$/i, '').slice(0, 28));
-    const title = `打开《${paper}》并跳到第 ${p} 页${fragment ? `，定位原文：${fragment.slice(0, 80)}` : ''}`;
+    const title = tr("打开《{0}》并跳到第 {1} 页{2}", paper, p, fragment ? tr("，定位原文：{0}", fragment.slice(0, 80)) : '');
     return `<button type="button" class="page-ref other-paper-ref" data-paper="${escapeHtml(paper)}" data-page="${p}"`
       + `${fragment ? ` data-fragment="${escapeHtml(fragment.slice(0, 600))}"` : ''}`
       + ` title="${escapeHtml(title)}">《${short}》p.${p}</button>`
@@ -9541,7 +9564,7 @@ function decorateOtherPaperRefs(html) {
 function renderStreamingMarkdown(text) {
   const mathStart = unfinishedDisplayMathStart(text);
   return mathStart < 0 ? renderMarkdown(text)
-    : `${renderMarkdown(text.slice(0, mathStart))}<span class="thinking">公式生成中…</span>`;
+    : tr("{0}<span class=\"thinking\">公式生成中…</span>", renderMarkdown(text.slice(0, mathStart)));
 }
 
 function renderAnswerHTML(text, view = {}) {
@@ -9555,10 +9578,10 @@ function renderAnswerHTML(text, view = {}) {
   const index = Math.max(0, Math.min(grouped.sections.length - 1, Number(view.index) || 0));
   const cards = grouped.sections.map((body, i) => `<section class="answer-card"${!continuous && i !== index ? ' hidden' : ''}>${render(body)}</section>`).join('');
   return `${render(grouped.intro)}<div class="answer-cards" data-mode="${continuous ? 'continuous' : 'cards'}" data-index="${index}">${cards}`
-    + `<div class="answer-card-controls"><button type="button" data-card-action="prev"${continuous ? ' hidden' : ''}${index === 0 ? ' disabled' : ''}>上一题</button>`
+    + tr("<div class=\"answer-card-controls\"><button type=\"button\" data-card-action=\"prev\"{0}{1}>上一题</button>", continuous ? ' hidden' : '', index === 0 ? ' disabled' : '')
     + `<span class="answer-card-count" aria-live="polite"${continuous ? ' hidden' : ''}>${index + 1} / ${grouped.sections.length}</span>`
-    + `<button type="button" data-card-action="next"${continuous ? ' hidden' : ''}${index === grouped.sections.length - 1 ? ' disabled' : ''}>下一题</button>`
-    + `<button type="button" data-card-action="toggle">切换为${continuous ? '卡片' : '连续'}模式</button></div></div>`;
+    + tr("<button type=\"button\" data-card-action=\"next\"{0}{1}>下一题</button>", continuous ? ' hidden' : '', index === grouped.sections.length - 1 ? ' disabled' : '')
+    + tr("<button type=\"button\" data-card-action=\"toggle\">切换为{0}模式</button></div></div>", continuous ? tr("卡片") : tr("连续"));
 }
 
 /** Keep unchanged rendered nodes in place so selection, focus and reading position survive updates. */
@@ -9632,7 +9655,7 @@ async function openOtherPaperRef(name, page, fragment) {
   const target = papers.find((p) => String(p?.name || '').toLowerCase() === q)
     || papers.find((p) => String(p?.name || '').toLowerCase().includes(q) || String(p?.path || '').toLowerCase().includes(q));
   if (!target) {
-    toast(`找不到《${name}》这篇论文（可能已移出 papers 文件夹）`, 'err', 4500);
+    toast(tr("找不到《{0}》这篇论文（可能已移出 papers 文件夹）", name), 'err', 4500);
     return;
   }
   if (state.doc?.docId !== target.docId) {
@@ -9666,7 +9689,7 @@ function initPageRefs() {
       box.querySelector('[data-card-action="next"]').disabled = index === cards.length - 1;
       box.querySelector('.answer-card-count').hidden = continuous;
       box.querySelector('.answer-card-count').textContent = `${index + 1} / ${cards.length}`;
-      box.querySelector('[data-card-action="toggle"]').textContent = continuous ? '切换为卡片模式' : '切换为连续模式';
+      box.querySelector('[data-card-action="toggle"]').textContent = continuous ? tr("切换为卡片模式") : tr("切换为连续模式");
       return;
     }
     const btn = e.target.closest('.page-ref');
@@ -9733,8 +9756,8 @@ function streamTarget(node) {
       followEl = el('button', {
         type: 'button',
         class: 'ai-follow-btn hidden',
-        title: '继续跟随输出（跳到最新）',
-        'aria-label': '继续跟随输出',
+        title: tr("继续跟随输出（跳到最新）"),
+        'aria-label': tr("继续跟随输出"),
       }, '↓');
       followEl.addEventListener('click', () => {
         following = true;
@@ -9848,7 +9871,7 @@ function ensureReady() {
   const d = Settings.data;
   if (!d.baseURL) { openSettings(); return false; }
   const local = /127\.0\.0\.1|localhost/.test(d.baseURL);
-  if (!d.hasApiKey && !local) { openSettings('先填 API Key'); return false; }
+  if (!d.hasApiKey && !local) { openSettings(tr("先填 API Key")); return false; }
   return true;
 }
 
@@ -9897,10 +9920,11 @@ function abortStream(reason = 'user') {
 
 function setBusy(on, hint = '') {
   state.busy = on;
+  if ($('#answerLanguage')) $('#answerLanguage').disabled = on;
   if (!on) state.activeSendScope = '';
   if (!on) scheduleRemoteSession();
   $('#stopBtn')?.classList.toggle('hidden', !on || !state.abort);
-  if ($('#stopBtn')) $('#stopBtn').title = activeTranslationBatch ? '停止整批翻译' : '停止生成';
+  if ($('#stopBtn')) $('#stopBtn').title = activeTranslationBatch ? tr("停止整批翻译") : tr("停止生成");
   $('#sendBtn').disabled = on;
   $('#clipBtn').disabled = on;
   if (on) setHint(hint);
@@ -9924,8 +9948,8 @@ function renderTranslationBatch() {
   if (!visible) return;
   const done = batch.items.filter((item) => item.status === 'complete').length;
   const running = batch.status === 'running';
-  const title = running ? '翻译中' : batch.status === 'failed' ? '翻译中断' : '已暂停';
-  $('#translationBatchStatus').textContent = `${title} · 已完成 ${done}/${batch.items.length} 项 · ${batch.targetLang}`;
+  const title = running ? tr("翻译中") : batch.status === 'failed' ? tr("翻译中断") : tr("已暂停");
+  $('#translationBatchStatus').textContent = tr("{0} · 已完成 {1}/{2} 项 · {3}", title, done, batch.items.length, batch.targetLang);
   const resume = $('#translationBatchResume');
   const back = $('#translationBatchReturn');
   resume.classList.toggle('hidden', running);
@@ -9964,7 +9988,7 @@ function returnTranslationBatchToDraft(batch) {
 
 async function resumeTranslationBatch(batch) {
   if (state.busy || activeTranslationBatch || batch.docId !== (state.doc?.docId || '')) return;
-  if (!await allowEdit('译文') || !ensureReady()) return;
+  if (!await allowEdit(tr("译文")) || !ensureReady()) return;
   if (state.busy || batch.docId !== (state.doc?.docId || '')) return;
   const openSeq = state.openSeq;
   const isCurrent = () => batch.docId === (state.doc?.docId || '') && state.openSeq === openSeq;
@@ -9976,7 +10000,7 @@ async function resumeTranslationBatch(batch) {
         if (batch.status === 'running') {
           state.abort = batch.controller;
           state.abortReason = '';
-          setBusy(true, '翻译中…');
+          setBusy(true, tr("翻译中…"));
         }
         renderTranslationBatch();
       },
@@ -9995,7 +10019,14 @@ async function resumeTranslationBatch(batch) {
       if (state.abort === batch.controller) { state.abort = null; state.abortReason = ''; }
       setBusy(false);
     }
-    if (batch.status === 'complete' && translationBatches.get(batch.docId) === batch) translationBatches.delete(batch.docId);
+    if (batch.status === 'complete' && translationBatches.get(batch.docId) === batch) {
+      translationBatches.delete(batch.docId);
+    } else if (batch.status === 'failed' && batch.items.length === 1
+      && translationBatches.get(batch.docId) === batch) {
+      // 单项翻译失败时不应留下一个 0/1 队列长期占住输入框。
+      // 原文自动回到草稿，失败结果仍保留自己的「重新翻译」入口；用户可立即改写、删除或发送新内容。
+      returnTranslationBatchToDraft(batch);
+    }
     renderTranslationBatch();
   }
 }
@@ -10029,28 +10060,28 @@ function sendScopeText({ attachments, history, useFullText, useWeb, query, docId
   const quotes = rows.filter((a) => a.kind === 'text');
   const images = rows.filter((a) => a.kind === 'image');
   const parts = [];
-  if (quotes.length) parts.push(`选区 ${quotes.length} 段`);
-  if (images.length) parts.push(`图片 ${images.length} 张`);
+  if (quotes.length) parts.push(tr("选区 {0} 段", quotes.length));
+  if (images.length) parts.push(tr("图片 {0} 张", images.length));
   const hasDoc = !!docId && !!viewer?.pdf && state.doc?.docId === docId && state.viewerDocId === docId;
   if (hasDoc && (contextIncluded === undefined ? true : contextIncluded)) {
-    parts.push(scanPageCount ? `页图 ${scanPageCount} 张`
-      : (quotes.length ? (contextHint || '附近上下文') : (contextHint || '当前页上下文')));
+    parts.push(scanPageCount ? tr("页图 {0} 张", scanPageCount)
+      : (quotes.length ? (contextHint || tr("附近上下文")) : (contextHint || tr("当前页上下文"))));
   }
   if (hasDoc && useFullText) {
     let mode = fullMode;
     if (!mode && state.docTextDoc === docId) {
       mode = !state.docText ? 'unavailable' : (state.docText.length > FULL_LIMIT ? 'digest' : 'full');
     }
-    if (mode === 'full') parts.push('整篇论文');
-    else if (mode === 'digest') parts.push(`整篇论文索引 + ${PICK_K} 段相关原文`);
-    else if (mode === 'scan-digest') parts.push('整篇论文（图片阅读索引）');
-    else if (mode === 'scan-digest') parts.push('整篇论文（图片阅读索引）');
-    else if (mode === 'scan') parts.push('整篇论文（按页图理解）');
-    else if (mode === 'unavailable') parts.push(scanned ? '整篇论文（按页图理解）' : '整篇论文暂不可提取');
-    else parts.push('整篇论文（将增加读取 / 请求量）');
+    if (mode === 'full') parts.push(tr("整篇论文"));
+    else if (mode === 'digest') parts.push(tr("整篇论文索引 + {0} 段相关原文", PICK_K));
+    else if (mode === 'scan-digest') parts.push(tr("整篇论文（图片阅读索引）"));
+    else if (mode === 'scan-digest') parts.push(tr("整篇论文（图片阅读索引）"));
+    else if (mode === 'scan') parts.push(tr("整篇论文（按页图理解）"));
+    else if (mode === 'unavailable') parts.push(scanned ? tr("整篇论文（按页图理解）") : tr("整篇论文暂不可提取"));
+    else parts.push(tr("整篇论文（将增加读取 / 请求量）"));
   }
-  if (useWeb && String(query || '').trim()) parts.push('联网搜索');
-  if (!parts.length && String(query || '').trim()) parts.push('仅当前问题');
+  if (useWeb && String(query || '').trim()) parts.push(tr("联网搜索"));
+  if (!parts.length && String(query || '').trim()) parts.push(tr("仅当前问题"));
   return parts.join(' · ');
 }
 
@@ -10093,7 +10124,7 @@ function translationDraftText(inputText, segments) {
 
 function translationSegmentLabel(part, index) {
   const pages = part.pages?.length ? part.pages : [part.page].filter(Boolean);
-  const location = pages.length ? ` · 第${pages.join('、')}页` : '';
+  const location = pages.length ? tr(" · 第{0}页", pages.join('、')) : '';
   return `${index + 1}${location} · ${part.text.replace(/\s+/g, ' ').slice(0, 90)}`;
 }
 
@@ -10115,16 +10146,16 @@ async function addToTranslate(sel) {
   const draft = composerDrafts.read(owner);
   const segments = [...draft.attachments.filter((a) => a.kind === 'text'), ...pieces];
   if (translationDraftText(draft.text, segments).length > 20000) {
-    toast('合并原文最多 20,000 字；请先翻译已有选段，再加入这一段', 'err', 4200); return;
+    toast(tr("合并原文最多 20,000 字；请先翻译已有选段，再加入这一段"), 'err', 4200); return;
   }
   changeDraftAttachments(owner, (items) => [...items, ...pieces]);
   if (sameComposerOwner(owner, composerOwner)) updateComposerHint();
 }
 
 function renderTranslationSegment(part, index, segments) {
-  const summary = el('summary', { text: translationSegmentLabel(part, index), title: '展开检查或编辑原文' });
+  const summary = el('summary', { text: translationSegmentLabel(part, index), title: tr("展开检查或编辑原文") });
   const owner = { ...composerOwner };
-  const editor = el('textarea', { class: 'at-edit', 'aria-label': `第 ${index + 1} 段原文`, maxlength: 20000,
+  const editor = el('textarea', { class: 'at-edit', 'aria-label': tr("第 {0} 段原文", index + 1), maxlength: 20000,
     oninput: (event) => {
       if (!sameComposerOwner(owner, composerOwner)) return;
       const current = state.attachments.find((item) => item.id === part.id);
@@ -10150,11 +10181,11 @@ function renderTranslationSegment(part, index, segments) {
   };
   return el('details', { class: 'attach text translation-segment', dataset: { id: part.id } }, summary, editor,
     el('div', { class: 'at-tools' },
-      el('button', { type: 'button', class: 'at-up', text: '上移', disabled: state.busy || index === 0,
-        'aria-label': `上移第 ${index + 1} 段`, onclick: () => move(-1) }),
-      el('button', { type: 'button', class: 'at-down', text: '下移', disabled: state.busy || index === segments.length - 1,
-        'aria-label': `下移第 ${index + 1} 段`, onclick: () => move(1) }),
-      el('button', { type: 'button', class: 'at-x', text: '移除', 'aria-label': `移除第 ${index + 1} 段`, onclick: () => removeAttach(part.id) }),
+      el('button', { type: 'button', class: 'at-up', text: tr("上移"), disabled: state.busy || index === 0,
+        'aria-label': tr("上移第 {0} 段", index + 1), onclick: () => move(-1) }),
+      el('button', { type: 'button', class: 'at-down', text: tr("下移"), disabled: state.busy || index === segments.length - 1,
+        'aria-label': tr("下移第 {0} 段", index + 1), onclick: () => move(1) }),
+      el('button', { type: 'button', class: 'at-x', text: tr("移除"), 'aria-label': tr("移除第 {0} 段", index + 1), onclick: () => removeAttach(part.id) }),
     ));
 }
 
@@ -10169,7 +10200,7 @@ function translationCacheScope({ page = null, context = '' } = {}) {
 }
 
 async function doTranslateText({ text, targetLang = '', force = false, task = null, segments = [] } = {}) {
-  if (!task && !await allowEdit('译文')) return;
+  if (!task && !await allowEdit(tr("译文"))) return;
   const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
   if (!raw || (state.busy && !task)) return;
   if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
@@ -10177,7 +10208,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   const docId = state.doc?.docId || '';
   const openSeq = state.openSeq;
   const isCurrent = task?.isCurrent || (() => docId === (state.doc?.docId || '') && openSeq === state.openSeq);
-  if (raw.length > 20000) { toast('合并原文最多 20,000 字，请减少内容后重试；原文已保留', 'err'); return { status: 'failed', error: '原文超过 20,000 字' }; }
+  if (raw.length > 20000) { toast(tr("合并原文最多 20,000 字，请减少内容后重试；原文已保留"), 'err'); return { status: 'failed', error: tr("原文超过 20,000 字") }; }
   const body = raw;
   const sourceSegments = snapshotTranslationSegments(segments);
   const lang = resolveTranslateTarget(targetLang);
@@ -10187,7 +10218,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
     text: body, targetLang: lang, segments: sourceSegments,
   });
   const retry = () => {
-    if (docId !== (state.doc?.docId || '')) { toast('请切回原论文后重新翻译', 'err'); return; }
+    if (docId !== (state.doc?.docId || '')) { toast(tr("请切回原论文后重新翻译"), 'err'); return; }
     return doTranslateText({ text: body, targetLang: lang, force: true, segments: sourceSegments });
   };
   const retryUnfinished = task ? () => translationBatches.get(docId) === task.batch
@@ -10202,7 +10233,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
     if (existing) {
       const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
       row?.scrollIntoView({ block: 'nearest' });
-      toast('这段文字翻过，直接用原结果', 'ok', 1800);
+      toast(tr("这段文字翻过，直接用原结果"), 'ok', 1800);
       return { status: 'complete' };
     }
   }
@@ -10213,8 +10244,8 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   entry.root.classList.add('msg-text-translate');
   if (cached) {
     entry.body.innerHTML = renderMarkdown(cached);
-    finishEntry(entry, cached, { retryLabel: '重新翻译', onRetry: retry });
-    toast('这段文字翻过，直接用缓存', 'ok', 1500);
+    finishEntry(entry, cached, { retryLabel: tr("重新翻译"), onRetry: retry });
+    toast(tr("这段文字翻过，直接用缓存"), 'ok', 1500);
     return { status: 'complete' };
   }
   const target = streamTarget(entry.body);
@@ -10229,19 +10260,19 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
       onDelta: (piece, all) => { if (isCurrent() && !ctl.signal.aborted) { received = all; target.push(all); } },
       onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
     });
-    if (ctl.signal.aborted || !isCurrent()) throw new DOMException('已停止', 'AbortError');
+    if (ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     const clean = full.trim();
     target.done(clean);
     state.cache.set(key, clean);
     // 成功时保持译文块「最纯净」的界面（不摆按钮）；失败/停止时 .acts 非空才显示重试
-    finishEntry(entry, clean, { retryLabel: '重新翻译', onRetry: retry });
+    finishEntry(entry, clean, { retryLabel: tr("重新翻译"), onRetry: retry });
     return { status: 'complete' };
   } catch (e) {
     if (isAbort(e) || ctl.signal.aborted || !isCurrent()) {
       target.done(received);
       const rec = entry.root.__sessionRecord;
       if (rec) { rec.status = 'stopped'; rec.text = received; }
-      finishEntry(entry, received, { status: 'stopped', retryLabel: task ? '继续未完成' : '重新翻译',
+      finishEntry(entry, received, { status: 'stopped', retryLabel: task ? tr("继续未完成") : tr("重新翻译"),
         onRetry: retryUnfinished, restore: !isCurrent() });
       return { status: 'stopped' };
     } else {
@@ -10255,7 +10286,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
 }
 
 async function doTranslate(sel, { targetLang = '', force = false } = {}) {
-  if (!await allowEdit('译文')) return;
+  if (!await allowEdit(tr("译文"))) return;
   if (state.busy) return;
   const text = sel.cleanText || cleanText(sel.text);
   if (!text || !ensureReady()) return;
@@ -10283,7 +10314,7 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
       else {
         const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
         row?.scrollIntoView({ block: 'nearest' });
-        toast('这段翻译已在结果区，直接使用原结果', 'ok', 1800);
+        toast(tr("这段翻译已在结果区，直接使用原结果"), 'ok', 1800);
       }
       return;
     }
@@ -10293,8 +10324,8 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
   if (cached) {
     entry.body.innerHTML = renderMarkdown(cached);
     if (cardBody) cardBody.innerHTML = renderMarkdown(cached);
-    finishEntry(entry, cached, { page: sel.page, retryLabel: '重新翻译', onRetry: retry });
-    toast('这段翻过，直接用缓存', 'ok', 1500);
+    finishEntry(entry, cached, { page: sel.page, retryLabel: tr("重新翻译"), onRetry: retry });
+    toast(tr("这段翻过，直接用缓存"), 'ok', 1500);
     return;
   }
 
@@ -10315,12 +10346,12 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
     target.done(clean);
     cardTarget?.done(clean);
     state.cache.set(key, clean);
-    finishEntry(entry, clean, { page: sel.page, retryLabel: '重新翻译', onRetry: retry });
+    finishEntry(entry, clean, { page: sel.page, retryLabel: tr("重新翻译"), onRetry: retry });
   } catch (e) {
     if (isAbort(e)) {
       target.done(received);
       cardTarget?.done(received);
-      finishEntry(entry, received, { page: sel.page, status: 'stopped', retryLabel: '重新翻译', onRetry: retry });
+      finishEntry(entry, received, { page: sel.page, status: 'stopped', retryLabel: tr("重新翻译"), onRetry: retry });
     }
     else {
       target.fail(errText(e));
@@ -10339,7 +10370,7 @@ function translateShotRetryPayload({ docId, sid, page, label, refId = '', target
     docId: String(docId || ''),
     sid: String(sid || '').slice(0, 40),
     page: page || null,
-    label: String(label || '截图').slice(0, 120),
+    label: String(label || tr("截图")).slice(0, 120),
     targetLang: targetLang === 'English' ? 'English' : (targetLang === '中文' ? '中文' : ''),
     refId: validAttachmentId(refId) ? refId : '',
   };
@@ -10350,22 +10381,22 @@ function translateShotRetryPayload({ docId, sid, page, label, refId = '', target
  * 与划词翻译的区别：选区来自像素而不是文本层，所以图表、公式、扫描页也能翻。
  * 目标语言跟随输入框旁「译成」的选择（用户 m10802：之前写死中文，切 English 也出中文）。
  */
-async function doTranslateShot({ shot, page = null, label = '截图', refId = '', sid = null, docId = '', targetLang = '', task = null } = {}) {
-  if (!task && !await allowEdit('译文')) return;
+async function doTranslateShot({ shot, page = null, label = tr("截图"), refId = '', sid = null, docId = '', targetLang = '', task = null } = {}) {
+  if (!task && !await allowEdit(tr("译文"))) return;
   const dataUrl = String(shot?.dataUrl || '');
   if (!dataUrl || (state.busy && !task)) return;
   if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
   const curDocId = state.doc?.docId || null;
   const targetDoc = String(docId || '') || curDocId;
-  if (!targetDoc) { toast('先打开一篇论文，再框选截图翻译', 'err'); return; }
-  if (targetDoc !== curDocId) { toast('这张截图属于另一篇论文，请切回原论文后重试', 'err', 3200); return; }
+  if (!targetDoc) { toast(tr("先打开一篇论文，再框选截图翻译"), 'err'); return; }
+  if (targetDoc !== curDocId) { toast(tr("这张截图属于另一篇论文，请切回原论文后重试"), 'err', 3200); return; }
   if (!ensureReady()) return;
   if (!task) revealTranslatePanel();
   const openSeq = state.openSeq;
   const isCurrent = task?.isCurrent || (() => targetDoc === (state.doc?.docId || '') && openSeq === state.openSeq);
   const lang = resolveTranslateTarget(targetLang);
   const pageNo = Number(page) > 0 ? Number(page) : null;
-  const label0 = String(label || '截图').slice(0, 120);
+  const label0 = String(label || tr("截图")).slice(0, 120);
   const sessionSid = task ? task.batch.sid : typeof sid === 'string' ? sid : activeSidFor(targetDoc);
   let finalRef = validAttachmentId(refId) ? refId : '';
   const retryOf = (rid) => translateShotRetryPayload({ docId: targetDoc, sid: sessionSid, page: pageNo, label: label0, refId: rid || '', targetLang: lang });
@@ -10399,7 +10430,7 @@ async function doTranslateShot({ shot, page = null, label = '截图', refId = ''
       rec.retry = retryOf(finalRef);
     }
     if (rec && isCurrent()) scheduleSessionSave();
-    if (ctl.signal.aborted || !isCurrent()) throw new DOMException('已停止', 'AbortError');
+    if (ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     warnIfNoVisionModel(true);
     const messages = translateShotMessages({
       page: pageNo, docTitle: state.doc?.name || '', label: label0, targetLang: lang,
@@ -10417,10 +10448,10 @@ async function doTranslateShot({ shot, page = null, label = '截图', refId = ''
       onDelta: (piece, all) => { if (isCurrent() && !ctl.signal.aborted) { received = all; target.push(all); } },
       onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
     });
-    if (ctl.signal.aborted || !isCurrent()) throw new DOMException('已停止', 'AbortError');
+    if (ctl.signal.aborted || !isCurrent()) throw new DOMException(tr("已停止"), 'AbortError');
     const clean = String(full || '').trim();
     target.done(clean);
-    finishEntry(entry, clean, { page: pageNo, retryLabel: '重新翻译', onRetry: () => retryTranslateShot(retryOf(finalRef)) });
+    finishEntry(entry, clean, { page: pageNo, retryLabel: tr("重新翻译"), onRetry: () => retryTranslateShot(retryOf(finalRef)) });
     return { status: 'complete' };
   } catch (e) {
     if (isAbort(e) || ctl.signal.aborted || !isCurrent()) {
@@ -10428,7 +10459,7 @@ async function doTranslateShot({ shot, page = null, label = '截图', refId = ''
       const rec = entry.root.__sessionRecord;
       if (rec) { rec.status = 'stopped'; rec.text = received; }
       finishEntry(entry, received, { page: pageNo, status: 'stopped', onRetry: retryUnfinished,
-        retryLabel: task ? '继续未完成' : '重新翻译', restore: !isCurrent() });
+        retryLabel: task ? tr("继续未完成") : tr("重新翻译"), restore: !isCurrent() });
       return { status: 'stopped' };
     } else {
       target.fail(errText(e));
@@ -10445,23 +10476,23 @@ async function doTranslateShot({ shot, page = null, label = '截图', refId = ''
 function retryTranslateShot(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
   const docId = p.docId || state.doc?.docId || '';
-  if (!docId || docId !== state.doc?.docId) { toast('这张截图属于另一篇论文，请切回原论文后重试', 'err', 3200); return; }
-  if (state.busy) { toast('正在生成中，先等它跑完或点停止再重试', 'err', 3200); return; }
+  if (!docId || docId !== state.doc?.docId) { toast(tr("这张截图属于另一篇论文，请切回原论文后重试"), 'err', 3200); return; }
+  if (state.busy) { toast(tr("正在生成中，先等它跑完或点停止再重试"), 'err', 3200); return; }
   const sid = typeof p.sid === 'string' ? p.sid : activeSidFor(docId);
   const openSeq = state.openSeq;
   const refId = validAttachmentId(p.refId) ? p.refId : '';
-  if (!refId) { toast('截图没有保存下来，请重新框选翻译', 'err', 4200); return; }
+  if (!refId) { toast(tr("截图没有保存下来，请重新框选翻译"), 'err', 4200); return; }
   (async () => {
     const dataUrl = await fetchAttachmentDataUrl(refId, docId, sid);
     if (docId !== state.doc?.docId || openSeq !== state.openSeq) return;
-    if (!dataUrl) { toast('截图文件已不在，请重新框选翻译', 'ok', 5200); return; }
-    await doTranslateShot({ shot: { dataUrl, width: 0, height: 0 }, page: p.page || null, label: p.label || '截图',
+    if (!dataUrl) { toast(tr("截图文件已不在，请重新框选翻译"), 'ok', 5200); return; }
+    await doTranslateShot({ shot: { dataUrl, width: 0, height: 0 }, page: p.page || null, label: p.label || tr("截图"),
       refId, sid, docId, targetLang: p.targetLang || '' });
   })();
 }
 
 async function doExplain(sel) {
-  if (!await allowEdit('问答')) return;
+  if (!await allowEdit(tr("问答"))) return;
   if (state.busy) return;
   const text = sel.cleanText || cleanText(sel.text);
   if (!text || !ensureReady()) return;
@@ -10477,7 +10508,7 @@ async function doExplain(sel) {
   const sid = activeSidFor(docId);
   const history = snapshotHistory(state.history);
   const fromRight = sel.source === 'right';
-  const reading = resolveReadingRequest({ question: '请解释这段内容涉及的知识。', selection: text, page: sel.page, history,
+  const reading = resolveReadingRequest({ question: tr("请解释这段内容涉及的知识。"), selection: text, page: sel.page, history,
     selectionSource: fromRight ? 'right' : '' });
   // 「释」直接写在侧栏里，不弹浮层 —— 解释是要读的，不是瞄一眼的
   revealPanel('chat');
@@ -10493,7 +10524,7 @@ async function doExplain(sel) {
     const context = sel.page ? await viewer.getContextAround(sel.page, text) : '';
     const references = await readingReferences(text);
     if (!readingRequestCurrent({ docId, openSeq, sid })) return;
-    if (ctl.signal.aborted) throw new DOMException('已停止', 'AbortError');
+    if (ctl.signal.aborted) throw new DOMException(tr("已停止"), 'AbortError');
     const citationMat = citationMaterialsFor({
       context, references, scanned: false, pageRole: 'selection',
       pending: { firstPage: sel.page || null, reading },
@@ -10504,7 +10535,7 @@ async function doExplain(sel) {
         selectionSource: fromRight ? 'right' : '',
         profileBlock: askProfileBlock(text + "\n" + context, reading.question, { docId }),
         availablePages: citationMat.availablePages,
-        scopeLabel: '选区', objectLabel: objectLabelFor({ question: reading.question }, reading) }),
+        scopeLabel: tr("选区"), objectLabel: objectLabelFor({ question: reading.question }, reading) }),
       signal: ctl.signal,
       onDelta: (piece, all) => { received = all; target.push(all); },
       onTick: (ms) => setBusy(true, `${(ms / 1000).toFixed(0)}s`),
@@ -10552,7 +10583,7 @@ function addToChat(sel) {
   renderAttachments();
   revealPanel('chat');            // 必须把「问答」切到当前标签，否则输入框是 display:none，focus 白调
   $('#chatInput').focus();
-  flashHint(`已加入问答区（共 ${state.attachments.length} 项，可以继续加）`);
+  flashHint(tr("已加入问答区（共 {0} 项，可以继续加）", state.attachments.length));
 }
 
 /** 把一张截图加进附件 */
@@ -10568,7 +10599,7 @@ function addImageToChat(shot, page, label, { allowBusy = false, owner = null } =
   // 译文面板里框选的截图也留在下方输入框（截图先放框里、再按 Enter 翻译，和问答一致，用户 m05190）
   if (rightPanelInCol(1) !== 'translate') revealPanel('chat');
   $('#chatInput').focus();
-  flashHint(`已加入截图${shot.pages > 1 ? `（跨 ${shot.pages} 页）` : ''}，共 ${state.attachments.length} 项`);
+  flashHint(tr("已加入截图{0}，共 {1} 项", shot.pages > 1 ? tr("（跨 {0} 页）", shot.pages) : '', state.attachments.length));
 }
 
 function removeAttach(id) {
@@ -10648,14 +10679,14 @@ function renderAttachments() {
   row.replaceChildren(...state.attachments.map((a) => segments.includes(a)
     ? renderTranslationSegment(a, segments.indexOf(a), segments) : el('div', { class: `attach ${a.kind}` },
     a.kind === 'image'
-      ? el('img', { src: a.dataUrl, title: '点开看大图', onclick: () => window.open(a.dataUrl, '_blank') })
+      ? el('img', { src: a.dataUrl, title: tr("点开看大图"), onclick: () => window.open(a.dataUrl, '_blank') })
       : null,
     el('span', { class: 'at-meta' },
-      a.page ? el('b', { text: `第${a.page}页` }) : null,
-      a.from === 'right' ? el('b', { class: 'at-from', text: '右栏' }) : null,
-      el('span', { class: 'at-text', text: a.kind === 'image' ? (a.label || '截图') : a.text.replace(/\s+/g, ' ') }),
+      a.page ? el('b', { text: tr("第{0}页", a.page) }) : null,
+      a.from === 'right' ? el('b', { class: 'at-from', text: tr("右栏") }) : null,
+      el('span', { class: 'at-text', text: a.kind === 'image' ? (a.label || tr("截图")) : a.text.replace(/\s+/g, ' ') }),
     ),
-    el('button', { type: 'button', class: 'at-x', title: '移除', onclick: () => removeAttach(a.id) }, iconEl('close', { size: 13 })),
+    el('button', { type: 'button', class: 'at-x', title: tr("移除"), onclick: () => removeAttach(a.id) }, iconEl('close', { size: 13 })),
   )));
   $$('#attachRow .at-x').forEach((button) => { button.disabled = state.busy; });
   updateSendScope();
@@ -10676,7 +10707,7 @@ function showDocLoading(name) {
   if (!box) return;
   const label = String(name || '').replace(/\.pdf$/i, '');
   const text = $('#docLoadingText');
-  if (text) text.textContent = label ? `正在打开《${label}》…` : '正在打开…';
+  if (text) text.textContent = label ? tr("正在打开《{0}》…", label) : tr("正在打开…");
   box.classList.remove('hidden');
   if (docLoadingTimer) clearTimeout(docLoadingTimer);
   // 安全兜底：任何异常路径都不能让这层一直盖着正文
@@ -10692,7 +10723,7 @@ function hideDocLoading() {
 function initComposer() {
   $('#composer').addEventListener('submit', (e) => { e.preventDefault(); send(); });
   syncComposerMode();
-  $('#stopBtn').onclick = () => { abortStream('user'); setHint('正在停止…'); };
+  $('#stopBtn').onclick = () => { abortStream('user'); setHint(tr("正在停止…")); };
   $('#clipBtn').onclick = () => state.startRegion?.();
   // 「清空会话」不再常驻在输入框下面，改挂在会话菜单里。
   // 这里的绑定用可选链，元素不在也不抛。
@@ -10719,14 +10750,14 @@ const fullScopeAvailable = () => !!state.doc && !!viewer?.pdf && state.viewerDoc
 
 
 const SCOPE_RANGES = {
-  current: { key: 'current', short: '当前内容', icon: 'region', full: false, web: false,
-    desc: '只发送你选中的文字；没有选中就发送当前页上下文' },
-  paper: { key: 'paper', short: '整篇论文', icon: 'book', full: true, web: false,
-    desc: '发送整篇论文作为上下文' },
-  web: { key: 'web', short: '联网搜索', icon: 'link', full: false, web: true,
-    desc: '带论文片段的同时联网查一次资料' },
-  'paper-web': { key: 'paper-web', short: '论文 + 联网', icon: 'book', full: true, web: true,
-    desc: '发送整篇论文，并先联网查一次资料' },
+  current: { key: 'current', short: tr("当前内容"), icon: 'region', full: false, web: false,
+    desc: tr("只发送你选中的文字；没有选中就发送当前页上下文") },
+  paper: { key: 'paper', short: tr("整篇论文"), icon: 'book', full: true, web: false,
+    desc: tr("发送整篇论文作为上下文") },
+  web: { key: 'web', short: tr("联网搜索"), icon: 'link', full: false, web: true,
+    desc: tr("带论文片段的同时联网查一次资料") },
+  'paper-web': { key: 'paper-web', short: tr("论文 + 联网"), icon: 'book', full: true, web: true,
+    desc: tr("发送整篇论文，并先联网查一次资料") },
 };
 
 /** 设置页两个偏好 → 初始范围（沿用老存档语义，不改变既有默认「整篇 + 联网」）
@@ -10757,10 +10788,10 @@ function applyRangeForSend(rangeKey) {
 function rangeOverview() {
   const r = SCOPE_RANGES[currentRange()];
   const sel = String(state.selection || '').replace(/\s+/g, ' ').trim();
-  const head = sel ? `选中 ${sel.slice(0, 24)}${sel.length > 24 ? '…' : ''}` : '当前页上下文';
+  const head = sel ? tr("选中 {0}{1}", sel.slice(0, 24), sel.length > 24 ? '…' : '') : tr("当前页上下文");
   const tail = [];
-  if (r.full) tail.push(fullScopeAvailable() ? '整篇论文' : '整篇论文（暂不可提取）');
-  if (r.web) tail.push('联网搜索');
+  if (r.full) tail.push(fullScopeAvailable() ? tr("整篇论文") : tr("整篇论文（暂不可提取）"));
+  if (r.web) tail.push(tr("联网搜索"));
   return tail.length ? `${head} · ${tail.join(' · ')}` : head;
 }
 
@@ -10770,10 +10801,10 @@ function updateComposerHint() {
     const segments = state.attachments.filter((a) => a.kind === 'text');
     const text = translationDraftText($('#chatInput')?.value || '', segments);
     const images = state.attachments.filter((a) => a.kind === 'image').length;
-    $('#sendBtn').title = `${segments.length ? '合并翻译' : '翻译'}（Enter）· Shift+Enter 换行`;
-    $('#chatInput').placeholder = segments.length ? '继续补充原文…' : '粘贴原文…';
-    setHint(segments.length ? `将合并翻译 ${segments.length} 段选文${images ? ` · ${images} 张截图另译` : ''}`
-      : images ? `${images} 张截图${text ? '与输入文字' : ''}将依次翻译` : '');
+    $('#sendBtn').title = tr("{0}（Enter）· Shift+Enter 换行", segments.length ? tr("合并翻译") : tr("翻译"));
+    $('#chatInput').placeholder = segments.length ? tr("继续补充原文…") : tr("粘贴原文…");
+    setHint(segments.length ? tr("将合并翻译 {0} 段选文{1}", segments.length, images ? tr(" · {0} 张截图另译", images) : '')
+      : images ? tr("{0} 张截图{1}将依次翻译", images, text ? tr("与输入文字") : '') : '');
     return;
   }
   setHint(rangeOverview());
@@ -10866,8 +10897,8 @@ function applyDocProfile(docId, profile) {
     // 用户口径（2026-11-02）：右下角只弹问题类提示，扫描件说明属于信息类 → 放到输入框下方的小字里，不弹窗。
     const hasVision = String(Settings.data.visionModel || '').trim();
     setHint(hasVision
-      ? '扫描件 · 将通过图片理解页面'
-      : '扫描件 · 需要支持图片的模型，可在设置中配置');
+      ? tr("扫描件 · 将通过图片理解页面")
+      : tr("扫描件 · 需要支持图片的模型，可在设置中配置"));
   }
 }
 
@@ -10953,7 +10984,7 @@ function warnIfNoVisionModel(hasImages) {
   if (!hasImages || visionWarned) return;
   if (String(Settings.data.visionModel || '').trim()) return;
   visionWarned = true;
-  flashHint('未配置「视觉模型」：图片会交给主模型；如果它不支持读图，请到设置里填一个视觉模型');
+  flashHint(tr("未配置「视觉模型」：图片会交给主模型；如果它不支持读图，请到设置里填一个视觉模型"));
 }
 
 /** 图片阅读索引要转写的页：首 2 页 + 扫描页采样 + 末 2 页 */
@@ -10987,7 +11018,7 @@ async function ensureScanDigest(docId, profile) {
     try {
       for (let i = 0; i < pages.length; i++) {
         if (state.doc?.docId !== myDoc) return '';
-        setHint(`扫描件：正在阅读第 ${pages[i]} 页（${i + 1}/${pages.length}）…`);
+        setHint(tr("扫描件：正在阅读第 {0} 页（{1}/{2}）…", pages[i], i + 1, pages.length));
         const shot = await viewer.capturePageImage(pages[i], { maxDim: 1400 });
         if (state.doc?.docId !== myDoc) return '';
         let text = '';
@@ -11031,12 +11062,12 @@ async function warmDocText() {
     state.docText = '';
     state.docTextDoc = myDoc;
     updateSendScope();
-    setHint('扫描件 · 将通过图片理解页面');
+    setHint(tr("扫描件 · 将通过图片理解页面"));
     return;
   }
   try {
-    setHint('正在读取整篇论文…');
-    const text = await viewer.getAllText((i, n) => setHint(`正在读取整篇论文 ${i}/${n} 页`));
+    setHint(tr("正在读取整篇论文…"));
+    const text = await viewer.getAllText((i, n) => setHint(tr("正在读取整篇论文 {0}/{1} 页", i, n)));
     // 抽的过程中可能已经换了论文：那就丢掉，别把空串记到新文档头上
     if (state.doc?.docId !== myDoc) return;
     state.docText = text;
@@ -11044,10 +11075,10 @@ async function warmDocText() {
     updateSendScope();
     // 用户在读取过程中取消了这次范围，就不要把过时的完成提示写回输入框。
     if (!state.useFullText) return;
-    setHint(text ? '已准备好整篇论文' : '这篇文章抽不出文本（可能是扫描件），改用框选截图问');
+    setHint(text ? tr("已准备好整篇论文") : tr("这篇文章抽不出文本（可能是扫描件），改用框选截图问"));
   } catch {
     if (state.doc?.docId !== myDoc) return;
-    setHint('读取整篇论文失败，这次提问只带选中内容和当前页上下文');
+    setHint(tr("读取整篇论文失败，这次提问只带选中内容和当前页上下文"));
     updateSendScope();
   }
 }
@@ -11065,7 +11096,7 @@ async function buildDocContext(question, selection, { page = null, forTeaching =
   const stillCurrent = () => state.doc?.docId === myDoc && (myOpen == null || state.openSeq === myOpen)
     && (!state.viewerDocId || state.viewerDocId === myDoc);
   const stale = () => {
-    const e = new Error('论文已切换，丢弃旧论文上下文');
+    const e = new Error(tr("论文已切换，丢弃旧论文上下文"));
     e.name = 'AbortError';
     return e;
   };
@@ -11076,9 +11107,9 @@ async function buildDocContext(question, selection, { page = null, forTeaching =
     const targetPage = Number(page) || viewer?.current || 1;
     /* 用户口径（2026-11-02）：扫描件**直接读图**，不再逐页调视觉模型做 OCR 转写
        （旧路径要串行 8 次 AI 调用，第一遍要十几秒到一分钟）。教学类也直接带页图。 */
-    setHint('扫描件：正在准备页面图片…');
+    setHint(tr("扫描件：正在准备页面图片…"));
     const pages = pickScanPages(profile, {
-      question: forTeaching ? '整篇' : question,
+      question: forTeaching ? tr("整篇") : question,
       page: targetPage,
       whole: forTeaching || whole,
     });
@@ -11089,8 +11120,8 @@ async function buildDocContext(question, selection, { page = null, forTeaching =
   }
   // ② 普通文本 PDF：沿用原有逻辑
   if (!state.docText || state.docTextDoc !== myDoc) {
-    setHint('正在读取整篇论文…');
-    const text = await viewer.getAllText((i, n) => setHint(`正在读取整篇论文 ${i}/${n} 页`));
+    setHint(tr("正在读取整篇论文…"));
+    const text = await viewer.getAllText((i, n) => setHint(tr("正在读取整篇论文 {0}/{1} 页", i, n)));
     if (!stillCurrent()) throw stale();
     state.docText = text;
     state.docTextDoc = myDoc;
@@ -11105,12 +11136,12 @@ async function buildDocContext(question, selection, { page = null, forTeaching =
   }
 
   if (!state.docDigest) {
-    setHint('整篇论文较长，正在生成阅读索引（只做一次）…');
+    setHint(tr("整篇论文较长，正在生成阅读索引（只做一次）…"));
     const head = text.slice(0, 240000);           // 索引阶段不必喂到最后一个字
     const digest = await chat({
       messages: digestMessages({ text: head, docTitle: myTitle }),
       signal: state.abort?.signal,
-      onTick: () => setHint('正在生成阅读索引…'),
+      onTick: () => setHint(tr("正在生成阅读索引…")),
     });
     if (!stillCurrent()) throw stale();
     state.docDigest = digest;
@@ -11183,7 +11214,7 @@ async function webSearch(query, signal) {
   if (!String(query || '').trim()) return [];
   const url = `/api/web-search?q=${encodeURIComponent(String(query).slice(0, 200))}&n=6`;
   const r = await fetch(url, { signal });
-  if (!r.ok) throw new Error(`搜索失败 HTTP ${r.status}`);
+  if (!r.ok) throw new Error(tr("搜索失败 HTTP {0}", r.status));
   const j = await r.json();
   return filterWebResults(query, j.results || []).slice(0, 6);
 }
@@ -11205,15 +11236,15 @@ function contextAnchorFor(pageRole, reading) {
 
 /** 发送范围提示里「上下文」那一段的说法，跟所在页来源一致 */
 function contextHintFor(pageRole) {
-  if (pageRole === 'topic') return '话题页上下文';
-  if (pageRole === 'explicit') return '指定页上下文';
-  return '当前页上下文';
+  if (pageRole === 'topic') return tr("话题页上下文");
+  if (pageRole === 'explicit') return tr("指定页上下文");
+  return tr("当前页上下文");
 }
 
 /** 右栏划来的文字没有 PDF 页，语境只能按当前屏幕页算 */
 function scopeContextHintFor(pending) {
   const rightQuote = (pending?.attachments || []).some((a) => a.kind === 'text' && a.from === 'right');
-  return rightQuote ? '当前页上下文' : contextHintFor(pending?.pageRole);
+  return rightQuote ? tr("当前页上下文") : contextHintFor(pending?.pageRole);
 }
 
 async function readingReferences(selection) {
@@ -11291,7 +11322,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   // 恢复的请求可能先于 IndexedDB 草稿到达；先读取原草稿，避免迟到的读取复活已发送附件。
   // 存储不可用时仍允许问答，保存状态继续显示恢复/写入错误。
   if (retryDraft) await loadComposerDraft(retryDraft.owner).catch(() => {});
-  if (!await allowEdit('问答')) return;
+  if (!await allowEdit(tr("问答"))) return;
   if (retryPending && !readingRequestCurrent(retryPending)) return;
   if (!retryPending && !draftUnchanged()) return;
   const ta = $('#chatInput');
@@ -11302,13 +11333,13 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     const text = translationDraftText(inputText, segments);
     const shots = state.attachments.filter((a) => a.kind === 'image');
     if (!text && !shots.length) return;
-    if (text.length > 20000) { toast('合并原文最多 20,000 字，请减少内容后重试；原文已保留', 'err', 4200); return; }
+    if (text.length > 20000) { toast(tr("合并原文最多 20,000 字，请减少内容后重试；原文已保留"), 'err', 4200); return; }
     const docId = state.doc?.docId || '';
-    if (shots.length && !docId) { toast('先打开一篇论文，再翻译截图', 'err'); return; }
-    if (docId && state.viewerDocId !== docId) { flashHint('论文正在打开，请稍候'); return; }
+    if (shots.length && !docId) { toast(tr("先打开一篇论文，再翻译截图"), 'err'); return; }
+    if (docId && state.viewerDocId !== docId) { flashHint(tr("论文正在打开，请稍候")); return; }
     const existing = translationBatches.get(docId);
     if (existing && existing.status !== 'complete') {
-      toast('这批翻译还有未完成项，请先继续，或将它放回草稿', 'err', 3500);
+      toast(tr("这批翻译还有未完成项，请先继续，或将它放回草稿"), 'err', 3500);
       renderTranslationBatch();
       return;
     }
@@ -11329,12 +11360,12 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   // 手动重新生成会提示模型重新审视回答；是否查证仍由模型决定。
   if (pending) pending.forceFull = true;
   if (!pending && state.doc && state.viewerDocId !== state.doc.docId) {
-    flashHint('论文正在打开，请稍候');
+    flashHint(tr("论文正在打开，请稍候"));
     return;
   }
   if (!pending && !ta.value.trim() && !state.attachments.length) return;
   if (pending && pending.docId !== (state.doc?.docId || null)) {
-    flashHint('这条请求属于另一篇论文，请切回原论文后重试');
+    flashHint(tr("这条请求属于另一篇论文，请切回原论文后重试"));
     return;
   }
   if (!ensureReady()) return;
@@ -11352,7 +11383,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     if (!q && !attachments.length) return;
     const quotes = attachments.filter((a) => a.kind === 'text');
     const images = attachments.filter((a) => a.kind === 'image');
-    const quoteText = quotes.map((a) => (a.page ? `[第${a.page}页] ` : '') + a.text).join('\n\n');
+    const quoteText = quotes.map((a) => (a.page ? tr("[第{0}页] ", a.page) : '') + a.text).join('\n\n');
     // 右栏回答 / 译文里划来的文字不是 PDF 原文：不挂页码，也别让模型当成某页原文去对照页图
     const selectionFromRight = quotes.some((a) => a.from === 'right');
     // 「当前页」按屏幕实际显示区域现算（不受滚动节流影响）；附件里的页码优先。
@@ -11367,7 +11398,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         + '再判断读者此刻最需要什么——识读原文、解释含义、翻译，或者说明这一小块在上下文里起什么作用；然后直接给出最有用的回答。'
         + '不要用「截图是什么」「图片里是…」「这一小块位于第 N 页…」这类开场白描述截图本身、版面或位置（判断是内部步骤），除非读者问的就是「这是什么」；直接进入内容。'
         + '不要主动扩写到整篇论文，不要套固定栏目，不要补造截图里看不见的内容；只有截图确实离不开上下文时，才简要引用所在页的一两句话。'
-      : '请解释我加进来的这段内容。');
+      : tr("请解释我加进来的这段内容。"));
     const history = snapshotHistory(state.history);
     const selectionSource = selectionFromRight ? 'right' : '';
     const reading = resolveReadingRequest({ question, selection: quoteText, selectionSource, screenshotCount: images.length,
@@ -11515,7 +11546,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     const context = [...new Set(contextParts.filter(Boolean))].join('\n\n');
     const references = []; // 文献查阅由模型按需选择，发送前不扫描参考文献。
     if (!readingRequestCurrent(pending)) return;
-    if (ctl.signal.aborted) throw new DOMException('已停止', 'AbortError');
+    if (ctl.signal.aborted) throw new DOMException(tr("已停止"), 'AbortError');
     pending.scope = sendScopeText({
       attachments: pending.attachments, history: pending.history,
       useFullText: pending.useFullText && !shotOnly, useWeb: pending.useWeb,
@@ -11529,14 +11560,14 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // 追问直答这类短问题也不联网（省一次搜索往返；需要查资料的问题一般会点名要查/最新/出处）。
     if (pending.useWeb && (!images.length || pending.inputValue.trim() || reading.selection)
       && webQueryFor(pending.question, reading.selection, { reading })) {
-      setHint('正在联网搜索…');
+      setHint(tr("正在联网搜索…"));
       try {
         sources = await readingSources(reading, references, ctl.signal);
-        setHint(sources.length ? `搜到 ${sources.length} 条来源` : '没搜到相关结果，只用论文内容回答');
+        setHint(sources.length ? tr("搜到 {0} 条来源", sources.length) : tr("没搜到相关结果，只用论文内容回答"));
       } catch (e) {
         if (isAbort(e)) throw e;
         sources = [];
-        setHint('联网搜索不可用，这次只用论文内容回答');
+        setHint(tr("联网搜索不可用，这次只用论文内容回答"));
       }
     }
 
@@ -11550,7 +11581,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     let agentRun = null;
     let agentProgress = null;
     if (agentAllowed) {
-      setHint('正在思考…');
+      setHint(tr("正在思考…"));
       // 过程列表：把「正在思考 / 检索 / 读第 N 页 / 命中」一条条列在回答上方（用户要求像 agent 工具一样可见）
       agentProgress = createAgentProgress(pending.entry);
       agentRun = await runAgentReadPath({
@@ -11568,7 +11599,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         onStep: (ev) => {
           if ((ev.type === 'tools' || ev.type === 'round') && received) {
             received = '';
-            target.push('正在查找材料…');
+            target.push(tr("正在查找材料…"));
           }
           agentProgress?.onStep(ev);
         },
@@ -11587,7 +11618,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       if (agentRun) agentProgress?.finish();
       else {
         agentProgress?.remove();
-        if (received) { received = ''; target.push('正在准备回答…'); }
+        if (received) { received = ''; target.push(tr("正在准备回答…")); }
       }
       if (!readingRequestCurrent(pending)) return;
     }
@@ -11601,7 +11632,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
           : { text: '', mode: 'scan', pageImages: shotOnly ? [] : await renderScanPages([pending.firstPage || reading.page || 1]) };
       } catch (e) {
         if (isAbort(e)) throw e;
-        setHint('读取扫描页失败，这次只带已有材料');
+        setHint(tr("读取扫描页失败，这次只带已有材料"));
       }
     } else if (!agentRun && pending.useFullText && !shotOnly && pending.docId) {
       try {
@@ -11609,7 +11640,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       } catch (e) {
         if (isAbort(e)) throw e;
         docCtx = null;
-        setHint('读取整篇论文失败，这次只带选中内容和当前页上下文');
+        setHint(tr("读取整篇论文失败，这次只带选中内容和当前页上下文"));
       }
     }
     pending.scope = sendScopeText({
@@ -11631,7 +11662,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     updateSendScope();
 
     if (!readingRequestCurrent(pending)) return;
-    if (ctl.signal.aborted) throw new DOMException('已停止', 'AbortError');
+    if (ctl.signal.aborted) throw new DOMException(tr("已停止"), 'AbortError');
     // 记忆块：学习画像 + 用户手写长期记忆 + 本篇之前的讨论 + 本次会话滚动摘要。
     // 教学进度（「带我一步步读」）也在这里带上，避免自由追问时模型擅自推进下一步。
     const profileForAsk = askProfileBlock(state.docText || context || '', pending.question,
@@ -11704,13 +11735,13 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     let rawFull;
     if (batch) {
       const answers = batch.questions.map(() => ({ text: '', started: false, done: false }));
-      const renderBatch = () => answers.map((a, i) => `## 第${i + 1}题\n\n${a.text || (a.started ? '正在解答…' : '等待解答…')}`).join('\n\n');
+      const renderBatch = () => answers.map((a, i) => tr("## 第{0}题\n\n{1}", i + 1, a.text || (a.started ? tr("正在解答…") : tr("等待解答…")))).join('\n\n');
       const updateBatch = () => { received = renderBatch(); target.push(received); };
       const startedAt = Date.now();
       let next = 0;
       const worker = async () => {
         while (next < batch.questions.length) {
-          if (ctl.signal.aborted) throw new DOMException('已停止', 'AbortError');
+          if (ctl.signal.aborted) throw new DOMException(tr("已停止"), 'AbortError');
           const i = next++;
           answers[i].started = true;
           updateBatch();
@@ -11718,11 +11749,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
             const oneMessages = [...messages, { role: 'user', content: `本次只解答下面这一道题，完整作答，不要代答其他题。${batch.intro ? `共同要求：${batch.intro}\n` : ''}\n${batch.questions[i]}` }];
             const answer = await chat({ messages: oneMessages, signal: ctl.signal,
               onDelta: (_piece, all) => { answers[i].text = stripAgentMarkup(all); updateBatch(); },
-              onTick: () => setBusy(true, `已完成 ${answers.filter((a) => a.done).length}/${answers.length} 题 · ${((Date.now() - startedAt) / 1000).toFixed(0)}s`) });
-            answers[i].text = stripAgentMarkup(answer).trim() || '这一题未得到回答，请重新生成。';
+              onTick: () => setBusy(true, tr("已完成 {0}/{1} 题 · {2}s", answers.filter((a) => a.done).length, answers.length, ((Date.now() - startedAt) / 1000).toFixed(0))) });
+            answers[i].text = stripAgentMarkup(answer).trim() || tr("这一题未得到回答，请重新生成。");
           } catch (e) {
             if (isAbort(e)) throw e;
-            answers[i].text = `这一题生成失败：${errText(e)}。请重新生成。`;
+            answers[i].text = tr("这一题生成失败：{0}。请重新生成。", errText(e));
           }
           answers[i].done = true;
           updateBatch();
@@ -11751,7 +11782,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     finishEntry(pending.entry, full, {
       page: pending.firstPage, sources: citedSources(full, sources), meta, status: 'complete', basis: citationMat.basis,
       // 用户要求：正常问答的回答下面也要能「重新生成」（复用这条 pending，原地重跑，不新加一轮问答）
-      retryLabel: '重新生成', onRetry: () => send(pending),
+      retryLabel: tr("重新生成"), onRetry: () => send(pending),
     });
     scheduleMemoryExtraction({ question: pending.inputValue, answer: full, history: pending.history,
       topic: reading.selection || reading.focus?.text || '',
@@ -11820,7 +11851,7 @@ function initRegion() {
   /** 进入 / 退出截图模式。输入框边的 ✂ 默认加进问答；译文面板的「截图翻译」传 'translate' */
   const startRegion = (intent) => {
     if (!overlay.classList.contains('hidden')) { stop(); return; }
-    if (!viewer?.pdf) { toast('先打开一篇 PDF', 'err'); return; }
+    if (!viewer?.pdf) { toast(tr("先打开一篇 PDF"), 'err'); return; }
     regionIntent = intent === 'translate' ? 'translate' : 'chat';
     state.regionIntent = regionIntent;
     overlay.classList.remove('hidden');
@@ -11828,8 +11859,8 @@ function initRegion() {
     $('#regionBtn')?.classList.add('on');
     $('#clipBtn')?.classList.add('on');
     hint.innerHTML = regionIntent === 'translate'
-      ? '拖动框住要翻译的区域 · 拖到上下边缘会自动滚动（长截图）· <kbd>Esc</kbd> 取消'
-      : '拖动框住要加进对话的区域 · 拖到上下边缘会自动滚动（长截图）· <kbd>Esc</kbd> 取消';
+      ? tr("拖动框住要翻译的区域 · 拖到上下边缘会自动滚动（长截图）· <kbd>Esc</kbd> 取消")
+      : tr("拖动框住要加进对话的区域 · 拖到上下边缘会自动滚动（长截图）· <kbd>Esc</kbd> 取消");
   };
   state.startRegion = startRegion;
 
@@ -12000,11 +12031,11 @@ async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
     if (hOverlap > 0 && vOverlap > 0) { touchedPage = true; break; }
   }
   if (!rangeSlices.length) {
-    if (touchedPage) toast('选框太窄，往左右多拖一点再松手', 'err', 2600);
+    if (touchedPage) toast(tr("选框太窄，往左右多拖一点再松手"), 'err', 2600);
     return null;
   }
 
-  setBusy(true, '截图中…');
+  setBusy(true, tr("截图中…"));
   try {
     let shot;
     if (rangeSlices.length === 1) {
@@ -12017,10 +12048,10 @@ async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
     if (captureDocId !== state.doc?.docId || captureSeq !== state.openSeq || capturePdf !== viewer.pdf) return null;
     const first = rangeSlices[0].page;
     const last = rangeSlices[rangeSlices.length - 1].page;
-    const label = first === last ? `截图 p.${first}` : `长截图 p.${first}–p.${last}`;
+    const label = first === last ? tr("截图 p.{0}", first) : tr("长截图 p.{0}–p.{1}", first, last);
     return { shot, page: first, label };
   } catch (e) {
-    toast(`截图失败：${e.message}`, 'err', 4000);
+    toast(tr("截图失败：{0}", e.message), 'err', 4000);
     return null;
   } finally {
     setBusy(false);
@@ -12044,7 +12075,7 @@ async function captureToTranslate(topDoc, bottomDoc, leftVp, rightVp) {
   const captured = await captureRegionShot(topDoc, bottomDoc, leftVp, rightVp);
   if (!captured) return;
   addImageToChat(captured.shot, captured.page, captured.label, { allowBusy: true, owner });
-  flashHint('截图已放进输入框 · 按 Enter 翻译截图，可同时输入要翻译的文字');
+  flashHint(tr("截图已放进输入框 · 按 Enter 翻译截图，可同时输入要翻译的文字"));
 }
 
 
@@ -12071,13 +12102,13 @@ function writeSearchScope(scope) {
 function currentSearchScope() { return readSearchScope(); }
 
 function searchScopeLabel(scope) {
-  return scope === 'all' ? '全部论文' : scope === 'folder' ? '当前文件夹' : '本文';
+  return scope === 'all' ? tr("全部论文") : scope === 'folder' ? tr("当前文件夹") : tr("本文");
 }
 
 /** 抽一篇论文的整本页文本（内存缓存，跨论文搜索与 Agent 读取共用）。 */
 async function paperText(paper) {
   const key = String(paper?.docId || paper?.path || paper?.url || '');
-  if (!key) throw new Error('论文缺少标识');
+  if (!key) throw new Error(tr("论文缺少标识"));
   const cached = paperTextCache.get(key);
   if (cached) return cached;
   const got = await readPdfPages(paper.url, { maxPages: 999 });
@@ -12188,8 +12219,8 @@ function initSearch() {
     scopeBox?.querySelectorAll('[data-scope]').forEach((btn) => {
       btn.setAttribute('aria-pressed', btn.dataset.scope === scope ? 'true' : 'false');
     });
-    input.placeholder = scope === 'all' ? '在全部论文里搜索…'
-      : scope === 'folder' ? '在当前文件夹里搜索…' : '在全文里搜索…';
+    input.placeholder = scope === 'all' ? tr("在全部论文里搜索…")
+      : scope === 'folder' ? tr("在当前文件夹里搜索…") : tr("在全文里搜索…");
   };
   syncScope();
   scopeBox?.addEventListener('click', (e) => {
@@ -12233,8 +12264,8 @@ function initSearch() {
     const ready = scope === 'doc'
       ? (!!viewer?.pdf && state.viewerDocId === state.doc?.docId)
       : !!(state.papers || []).length;
-    $('#searchCount').textContent = q ? (ready ? '搜索中…'
-      : (scope === 'doc' ? (state.doc ? '论文正在打开' : '先打开一篇论文') : '还没有可搜索的论文')) : '';
+    $('#searchCount').textContent = q ? (ready ? tr("搜索中…")
+      : (scope === 'doc' ? (state.doc ? tr("论文正在打开") : tr("先打开一篇论文")) : tr("还没有可搜索的论文"))) : '';
     if (q && ready) searchDebounced(q);
   });
 }
@@ -12257,17 +12288,17 @@ async function runSearch(q) {
   }
   if (scope !== 'doc') {
     if (!libraryReady) {
-      count.textContent = '还没有可搜索的论文';
+      count.textContent = tr("还没有可搜索的论文");
       state.search = { hits: [], idx: 0, query: '' };
       $('#searchResults').replaceChildren();
       $('#searchResults').classList.add('hidden');
       return;
     }
-    count.textContent = '搜索中…';
+    count.textContent = tr("搜索中…");
     $('#searchResults').replaceChildren();
     $('#searchResults').classList.add('hidden');
     const result = await searchLibraryPages(q, scope, {
-      onProgress: (i, total) => { if (my === searchToken) count.textContent = `搜索中 ${Math.min(i + 1, total)}/${total} 篇…`; },
+      onProgress: (i, total) => { if (my === searchToken) count.textContent = tr("搜索中 {0}/{1} 篇…", Math.min(i + 1, total), total); },
     });
     if (my !== searchToken) return;
     state.search = { hits: result.hits, idx: 0, query: q, scope };
@@ -12275,25 +12306,25 @@ async function runSearch(q) {
     updateSearchCount();
     // 文件夹/全部范围只列出结果，不自动跳转：命中的论文可能还没打开，
     // 用户点某一条时才切论文并翻页（见 showSearchHit）。
-    if (result.truncated) count.textContent = `只搜了 ${result.scanned}/${result.total} 篇（结果较多）`;
-    else if (!result.hits.length) count.textContent = `无结果（已搜 ${result.scanned} 篇）`;
+    if (result.truncated) count.textContent = tr("只搜了 {0}/{1} 篇（结果较多）", result.scanned, result.total);
+    else if (!result.hits.length) count.textContent = tr("无结果（已搜 {0} 篇）", result.scanned);
     return;
   }
   if (!docReady) {
-    count.textContent = state.doc ? '论文正在打开' : '先打开一篇论文';
+    count.textContent = state.doc ? tr("论文正在打开") : tr("先打开一篇论文");
     state.search = { hits: [], idx: 0, query: '' };
     $('#searchResults').replaceChildren();
     $('#searchResults').classList.add('hidden');
     return;
   }
-  count.textContent = '搜索中…';
+  count.textContent = tr("搜索中…");
   $('#searchResults').replaceChildren();
   $('#searchResults').classList.add('hidden');
   const docId = state.doc?.docId;
   let result;
   try { result = await viewer.search(q); }
   catch (e) {
-    if (my === searchToken && docId === state.doc?.docId) count.textContent = `搜索失败：${e.message}`;
+    if (my === searchToken && docId === state.doc?.docId) count.textContent = tr("搜索失败：{0}", e.message);
     return;
   }
   // 慢的旧搜索后返回不能覆盖新结果；换文档后的结果直接丢弃
@@ -12301,7 +12332,7 @@ async function runSearch(q) {
   state.search = { hits: result.hits, idx: 0, query: q, scope: 'doc' };
   renderSearchResults();
   if (result.hits.length) await showSearchHit(0, true);
-  else count.textContent = '无结果';
+  else count.textContent = tr("无结果");
 }
 
 function renderSearchResults() {
@@ -12313,7 +12344,7 @@ function renderSearchResults() {
   hits.forEach((hit, i) => {
     if (hit.docId && hit.docId !== lastDoc) {
       lastDoc = hit.docId;
-      results.append(el('div', { class: 'search-result-doc', text: hit.docName || '未命名论文' }));
+      results.append(el('div', { class: 'search-result-doc', text: hit.docName || tr("未命名论文") }));
     }
     const button = el('button', {
       type: 'button', class: `search-result${i === state.search.idx ? ' current' : ''}`,
@@ -12335,7 +12366,7 @@ function updateSearchCount() {
   if (!hit) return;
   const doc = scope && scope !== 'doc' && hit.docName
     ? ` · ${String(hit.docName).replace(/\.pdf$/i, '').slice(0, 14)}` : '';
-  $('#searchCount').textContent = `${idx + 1}/${hits.length} 条${doc} · p.${hit.page}`;
+  $('#searchCount').textContent = tr("{0}/{1} 条{2} · p.{3}", idx + 1, hits.length, doc, hit.page);
 }
 
 async function showSearchHit(index, record = true) {
@@ -12393,7 +12424,7 @@ const ENDPOINT_SHORT = {
   'https://api.openai.com/v1': 'api.openai.com',
   'https://openrouter.ai/api/v1': 'openrouter.ai',
   'https://api.siliconflow.cn/v1': 'siliconflow.cn',
-  'http://127.0.0.1:11434/v1': '本地 Ollama',
+  'http://127.0.0.1:11434/v1': tr("本地 Ollama"),
 };
 
 let settingsProfileId = '';
@@ -12402,7 +12433,7 @@ let settingsOperation = '';
 let settingsOpening = false;
 let settingsTestAbort = null;
 const MODEL_INPUTS = ['cfgProfileName', 'cfgBaseURL', 'cfgApiKey', 'cfgModel', 'cfgVisionModel'];
-const profileLabel = (p) => p?.name || p?.model || '未命名配置';
+const profileLabel = (p) => p?.name || p?.model || tr("未命名配置");
 const modelDraft = () => JSON.stringify(MODEL_INPUTS.map(id => $(`#${id}`).value));
 const modelDraftDirty = () => modelDraft() !== settingsModelBaseline;
 
@@ -12416,10 +12447,10 @@ function updateModelControls() {
   const active = (d.modelProfiles || []).find(p => p.id === d.activeProfile);
   const dirty = modelDraftDirty();
   const current = !!settingsProfileId && settingsProfileId === d.activeProfile;
-  $('#profileState').textContent = active ? `当前使用：${profileLabel(active)}${active.name && active.name !== active.model ? ` · ${active.model}` : ''}` : '当前未启用模型配置';
-  $('#profileHint').textContent = !settingsProfileId ? '填写后保存，即可启用。'
-    : dirty ? '请先保存修改，再测试连接。'
-    : !current ? '保存并使用后切换到此配置。' : '测试连接会发送一条简短请求。';
+  $('#profileState').textContent = active ? tr("当前使用：{0}{1}", profileLabel(active), active.name && active.name !== active.model ? ` · ${active.model}` : '') : tr("当前未启用模型配置");
+  $('#profileHint').textContent = !settingsProfileId ? tr("填写后保存，即可启用。")
+    : dirty ? tr("请先保存修改，再测试连接。")
+    : !current ? tr("保存并使用后切换到此配置。") : tr("测试连接会发送一条简短请求。");
   MODEL_INPUTS.forEach(id => { $(`#${id}`).disabled = !!settingsOperation; });
   $('#cfgProfile').disabled = !!settingsOperation;
   $('#newProfile').disabled = !!settingsOperation;
@@ -12439,17 +12470,17 @@ function fillModelSettings(id = Settings.data.activeProfile || '') {
     option.value = p.id;
     let endpoint = ENDPOINT_SHORT[p.baseURL] || p.baseURL;
     try { endpoint = ENDPOINT_SHORT[p.baseURL] || new URL(p.baseURL).host; } catch { /* legacy value */ }
-    option.textContent = `${profileLabel(p)} · ${endpoint}${p.id === d.activeProfile ? '（当前使用）' : ''}`;
+    option.textContent = `${profileLabel(p)} · ${endpoint}${p.id === d.activeProfile ? tr("（当前使用）") : ''}`;
     return option;
   }));
-  if (!selected) profiles.add(new Option('新配置（未保存）', ''));
+  if (!selected) profiles.add(new Option(tr("新配置（未保存）"), ''));
   profiles.value = settingsProfileId;
   $('#cfgProfileName').value = selected?.name || '';
   $('#cfgModel').value = selected?.model || '';
   $('#cfgVisionModel').value = selected?.visionModel || '';
   $('#cfgBaseURL').value = selected?.baseURL || '';
   $('#cfgApiKey').value = '';
-  $('#cfgApiKey').placeholder = selected?.hasApiKey ? '此配置已保存密钥，留空则保留' : '填写此配置的密钥；本地免密接口可留空';
+  $('#cfgApiKey').placeholder = selected?.hasApiKey ? tr("此配置已保存密钥，留空则保留") : tr("填写此配置的密钥；本地免密接口可留空");
   settingsModelBaseline = modelDraft();
   updateModelControls();
 }
@@ -12507,22 +12538,22 @@ function updateSessionSettingHints() {
   };
   const mode = readSessionScopeMode();
   set('settScopeHint', mode === 'paper'
-    ? '每篇论文保留独立对话，切换论文时接上各自的进度。'
+    ? tr("每篇论文保留独立对话，切换论文时接上各自的进度。")
     : mode === 'global'
-      ? '所有论文共享对话，适合跨论文、跨文件夹讨论。'
-      : '同一文件夹内换论文时继续当前对话，适合按课题阅读。');
+      ? tr("所有论文共享对话，适合跨论文、跨文件夹讨论。")
+      : tr("同一文件夹内换论文时继续当前对话，适合按课题阅读。"));
   set('settTitleHint', aiTitleEnabled()
-    ? '首次回答后生成标题，会额外请求一次模型；手动修改的标题会保留。'
-    : '使用首条问题作为标题，随时可以重命名。');
+    ? tr("首次回答后生成标题，会额外请求一次模型；手动修改的标题会保留。")
+    : tr("使用首条问题作为标题，随时可以重命名。"));
   const enter = sessionsGetEnterMode();
   set('settEnterHint', enter === 'resume'
-    ? '自动继续最近会话；超过 7 天或 60 条消息时，先由你选择。'
+    ? tr("自动继续最近会话；超过 7 天或 60 条消息时，先由你选择。")
     : enter === 'new'
-      ? '打开文件夹时开始新会话，原来的对话保留在历史中。'
-      : '打开文件夹时选择继续或新建；同一文件夹内换论文不再询问。');
+      ? tr("打开文件夹时开始新会话，原来的对话保留在历史中。")
+      : tr("打开文件夹时选择继续或新建；同一文件夹内换论文不再询问。"));
   set('settHistoryHint', sessionsGetHistoryMode() === 'time'
-    ? '最近聊过的会话排在前面。'
-    : '按论文整理会话，便于回到对应的阅读内容。');
+    ? tr("最近聊过的会话排在前面。")
+    : tr("按论文整理会话，便于回到对应的阅读内容。"));
 }
 
 /** 切换「换论文时对话怎么接」：当前这段对话先按旧归属存盘，再把同一个 sid 接到新归属方式下，
@@ -12550,9 +12581,9 @@ async function applySessionScopeMode(mode) {
     // 源文件不存在（例如刚启动还没落盘）时才退回按内存内容保存一次
     if (!copied) { try { await saveSessionNow(); } catch { /* 同上 */ } }
   }
-  const label = next === 'global' ? '全局共用（所有论文接同一段对话）'
-    : (next === 'paper' ? '按论文（每篇论文各接自己那一段）' : '按文件夹（同文件夹里的论文接同一段）');
-  toast(`换论文时对话怎么接：${label}`, 'ok', 2600);
+  const label = next === 'global' ? tr("全局共用（所有论文接同一段对话）")
+    : (next === 'paper' ? tr("按论文（每篇论文各接自己那一段）") : tr("按文件夹（同文件夹里的论文接同一段）"));
+  toast(tr("换论文时对话怎么接：{0}", label), 'ok', 2600);
   loadSessionList().then(() => {
     renderSessionMenu();
     renderSessionBar();
@@ -12590,7 +12621,7 @@ function resetAppearanceEffects() {
   saveUi();
   fillUiSettings();
   if (uiStyle.theme === 'dark') refreshNightInk();
-  toast('已恢复默认效果', 'ok');
+  toast(tr("已恢复默认效果"), 'ok');
 }
 
 function updateUiRangeLabels() {
@@ -12610,7 +12641,7 @@ function updateUiRangeLabels() {
     /* 1.00× 时直接把「默认」写出来 —— 用户调完想知道自己有没有调过头，
        看这个字比看数字快。 */
     const v = Number(zoom.value);
-    $('#uiZoomSpeedValue').textContent = Math.abs(v - 1) < 0.001 ? '1.0×（默认）' : `${v.toFixed(2)}×`;
+    $('#uiZoomSpeedValue').textContent = Math.abs(v - 1) < 0.001 ? tr("1.0×（默认）") : `${v.toFixed(2)}×`;
   }
 }
 
@@ -12626,7 +12657,7 @@ function setReadingFontSize(px) {
   const range = $('#uiFontSize');
   if (range) range.value = String(next);
   updateUiRangeLabels();
-  toast(`阅读字号 ${next}px`, '', 1600);
+  toast(tr("阅读字号 {0}px", next), '', 1600);
 }
 
 /** 通用设置即时生效；玻璃滑杆另走轻量样式更新。没有界面入口的旧字段保留原值。 */
@@ -12695,11 +12726,11 @@ function resetSettings() {
   fillUiSettings();
   resetPanels();          // 面板显隐 / 顺序 / 两侧栏宽度 / 收起意图
   saveUi();
-  toast('已重置外观与阅读偏好，模型配置和阅读记录已保留', 'ok');
+  toast(tr("已重置外观与阅读偏好，模型配置和阅读记录已保留"), 'ok');
 }
 
 const SETTINGS_PANE_KEY = 'reader.settings.pane';
-const SETTINGS_PANES = ['model', 'appearance', 'behavior', 'session', 'memory'];
+const SETTINGS_PANES = ['language', 'model', 'appearance', 'behavior', 'session', 'memory'];
 
 /**
  * 设置弹窗两栏切换：左列竖排分类，右侧只显示对应面板。
@@ -12719,7 +12750,7 @@ function showSettingsPane(name) {
   });
   const box = document.querySelector('.settings-box');
   if (box) box.dataset.settingsPane = pane;
-  $('#saveSettings').textContent = pane === 'model' ? '保存并使用' : '保存';
+  $('#saveSettings').textContent = pane === 'model' ? tr("保存并使用") : tr("保存");
   try { localStorage.setItem(SETTINGS_PANE_KEY, pane); } catch (e) { /* 隐私模式写不了，忽略 */ }
 }
 
@@ -12745,16 +12776,60 @@ async function openSettings(hint) {
 function closeSettings() {
   if (settingsOperation && settingsOperation !== 'test') return;
   if ((modelDraftDirty() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || ''))
-    && !window.confirm('有尚未保存的修改，确定放弃并关闭设置吗？')) return;
+    && !window.confirm(tr("有尚未保存的修改，确定放弃并关闭设置吗？"))) return;
   settingsTestAbort?.abort();
   $('#settingsModal').classList.add('hidden');
   $('#testResult').textContent = '';
 }
 
+async function changeInterfaceLanguage(next) {
+  if (!['zh-CN', 'en'].includes(next) || next === locale) return;
+  if (state.busy || settingsOperation || remoteSessionApplying) {
+    toast(tr('请先停止生成，再切换界面语言。'), 'err');
+    return;
+  }
+  if (modelDraftDirty() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || '')
+    || !$('#noteBox').classList.contains('hidden')) {
+    toast(tr('请先保存正在编辑的设置或笔记，再切换语言。'), 'err');
+    return;
+  }
+  $('#applyLanguage').disabled = true;
+  try {
+    persistSession.cancel?.();
+    saveProgress.cancel?.();
+    if (sessionSaveInFlight) await sessionSaveInFlight;
+    await flushComposerDrafts();
+    await saveSessionNow();
+    await saveProgressNow({ silent: true });
+    tabsPersist();
+    sessionStorage.setItem('reader.languageResume', JSON.stringify({ docId: state.doc?.docId,
+      sid: state.doc ? activeSidFor(state.doc.docId) : '', entryMode: sessionsIsEntryMode(), page: viewer?.current }));
+    sessionStorage.setItem('reader.reopenLanguageSettings', '1');
+    localStorage.setItem(LOCALE_KEY, next);
+    location.reload();
+  } catch (error) {
+    $('#applyLanguage').disabled = false;
+    toast(tr('语言切换失败：{0}', error.message), 'err');
+  }
+}
+
 function initSettings() {
+  $('#uiLanguage').value = locale;
+  $('#answerLanguage').value = localStorage.getItem(RESPONSE_LANGUAGE_KEY) || 'auto';
+  $('#answerLanguage').addEventListener('change', (event) => {
+    localStorage.setItem(RESPONSE_LANGUAGE_KEY, event.target.value);
+  });
+  $('#applyLanguage').onclick = () => changeInterfaceLanguage($('#uiLanguage').value);
+  window.addEventListener('storage', (event) => {
+    if (event.key === LOCALE_KEY && storedLocale() !== locale) {
+      $('#uiLanguage').value = storedLocale();
+      toastAction(tr('其他窗口已更改语言，刷新此窗口即可应用。'), tr('应用语言'), () => changeInterfaceLanguage(storedLocale()), '', 30000);
+    }
+    if (event.key === RESPONSE_LANGUAGE_KEY) $('#answerLanguage').value = event.newValue || 'auto';
+  });
   $('#cfgProfile').onchange = () => {
     const select = $('#cfgProfile');
-    if (modelDraftDirty() && !window.confirm('当前配置有未保存的修改，确定放弃并查看其他配置吗？')) {
+    if (modelDraftDirty() && !window.confirm(tr("当前配置有未保存的修改，确定放弃并查看其他配置吗？"))) {
       select.value = settingsProfileId;
       return;
     }
@@ -12763,7 +12838,7 @@ function initSettings() {
   };
   MODEL_INPUTS.forEach(id => $(`#${id}`).addEventListener('input', () => { settingsStatus(); updateModelControls(); }));
   $('#newProfile').onclick = () => {
-    if (modelDraftDirty() && !window.confirm('当前配置有未保存的修改，确定放弃并新增配置吗？')) return;
+    if (modelDraftDirty() && !window.confirm(tr("当前配置有未保存的修改，确定放弃并新增配置吗？"))) return;
     fillModelSettings('');
     settingsStatus();
     $('#cfgProfileName').focus();
@@ -12776,16 +12851,16 @@ function initSettings() {
     if (!selected) return;
     const remaining = list.filter(p => p.id !== settingsProfileId);
     const next = remaining[Math.min(index, remaining.length - 1)];
-    const effect = settingsProfileId !== Settings.data.activeProfile ? '当前正在使用的配置不受影响。'
-      : next ? `删除后将使用“${profileLabel(next)}”。` : '这是最后一份配置。删除后需重新配置才能使用 AI。';
-    if (!window.confirm(`删除配置“${profileLabel(selected)}”及其已保存的密钥？\n${effect}${modelDraftDirty() ? '\n未保存的修改也会丢弃。' : ''}`)) return;
+    const effect = settingsProfileId !== Settings.data.activeProfile ? tr("当前正在使用的配置不受影响。")
+      : next ? tr("删除后将使用“{0}”。", profileLabel(next)) : tr("这是最后一份配置。删除后需重新配置才能使用 AI。");
+    if (!window.confirm(tr("删除配置“{0}”及其已保存的密钥？\n{1}{2}", profileLabel(selected), effect, modelDraftDirty() ? tr("\n未保存的修改也会丢弃。") : ''))) return;
     settingsOperation = 'delete';
     updateModelControls();
     try {
       await Settings.save({ profileAction: 'delete', profileId: settingsProfileId });
       fillModelSettings();
       checkConfigWarning();
-      settingsStatus('配置已删除。', 'ok');
+      settingsStatus(tr("配置已删除。"), 'ok');
     } catch (e) {
       settingsStatus(e.message, 'err');
     } finally { settingsOperation = ''; updateModelControls(); }
@@ -12795,12 +12870,12 @@ function initSettings() {
     settingsOperation = 'test';
     const ctl = settingsTestAbort = new AbortController();
     updateModelControls();
-    settingsStatus('正在测试当前配置…');
+    settingsStatus(tr("正在测试当前配置…"));
     try {
       const r = await testConnection({ signal: ctl.signal });
-      if (!ctl.signal.aborted) settingsStatus(`连接正常 · ${r.model} · ${r.ms}ms`, 'ok');
+      if (!ctl.signal.aborted) settingsStatus(tr("连接正常 · {0} · {1}ms", r.model, r.ms), 'ok');
     } catch (e) {
-      if (!ctl.signal.aborted) settingsStatus(`连接测试失败：${e.message}。配置仍已保存，可修改后重试。`, 'err');
+      if (!ctl.signal.aborted) settingsStatus(tr("连接测试失败：{0}。配置仍已保存，可修改后重试。", e.message), 'err');
     } finally { settingsTestAbort = null; settingsOperation = ''; updateModelControls(); }
   };
   $('#settingsBtn').onclick = () => openSettings();
@@ -12840,7 +12915,7 @@ function initSettings() {
     setAiTitleEnabled(on);
     updateSessionSettingHints();
     if (on) scheduleSessionTitle();
-    toast(on ? '已开启 AI 自动标题' : '已关闭 AI 自动标题，标题沿用首条问题', 'ok', 2400);
+    toast(on ? tr("已开启 AI 自动标题") : tr("已关闭 AI 自动标题，标题沿用首条问题"), 'ok', 2400);
   });
   $('#settOnEnter')?.addEventListener('change', () => {
     sessionsSetEnterMode($('#settOnEnter').value);
@@ -12864,7 +12939,7 @@ function initSettings() {
     if (longTermMemory !== (Settings.data.longTermMemory || '')) patch.longTermMemory = longTermMemory;
     if (saveModel) {
       if (!model || !baseURL) {
-        settingsStatus('请填写模型名和接口地址。', 'err');
+        settingsStatus(tr("请填写模型名和接口地址。"), 'err');
         showSettingsPane('model');
         $(!baseURL ? '#cfgBaseURL' : '#cfgModel').focus();
         return;
@@ -12873,7 +12948,7 @@ function initSettings() {
         const url = new URL(baseURL);
         if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password) throw new Error();
       } catch {
-        settingsStatus('请输入有效的 http 或 https 接口地址；密钥请填在 API Key 中。', 'err');
+        settingsStatus(tr("请输入有效的 http 或 https 接口地址；密钥请填在 API Key 中。"), 'err');
         showSettingsPane('model');
         $('#cfgBaseURL').focus();
         return;
@@ -12883,12 +12958,12 @@ function initSettings() {
     }
     settingsOperation = 'save';
     updateModelControls();
-    settingsStatus('正在保存…');
+    settingsStatus(tr("正在保存…"));
     try {
       await Settings.save(patch);
       fillSettings();
       checkConfigWarning();
-      settingsStatus(saveModel ? '已保存并使用此配置。可按需测试连接。' : '设置已保存。', 'ok');
+      settingsStatus(saveModel ? tr("已保存并使用此配置。可按需测试连接。") : tr("设置已保存。"), 'ok');
     } catch (e) {
       settingsStatus(e.message, 'err');
     } finally { settingsOperation = ''; updateModelControls(); }
@@ -12902,8 +12977,8 @@ function checkConfigWarning() {
   warn.classList.toggle('hidden', !need);
   if (need) {
     warn.replaceChildren(
-      el('span', { text: '已可以阅读 PDF。连接模型后，可使用翻译和问答。' }),
-      el('button', { type: 'button', class: 'welcome-action', text: '连接模型', onclick: async () => {
+      el('span', { text: tr("已可以阅读 PDF。连接模型后，可使用翻译和问答。") }),
+      el('button', { type: 'button', class: 'welcome-action', text: tr("连接模型"), onclick: async () => {
         await openSettings(); showSettingsPane('model');
       } }));
   }
@@ -12922,7 +12997,7 @@ function initShortcuts() {
       if (!$('#settingsModal').classList.contains('hidden')) { closeSettings(); return; }
       if (!$('#searchBar').classList.contains('hidden')) { $('#searchClose').click(); return; }
       if (!$('#noteBox').classList.contains('hidden')) { saveNoteBox(); return; }
-      if (state.abort) { abortStream('user'); $('#composerHint').textContent = '正在停止…'; return; }
+      if (state.abort) { abortStream('user'); $('#composerHint').textContent = tr("正在停止…"); return; }
       // 引用高亮不随 Esc 取消：点正文任意处 / 再点同一个引用 / 翻页 / 换文档时清
       // Esc 是明确的「不要这个选区了」：连方块和记住的选区一起清掉
       if (state.selection || viewer?.getSelectionInfo()) { clearSelectionState(); viewer?.clearSelection(); return; }
@@ -12975,17 +13050,17 @@ function initShortcuts() {
 const isAbort = (e) => e?.name === 'AbortError';
 function errText(e) {
   const raw = String(e?.message || '').trim();
-  if (!raw) return '暂时没有生成结果';
+  if (!raw) return tr("暂时没有生成结果");
   // 空闲看门狗抛的是 TimeoutError + 中文说明（ai.js 的 stale()），
   // 必须放在最前面原样透出：否则会被下面的 /网络|fetch/ 规则抢先命中，
   // 用户看到的就成了「接口暂时不可用」，完全对不上「卡住 / 超时」这个事实。
   if (e?.name === 'TimeoutError' || /没有收到任何数据|没有返回数据|超时/.test(raw)) {
     return raw.length > 200 ? `${raw.slice(0, 197)}…` : raw;
   }
-  if (/timeout|timed out|idle/i.test(raw)) return '等待模型回应超时，可以重试。';
-  if (/HTTP 401|unauthorized|invalid api key/i.test(raw)) return '接口没有接受密钥，请检查设置后重试。';
-  if (/HTTP 429|rate limit|too many/i.test(raw)) return '接口暂时繁忙，请稍后再试。';
-  if (/HTTP 5\d\d|网络|fetch|failed to fetch/i.test(raw)) return '接口暂时不可用，请检查连接后重试。';
+  if (/timeout|timed out|idle/i.test(raw)) return tr("等待模型回应超时，可以重试。");
+  if (/HTTP 401|unauthorized|invalid api key/i.test(raw)) return tr("接口没有接受密钥，请检查设置后重试。");
+  if (/HTTP 429|rate limit|too many/i.test(raw)) return tr("接口暂时繁忙，请稍后再试。");
+  if (/HTTP 5\d\d|网络|fetch|failed to fetch/i.test(raw)) return tr("接口暂时不可用，请检查连接后重试。");
   return raw.length > 180 ? `${raw.slice(0, 177)}…` : raw;
 }
 
@@ -12993,14 +13068,14 @@ async function copyText(text) {
   if (!text) return;
   try {
     await navigator.clipboard.writeText(text);
-    toast('已复制', 'ok', 1100);
+    toast(tr("已复制"), 'ok', 1100);
   } catch {
     const ta = document.createElement('textarea');
     ta.value = text;
     ta.style.cssText = 'position:fixed;opacity:0';
     document.body.append(ta);
     ta.select();
-    try { document.execCommand('copy'); toast('已复制', 'ok', 1100); } catch { toast('复制失败', 'err'); }
+    try { document.execCommand('copy'); toast(tr("已复制"), 'ok', 1100); } catch { toast(tr("复制失败"), 'err'); }
     ta.remove();
   }
 }
@@ -13014,7 +13089,7 @@ async function maybeReopenLast() {
       await openDoc({ name: found.name, url: found.url, docId: found.docId });
       return;
     }
-    toast(`papers/ 里没有找到 ${openName}`, 'err', 4000);
+    toast(tr("papers/ 里没有找到 {0}", openName), 'err', 4000);
   }
 
   // 停在首页。顺手清掉「上次那篇已经被删掉/移走」的陈旧标记（多标签 Welcome 路径共用）。

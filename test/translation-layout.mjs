@@ -64,7 +64,13 @@ try {
   await page.goto(base, { waitUntil: 'domcontentloaded' });
   await page.waitForSelector('#fileList li');
   await page.evaluate(() => document.querySelector('#fileList li').click());
-  await page.waitForFunction(() => window.__viewer?.pdf && document.querySelector('.page .textLayer span'));
+  await page.waitForFunction(() => window.__viewer?.pdf && document.querySelector('.page .textLayer span')
+    && window.__state.viewerDocId === window.__state.doc?.docId && document.body.classList.contains('reading'));
+  // Establish this case's closed-sidebar precondition instead of relying on a product default.
+  if (await page.$eval('#rightCols', el => el.getBoundingClientRect().width > 0)) {
+    await page.click('#topbarRightToggle');
+    await page.waitForFunction(() => document.querySelector('#rightCols').getBoundingClientRect().width === 0);
+  }
   const select = async (start, end, action = 'translate') => {
     await page.evaluate((a, b) => {
       const spans = [...document.querySelectorAll('.page[data-page="1"] .textLayer span')]
@@ -82,7 +88,15 @@ try {
   };
   const widthBefore = await page.$eval('#viewer', (el) => el.clientWidth);
   await select(1, 3);
-  await page.waitForFunction(() => document.querySelector('#translationCardText').textContent.includes('测试译文'));
+  await page.waitForFunction(() => document.querySelector('#translationCardText').textContent.includes('测试译文')).catch(async error => {
+    console.error('Translation state', { chatCount, errors, state: await page.evaluate(() => ({
+      busy: window.__state?.busy, locale: document.documentElement.lang, classes:document.body.className,
+      card: document.querySelector('#translationCard')?.textContent,
+      toast: document.querySelector('#toastWrap')?.textContent,
+      output: document.querySelector('#aiArea')?.textContent.slice(-1000),
+    })) });
+    throw error;
+  });
   const closed = await page.evaluate(() => {
     const card = document.querySelector('#translationCard').getBoundingClientRect();
     return { cardVisible: !document.querySelector('#translationCard').classList.contains('hidden'),

@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 import { windowStorage as localStorage } from './window-storage.js';
 /**
  * 多标签工作区（B 线 P0/P1 骨架）：工作区存储 + 标签条 + Welcome 语义。
@@ -113,7 +114,7 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
   root.className = 'tab-bar';
   root.id = 'tabBar';
   root.setAttribute('role', 'tablist');
-  root.setAttribute('aria-label', '已打开的论文');
+  root.setAttribute('aria-label', tr("已打开的论文"));
   const strip = document.createElement('div');
   strip.className = 'tab-strip';
   strip.id = 'tabStrip';
@@ -121,8 +122,8 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
   more.className = 'tab-more';
   more.id = 'tabMoreBtn';
   more.type = 'button';
-  more.title = '全部标签 / 当前文件夹文档';
-  more.setAttribute('aria-label', '全部标签');
+  more.title = tr("全部标签 / 当前文件夹文档");
+  more.setAttribute('aria-label', tr("全部标签"));
   more.textContent = '⌄';
   more.onclick = (e) => { e.stopPropagation(); toggleMenu(); };
   root.append(strip, more);
@@ -155,8 +156,8 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
       const close = document.createElement('button');
       close.className = 'tab-close';
       close.type = 'button';
-      close.title = '关闭标签';
-      close.setAttribute('aria-label', `关闭 ${tab.name || tab.docId}`);
+      close.title = tr("关闭标签");
+      close.setAttribute('aria-label', tr("关闭 {0}", tab.name || tab.docId));
       close.textContent = '×';
       close.onclick = (e) => { e.stopPropagation(); onClose?.(tab.docId); };
       el.append(title, close);
@@ -164,9 +165,9 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
       const showContext = (x, y) => {
         menu.replaceChildren();
         for (const [label, action] of [
-          ['在新窗口打开', () => onNewWindow?.(tab.docId, false)],
-          ['移到新窗口', () => onNewWindow?.(tab.docId, true)],
-          ['关闭标签', () => onClose?.(tab.docId)],
+          [tr("在新窗口打开"), () => onNewWindow?.(tab.docId, false)],
+          [tr("移到新窗口"), () => onNewWindow?.(tab.docId, true)],
+          [tr("关闭标签"), () => onClose?.(tab.docId)],
         ]) {
           const button = document.createElement('button'); button.type = 'button';
           button.className = 'tab-menu-item'; button.textContent = label;
@@ -271,12 +272,12 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
     menu.replaceChildren();
     const allTitle = document.createElement('div');
     allTitle.className = 'tab-menu-title';
-    allTitle.textContent = `全部标签（${list.length}/${TABS_MAX}）`;
+    allTitle.textContent = tr("全部标签（{0}/{1}）", list.length, TABS_MAX);
     menu.append(allTitle);
     if (!list.length) {
       const empty = document.createElement('div');
       empty.className = 'tab-menu-empty';
-      empty.textContent = '还没有打开的论文';
+      empty.textContent = tr("还没有打开的论文");
       menu.append(empty);
     }
     for (const tab of list) {
@@ -305,7 +306,7 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
       // 默认范围：当前文件夹里未打开的文档（用户在问「外面也能看」时，下面还有全库组）
       const t2 = document.createElement('div');
       t2.className = 'tab-menu-title';
-      t2.textContent = folder ? `当前文件夹（${unopened.length} 篇未打开）` : '书架（未打开的论文）';
+      t2.textContent = folder ? tr("当前文件夹（{0} 篇未打开）", unopened.length) : tr("书架（未打开的论文）");
       menu.append(t2);
       for (const doc of unopened.slice(0, 20)) menu.append(makeDocItem(doc));
     }
@@ -315,7 +316,7 @@ export function createTabBar({ mount, onActivate, onClose, onOpenDoc, onReorder,
     if (others.length) {
       const t3 = document.createElement('div');
       t3.className = 'tab-menu-title';
-      t3.textContent = `全部已导入文件（其他文件夹 ${others.length} 篇，按需打开）`;
+      t3.textContent = tr("全部已导入文件（其他文件夹 {0} 篇，按需打开）", others.length);
       menu.append(t3);
       for (const doc of others.slice(0, 20)) menu.append(makeDocItem(doc));
     }

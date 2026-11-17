@@ -244,6 +244,18 @@ try {
   console.log('PASS text/image order, whole-batch stop, fixed target language, idempotent resume and next-draft retention');
 
   await clearDraft(); await page.select('#translateTargetLang', '中文');
+  await type('单项失败后应自动回到草稿并释放发送队列。');
+  const singleFailureStart = requests.length;
+  const singleFailure = await send();
+  const endSingleFailure = fail(singleFailure, '单项失败的部分译文。');
+  await textVisible('单项失败的部分译文。'); endSingleFailure();
+  await page.waitForFunction(() => !document.querySelector('#translationBatchStatus')?.getClientRects().length);
+  assert.equal((await draft()).text, '单项失败后应自动回到草稿并释放发送队列。');
+  await unchangedRequests(singleFailureStart + 1, 'single failure returns to draft without an automatic retry');
+  await clearDraft();
+  console.log('PASS a single failed translation returns to draft and immediately releases the send queue');
+
+  await clearDraft(); await page.select('#translateTargetLang', '中文');
   const failureImages = [await image('失败后继续第一张'), await image('失败后继续第二张')];
   const failedStart = requests.length;
   const failing = await send(); assert.deepEqual(requestImages(failing), [failureImages[0]]);

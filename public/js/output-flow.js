@@ -1,7 +1,7 @@
 /** Small, conservative boundaries for streaming Markdown. No DOM or rendering dependencies. */
 
 const LIST = /^( *)(?:[-+*]|\d+[.)])(?:[ \t]+|$)/;
-const QUESTION = /^#{2,4}[ \t]+(?:第[ \t]*(\d+)[ \t]*题|[（(][ \t]*(\d+)[ \t]*[）)])(?:[：: \t].*)?[ \t]*$/;
+const QUESTION = /^#{2,4}[ \t]+(?:第[ \t]*(\d+)[ \t]*题|[（(][ \t]*(\d+)[ \t]*[）)]|Question[ \t]+(\d+))(?:[：: \t].*)?[ \t]*$/i;
 const ATX = /^ {0,3}#{1,6}(?:[ \t]+|$)/;
 
 function indentOf(line) {
@@ -174,7 +174,7 @@ export function splitAnswerSections(value) {
     fence = openingFence(content, line);
     if (fence) continue;
     const heading = line.match(QUESTION);
-    if (heading) matches.push({ index: start, number: Number(heading[1] || heading[2]) });
+    if (heading) matches.push({ index: start, number: Number(heading[1] || heading[2] || heading[3]) });
     math = mathLine(content, null).math;
   }
   if (matches.length < 2 || matches.some((match, index) => match.number !== index + 1)) return null;

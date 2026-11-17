@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 /* 小工具集合 */
 
 export const $ = (sel, root = document) => root.querySelector(sel);
@@ -77,7 +78,7 @@ export function fmtSize(bytes) {
 /* 用户口径（2026-11-02）：右下角的弹出提示**只在出问题时**出现，成功/信息类一律不弹（很影响心情）。
    唯一保留的成功类提示是「结果已经生成 / 已定位过去」这一族；另外「失败/未保存/请重新…」这类
    即使调用方标成 ok 也属于问题，继续显示。 */
-const TOAST_KEEP = /已在结果区|已定位过去|已恢复问题|已生成|点「重新生成」|直接用缓存|已翻过|失败|出错|错误|异常|超时|未保存|已不在|请重新|未配置|不可用|无法|丢失|重试|拒绝|断开|过期|无效|不支持|问题|忽略/;
+const TOAST_KEEP = /已在结果区|已定位过去|已恢复问题|已生成|点「重新生成」|直接用缓存|已翻过|失败|出错|错误|异常|超时|未保存|已不在|请重新|未配置|不可用|无法|丢失|重试|拒绝|断开|过期|无效|不支持|问题|忽略|failed|could not|error|timed out|not saved|missing|retry|unavailable|not supported|restored|existing (result|translation)|saved translation/i;
 
 export function toast(msg, kind = '', ms = 2600) {
   const text = String(msg || '');
@@ -99,7 +100,7 @@ export function toastAction(msg, label, action, kind = 'err', ms = 7000) {
   if (!wrap) return;
   const retry = async () => {
     try { await action(); }
-    catch (e) { toastAction(`重试失败：${e?.message || e}`, label, retry, kind, ms); }
+    catch (e) { toastAction(tr("重试失败：{0}", e?.message || e), label, retry, kind, ms); }
   };
   const node = el('div', { class: `toast ${kind}` }, el('span', { text: msg }), el('button', {
     type: 'button', text: label, onclick: async () => {

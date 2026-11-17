@@ -1,3 +1,4 @@
+import { t as tr, responseLanguageRule, localizedError } from './i18n.js';
 import { windowStorage as localStorage } from './window-storage.js';
 import { resolveReadingRequest, historyMessages, stripPageLabels } from './reading-context.js';
 import { nowContext, buildProfileBlock } from './profile.js';
@@ -78,7 +79,7 @@ export const Settings = {
         else await this.load();
       }
     } catch (e) {
-      throw new Error(`保存失败：${e.message}`);
+      throw new Error(tr("保存失败：{0}", e.message));
     }
   },
 
@@ -98,7 +99,7 @@ export function targetLangFor(text) {
 
 export async function streamChat(opts) {
   const {
-    messages,
+    messages: originalMessages,
     model = Settings.data.model,
     onDelta,
     onReasoning,
@@ -110,6 +111,11 @@ export async function streamChat(opts) {
     tools,
     rawResponse = false,
   } = opts;
+  // Add the language preference to the actual request, including agent follow-ups.
+  // Translation directions, structured keys, and quotations keep their own contracts.
+  const messages = originalMessages.map((message) => message.role === 'system'
+    ? { ...message, content: `${message.content}\n\n${responseLanguageRule()}` } : message);
+  if (!messages.some((message) => message.role === 'system')) messages.unshift({ role: 'system', content: responseLanguageRule() });
 
   // 自己的 controller：既能被调用方 abort，也能被看门狗 abort
   const ctl = new AbortController();
@@ -136,8 +142,8 @@ export async function streamChat(opts) {
   const stale = () => {
     if (!stalled) return null;
     const err = new Error(
-      `超过 ${Math.round(idleMs / 1000)} 秒没有收到任何数据，已判定为卡住并中断。\n`
-      + '可能是模型名不对、额度用尽，或网络/代理卡住了。可以换个模型再试。',
+      tr("超过 {0} 秒没有收到任何数据，已判定为卡住并中断。\n", Math.round(idleMs / 1000))
+      + tr("可能是模型名不对、额度用尽，或网络/代理卡住了。可以换个模型再试。"),
     );
     err.name = 'TimeoutError';   // 要与「用户主动停止」区分开，不能显示成「已停止」
     return err;
@@ -170,23 +176,27 @@ export async function streamChat(opts) {
       let msg = `HTTP ${res.status}`;
       try {
         const j = await res.json();
-        msg = j?.error?.message || msg;
+        const detail = localizedError(j?.error?.message);
+        if (detail) msg = `HTTP ${res.status}: ${detail}`;
       } catch {
-        try { msg = (await res.text()).slice(0, 500) || msg; } catch { /* ignore */ }
+        try {
+          const detail = (await res.text()).slice(0, 500);
+          if (detail) msg = `HTTP ${res.status}: ${detail}`;
+        } catch { /* ignore */ }
       }
       const regionUnavailable = /not available in (?:your|this|the) region|unavailable in (?:your|this|the) region|not available in (?:your|this|the) country|not supported in (?:your|this|the) (?:region|country)|region (?:is )?not supported|(?:地区|区域).{0,12}(?:不支持|不可用|限制)|(?:不支持|不可用).{0,12}(?:地区|区域)/i.test(msg);
       if (regionUnavailable) {
-        msg += ' —— 该模型在你所在地区不可用，密钥不一定有问题。请到右上角 ⚙ 更换为当地可用的模型或服务商。';
+        msg += tr(" —— 该模型在你所在地区不可用，密钥不一定有问题。请到右上角 ⚙ 更换为当地可用的模型或服务商。");
       } else if (res.status === 401 || /invalid.*(?:api[\s_-]*key|key)|(?:api[\s_-]*key|key).*invalid|authentication|unauthor/i.test(msg)) {
-        msg += ' —— API Key 无效或已失效，点右上角 ⚙ 重新填一个（也可能是账户欠费/密钥被停用）';
+        msg += tr(" —— API Key 无效或已失效，点右上角 ⚙ 重新填一个（也可能是账户欠费/密钥被停用）");
       } else if (res.status === 403) {
-        msg += ' —— 服务商拒绝了这次模型调用，可能是模型权限、账户状态或地区限制；请检查服务商账户和模型设置。';
+        msg += tr(" —— 服务商拒绝了这次模型调用，可能是模型权限、账户状态或地区限制；请检查服务商账户和模型设置。");
       } else if (res.status === 402 || /insufficient|balance|quota/i.test(msg)) {
-        msg += ' —— 账户额度不够了，去服务商后台充值或换个 Key';
+        msg += tr(" —— 账户额度不够了，去服务商后台充值或换个 Key");
       } else if (res.status === 404) {
-        msg += ' —— 模型名或接口地址不对，点右上角 ⚙ 检查一下';
+        msg += tr(" —— 模型名或接口地址不对，点右上角 ⚙ 检查一下");
       } else if (res.status === 429) {
-        msg += ' —— 触发限流了，等一会儿再试';
+        msg += tr(" —— 触发限流了，等一会儿再试");
       }
       throw new Error(msg);
     }
@@ -199,7 +209,7 @@ export async function streamChat(opts) {
       let text = '';
       try {
         const j = JSON.parse(raw);
-        if (j?.error) throw new Error(j.error.message || '上游返回错误');
+        if (j?.error) throw new Error(localizedError(j.error.message) || tr("上游返回错误"));
         if (rawResponse) return j;
         text = j?.choices?.[0]?.message?.content ?? j?.choices?.[0]?.text ?? j?.content ?? '';
       } catch (e) {
@@ -208,8 +218,8 @@ export async function streamChat(opts) {
       }
       if (!text) {
         throw new Error(
-          `服务端返回的不是流式数据（Content-Type: ${ctype || '未知'}），且解析不出内容。\n`
-          + '检查一下 API 地址是不是 OpenAI 兼容的 /v1 端点。',
+          tr("服务端返回的不是流式数据（Content-Type: {0}），且解析不出内容。\n", ctype || '未知')
+          + tr("检查一下 API 地址是不是 OpenAI 兼容的 /v1 端点。"),
         );
       }
       onDelta?.(text, text);
@@ -229,7 +239,7 @@ export async function streamChat(opts) {
           text += j?.choices?.[0]?.delta?.content || j?.choices?.[0]?.message?.content || '';
         } catch { /* ignore */ }
       }
-      if (!text) throw new Error('服务端返回了流式数据但解析不出内容。');
+      if (!text) throw new Error(tr("服务端返回了流式数据但解析不出内容。"));
       onDelta?.(text, text);
       return text;
     }
@@ -248,14 +258,14 @@ export async function streamChat(opts) {
       if (!payload || payload === '[DONE]') return;
       let json;
       try { json = JSON.parse(payload); } catch { return; }
-      if (json.error) throw new Error(json.error.message || '上游返回错误');
+      if (json.error) throw new Error(localizedError(json.error.message) || tr("上游返回错误"));
       const choice = json.choices?.[0];
       if (choice?.finish_reason) finishReason = choice.finish_reason;
       const delta = choice?.delta;
       if (!delta) return;
       for (const part of Array.isArray(delta.tool_calls) ? delta.tool_calls : []) {
         const index = Number.isInteger(part.index) ? part.index : 0;
-        if (index < 0 || index >= 32) throw new Error('上游工具调用序号超出范围');
+        if (index < 0 || index >= 32) throw new Error(tr("上游工具调用序号超出范围"));
         const call = toolCalls[index] ||= { id: '', type: 'function', function: { name: '', arguments: '' } };
         if (part.id) call.id = part.id;
         if (part.function?.name) call.function.name += part.function.name;
@@ -284,7 +294,7 @@ export async function streamChat(opts) {
     consume(buffer + decoder.decode());
 
     if (!full && !reasoning && !toolCalls.length) {
-      throw new Error('模型没有返回任何内容。可能是模型名不对、额度用尽，或被网关拦截了。');
+      throw new Error(tr("模型没有返回任何内容。可能是模型名不对、额度用尽，或被网关拦截了。"));
     }
     if (rawResponse) return { choices: [{ message: { content: full, tool_calls: toolCalls.filter(Boolean) }, finish_reason: finishReason }] };
     return full;
@@ -297,16 +307,29 @@ export async function streamChat(opts) {
   }
 }
 
-/** 测试连接：发一条最短的请求 */
+/**
+ * 测试连接：带一个无害的只读工具定义，覆盖论文问答实际依赖的 function calling。
+ * 只测普通文本会让「基础对话可用、带 tools 就被网关 404/拒绝」的配置误报为正常。
+ */
 export async function testConnection({ signal, idleMs = 15000 } = {}) {
   const t0 = Date.now();
-  const text = await streamChat({
-    messages: [{ role: 'user', content: '只回复两个字：可用' }],
+  const response = await streamChat({
+    messages: [{ role: 'user', content: tr("不要调用工具，只回复两个字：可用") }],
+    tools: [{
+      type: 'function',
+      function: {
+        name: 'get_reading_state',
+        description: 'Read the current PDF reading state when it is needed.',
+        parameters: { type: 'object', properties: {}, additionalProperties: false },
+      },
+    }],
     stream: false,
     temperature: 0,
-    signal, idleMs,
+    signal, idleMs, rawResponse: true,
   });
-  return { ms: Date.now() - t0, text: (text || '').trim().slice(0, 40), model: Settings.data.model };
+  const message = response?.choices?.[0]?.message || {};
+  const text = String(message.content || '').trim();
+  return { ms: Date.now() - t0, text: text.slice(0, 40), model: Settings.data.model };
 }
 
 /* ---------------------------------------------------------------- 提示词 */

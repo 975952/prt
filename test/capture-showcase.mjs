@@ -9,6 +9,7 @@ import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
 import { stopChild } from './_exe.mjs';
 
 const input = process.argv[process.argv.indexOf('--pdf') + 1];
+const english = process.argv.includes('--en');
 assert.ok(process.argv.includes('--pdf') && input && fs.existsSync(input), 'Pass --pdf <Attention Is All You Need.pdf>');
 fs.mkdirSync(SANDBOX, { recursive: true });
 const scratch = fs.mkdtempSync(path.join(SANDBOX, 'repository-showcase-'));
@@ -37,18 +38,37 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
     headless: true, args: ['--no-sandbox'], defaultViewport: { width: 1500, height: 980, deviceScaleFactor: 1.5 } });
   const page = await browser.newPage(), errors = [], modelCalls = [];
+  if (english) await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'en'));
   page.on('pageerror', error => errors.push(String(error)));
   page.on('request', request => { if (/\/api\/(chat|agent|translate)(?:\?|$)/.test(request.url())) modelCalls.push(request.url()); });
   await page.goto(`${base}/?open=Attention%20Is%20All%20You%20Need.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.__viewer?.numPages > 3 && window.__state?.doc);
+  await page.waitForFunction(() => window.__viewer?.numPages > 3 && window.__state?.doc
+    && window.__state.viewerDocId === window.__state.doc.docId && document.body.classList.contains('reading'));
+  if (await page.$eval('#rightCols', el => el.getBoundingClientRect().width === 0)) await page.click('#topbarRightToggle');
   await page.locator('.aibar-btn[data-block="chat"]').click();
   await page.click('#sessNew');
   await page.waitForFunction(() => window.__ctx.activeSession && !document.querySelector('#aiArea > .entry-card'));
-  await page.evaluate(() => {
+  await page.evaluate(() => window.__ctx.buildDocContext('', '', { whole: true }));
+  await page.evaluate(english => {
     const side = document.querySelector('#rightSide');
     side.style.width = side.style.minWidth = side.style.maxWidth = '440px';
-    window.__ctx.addEntry({ block: 'chat', kind: 'user', text: '图 1 的编码器和解码器是怎么配合的？' });
-    const answer = String.raw`**编码器理解输入，解码器逐步生成输出。** 图 1 左边是编码器，右边是解码器，两侧都堆叠了 $N$ 层。
+    window.__ctx.addEntry({ block: 'chat', kind: 'user', text: english ? 'How do the encoder and decoder work together in Figure 1?' : '图 1 的编码器和解码器是怎么配合的？' });
+    const answer = english ? String.raw`**The encoder represents the input; the decoder generates the output one token at a time.** Figure 1 shows the encoder on the left and the decoder on the right.
+
+### Follow the connections
+
+1. **Encode the input.** Self-attention and feed-forward layers build contextual representations from the input embeddings and positional encodings.
+2. **Read the output so far.** Masked self-attention prevents the decoder from seeing future tokens.
+3. **Attend to the input.** The decoder provides queries $Q$; the encoder supplies keys $K$ and values $V$.
+4. **Predict the next token.** A linear layer and softmax produce a distribution over the vocabulary.
+
+### What attention computes
+
+$$
+\operatorname{Attention}(Q,K,V)=\operatorname{softmax}\!\left(\frac{QK^{\mathsf T}}{\sqrt{d_k}}\right)V
+$$
+
+The query–key scores determine where to attend. The weighted values provide the information to use.` : String.raw`**编码器理解输入，解码器逐步生成输出。** 图 1 左边是编码器，右边是解码器，两侧都堆叠了 $N$ 层。
 
 ### 沿着图中的连线看
 
@@ -66,10 +86,10 @@ $$
 $QK^{\mathsf T}$ 决定“看哪里”，加权后的 $V$ 提供“读到什么”。每层的残差连接与归一化帮助信息稳定传递。
 
 回到图 1：**跨越左右两侧的箭头，就是编码器与解码器交换信息的位置。**`;
-    const reply = window.__ctx.addEntry({ block: 'chat', tag: '回答', page: 3, text: answer });
+    const reply = window.__ctx.addEntry({ block: 'chat', tag: english ? 'Answer' : '回答', page: 3, text: answer });
     window.__ctx.finishEntry(reply, answer);
-  });
-  for (const [theme, file] of [['glass', 'reading-glass.png'], ['light', 'reading-paper.png'], ['dark', 'reading-dark.png']]) {
+  }, english);
+  for (const [theme, file] of (english ? [['glass', 'reading-english.png']] : [['glass', 'reading-glass.png'], ['light', 'reading-paper.png'], ['dark', 'reading-dark.png']])) {
     await page.evaluate(theme => {
       const input = document.querySelector('#uiTheme');
       input.value = theme;
@@ -84,8 +104,11 @@ $QK^{\mathsf T}$ 决定“看哪里”，加权后的 $V$ 提供“读到什么�
       const area = document.querySelector('#aiArea');
       area.scrollTop = 0;
       for (const ancestor of [area.parentElement, area.parentElement.parentElement]) ancestor.scrollTop = 0;
+      for (const node of document.querySelectorAll('#rightSide *')) {
+        if (node.scrollHeight > node.clientHeight) node.scrollTop = 0;
+      }
     }, theme);
-    assert.ok(await page.$eval('#aiArea', node => node.textContent.includes('跨越左右两侧的箭头')));
+    assert.ok(await page.$eval('#aiArea', (node, english) => node.textContent.includes(english ? 'weighted values' : '跨越左右两侧的箭头'), english));
     await page.screenshot({ path: path.join(output, file) });
     console.log(`Captured ${file}`);
   }

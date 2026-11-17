@@ -5,7 +5,7 @@ import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 
 const root = path.resolve(import.meta.dirname, '..');
-const docs = ['README.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md',
+const docs = ['README.md', 'README.en.md', 'docs/quick-start.en.md', 'docs/internationalization.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md',
   'docs/README.md', 'docs/使用说明书.md', 'docs/开发指南.md', 'docs/第三方组件.md',
   'docs/assets/README.md', 'docs/archive/README.md', 'design/README.md'];
 let links = 0;

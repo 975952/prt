@@ -143,7 +143,9 @@ fn notify_already_running() {
     let text: Vec<u16> = concat!(
         "prt 已经在运行了。\n\n",
         "同一个数据目录使用一个 prt 进程。请切换到已经打开的 prt；\n",
-        "要同时阅读多篇论文，请右键文档或标签，选择「在新窗口打开」。"
+        "要同时阅读多篇论文，请右键文档或标签，选择「在新窗口打开」。\n\n",
+        "prt is already running. Switch to the existing window.\n",
+        "To read several papers, right-click a paper or tab and choose Open in new window."
     )
     .encode_utf16()
     .chain(std::iter::once(0))

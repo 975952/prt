@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 
 /**
  * 「读懂论文」能力：提示词已迁到 ./prompts/（A 线 P1），本模块保留
@@ -32,8 +33,8 @@ export const TEACHING_OPS = [
     promptId: 'teach.intro',
     icon: 'bolt',
     title: '先给我讲明白',
-    hint: 'AI 结合论文内容、你的阅读位置和记忆，自己判断该怎么讲',
-    ask: '先给我讲明白：这篇论文到底在做什么？',
+    hint: tr("AI 结合论文内容、你的阅读位置和记忆，自己判断该怎么讲"),
+    ask: tr("先给我讲明白：这篇论文到底在做什么？"),
     sys: withProtocol(TEACH_TASKS.intro),
   },
   {
@@ -41,8 +42,8 @@ export const TEACHING_OPS = [
     promptId: 'teach.prereq',
     icon: 'graduation',
     title: '我需要先懂什么',
-    hint: '只挑读懂本文必需的前置知识，标「现在必须懂」',
-    ask: '我需要先懂什么，才能读懂这篇论文？',
+    hint: tr("只挑读懂本文必需的前置知识，标「现在必须懂」"),
+    ask: tr("我需要先懂什么，才能读懂这篇论文？"),
     sys: withProtocol(TEACH_TASKS.prereq),
   },
   {
@@ -50,8 +51,8 @@ export const TEACHING_OPS = [
     promptId: 'teach.walk',
     icon: 'compass',
     title: '带我一步步读',
-    hint: '先给路线，每次只讲一步，可继续',
-    ask: '带我一步步读这篇论文：先给路线，再开始第一步。',
+    hint: tr("先给路线，每次只讲一步，可继续"),
+    ask: tr("带我一步步读这篇论文：先给路线，再开始第一步。"),
     sys: withProtocol(TEACH_TASKS.walk),
   },
   {
@@ -59,8 +60,8 @@ export const TEACHING_OPS = [
     promptId: 'teach.visual',
     icon: 'chart',
     title: '讲懂图表与公式',
-    hint: '默认从当前页选图 / 表 / 公式，讲清怎么看',
-    ask: '讲懂当前页上的图表或公式。',
+    hint: tr("默认从当前页选图 / 表 / 公式，讲清怎么看"),
+    ask: tr("讲懂当前页上的图表或公式。"),
     sys: withProtocol(TEACH_TASKS.visual),
   },
 ];
@@ -89,12 +90,18 @@ export function hideStreamTail(raw) {
 
 const clip = (v, n) => String(v || '').trim().slice(0, n);
 
+// Latin labels need more characters than Chinese to convey the same short action.
+export function clipChipLabel(value) {
+  const text = String(value || '').trim();
+  return text.slice(0, /[\u3400-\u9fff]/.test(text) ? 10 : 48);
+}
+
 /** 把 chips 规范化成程序能安全渲染的数组（白名单字段） */
 export function sanitiseChips(raw) {
   const out = [];
   for (const c of Array.isArray(raw) ? raw : []) {
     if (!c || typeof c !== 'object') continue;
-    const label = clip(c.label, 10);
+    const label = clipChipLabel(c.label);
     const prompt = clip(c.prompt, 120);
     const op = ['evidence', 'limits'].includes(c.op) ? c.op : '';
     if (!label || (!prompt && !op)) continue;
@@ -142,6 +149,7 @@ export function splitPrtBlock(raw) {
 const ITEM_HEADING_BLOCKLIST = new Set([
   '它是什么', '是什么', '为什么', '为什么这篇论文需要它', '用在哪里', '够了的标准', '读到什么程度就够',
   '门槛', '建议', '阅读路线', '第一步', '注意', '教学例子', '回到论文', '核心解释', '现在要弄懂的问题',
+  'What it is', 'Why it matters', 'Reading path', 'First step', 'Conclusion', 'Summary',
   '去读哪里', '和下一步的联系', '结论', '摘要',
 ]);
 
@@ -185,18 +193,18 @@ export function detectPageObjects(pageText, page = null) {
     let m = /^\s*(Figure|Fig\.?|FIGURE)\s*(\d+)\b[\s.:：-]*(.*)$/.exec(line);
     if (m) {
       const title = cleanSnippet(`${m[3] || ''} ${lines[i + 1] || ''}`).slice(0, 120);
-      pushIfNew({ kind: 'figure', label: `图 ${m[2]}`, title, page, snippet: cleanSnippet(line).slice(0, 160) });
+      pushIfNew({ kind: 'figure', label: tr("图 {0}", m[2]), title, page, snippet: cleanSnippet(line).slice(0, 160) });
       continue;
     }
     m = /^\s*(Table|TABLE)\s*(\d+)\b[\s.:：-]*(.*)$/.exec(line);
     if (m) {
       const title = cleanSnippet(`${m[3] || ''} ${lines[i + 1] || ''}`).slice(0, 120);
-      pushIfNew({ kind: 'table', label: `表 ${m[2]}`, title, page, snippet: cleanSnippet(line).slice(0, 160) });
+      pushIfNew({ kind: 'table', label: tr("表 {0}", m[2]), title, page, snippet: cleanSnippet(line).slice(0, 160) });
       continue;
     }
     m = /^\s*(Algorithm)\s*(\d+)\b[\s.:：-]*(.*)$/i.exec(line);
     if (m) {
-      pushIfNew({ kind: 'algorithm', label: `算法 ${m[2]}`, title: cleanSnippet(m[3]).slice(0, 120), page, snippet: cleanSnippet(line).slice(0, 160) });
+      pushIfNew({ kind: 'algorithm', label: tr("算法 {0}", m[2]), title: cleanSnippet(m[3]).slice(0, 120), page, snippet: cleanSnippet(line).slice(0, 160) });
     }
     // 公式编号：行尾 (1) / （1），且附近（前两行 + 本行）有数学线索。
     // 抽取文本常把公式与编号拆成好几行，所以编号行本身可能只有几个字符。
@@ -205,7 +213,7 @@ export function detectPageObjects(pageText, page = null) {
       const around = `${lines[i - 2] || ''} ${lines[i - 1] || ''} ${line}`;
       const body = [lines[i - 2], lines[i - 1], line].filter(Boolean).join(' ').trim();
       if (FORMULA_HINT.test(around) && around.replace(/\s+/g, '').length >= 8) {
-        pushIfNew({ kind: 'formula', label: `公式 (${m[1]})`, title: cleanSnippet(body).slice(0, 120), page, snippet: cleanSnippet(body).slice(0, 160) });
+        pushIfNew({ kind: 'formula', label: tr("公式 ({0})", m[1]), title: cleanSnippet(body).slice(0, 120), page, snippet: cleanSnippet(body).slice(0, 160) });
       }
     }
   }

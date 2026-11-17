@@ -3,7 +3,7 @@ const MAX_FOCUS = 6000;
 const pageNumber = (p) => Number.isInteger(Number(p)) && Number(p) > 0 ? Number(p) : null;
 
 export function stripPageLabels(text) {
-  return String(text || '').replace(/\[(?:第\s*\d+\s*页|p\.\s*\d+)\]\s*/gi, '').trim();
+  return String(text || '').replace(/\[(?:第\s*\d+\s*页|(?:p\.|page)\s*\d+)\]\s*/gi, '').trim();
 }
 
 function cleanFocus(focus) {
@@ -23,6 +23,10 @@ export function snapshotHistory(history = []) {
 
 export function readingIntent(question, selection = '') {
   const q = String(question || '').trim();
+  if (/\b(from now on|by default|always)\b/i.test(q) && /\b(explain|answer|concise|detail|example)\b/i.test(q)) return 'guidance';
+  if (/\b(that'?s wrong|you misunderstood|off topic|not what I asked)\b/i.test(q)) return 'feedback';
+  if (/^(?:please )?(?:explain|clarify) (?:this|that|these|the attached|the selected)/i.test(q)) return selection ? 'explain' : 'followup';
+  if (/^(?:please )?(?:continue|go on|make it simpler|give (?:me )?an example|explain more|I (?:do not|don't) understand)\b/i.test(q)) return 'followup';
   if (/默认|以后|今后|接下来都/.test(q) && /解释|讲解|回答|知识|简洁|详细|例子/.test(q)) return 'guidance';
   if (/^(?:你|您)?(?:到底)?(?:怎么|如何).{0,12}(?:理解|看待|处理).{0,8}(?:问题|提问)|答非所问|跑题|理解错了|我不是(?:问|要)|你答错了/.test(q)) return 'feedback';
   if (/^(?:这篇论文|本文|整篇论文|论文整体)|^(?:总结|概括|评价).{0,8}(?:这篇|论文)/.test(q)) return 'question';
@@ -40,14 +44,14 @@ export function readingIntent(question, selection = '') {
 export function screenPageRequested(question) {
   const q = String(question || '');
   // 「第 N 页」是明确页码，交给 explicitPageIn()，不算「当前页」指代
-  if (/(?:第\s*\d{1,4}\s*页|\bp\.?\s*\d{1,4}\b)/i.test(q)) return false;
-  return /(?:当前(?:的)?页|这一?页|本页|这屏|这一屏|屏幕(?:上|里)|这里|这儿|这个位置|这一?块(?:区域)?)/.test(q);
+  if (/(?:第\s*\d{1,4}\s*页|\b(?:p\.?|page)\s*\d{1,4}\b)/i.test(q)) return false;
+  return /(?:当前(?:的)?页|这一?页|本页|这屏|这一屏|屏幕(?:上|里)|这里|这儿|这个位置|这一?块(?:区域)?)|\b(?:this page|current page|on screen|this area)\b/i.test(q);
 }
 
 /** 问题里明说的页码（第 5 页 / p.5），超出总页数则忽略 */
 export function explicitPageIn(question, numPages = null) {
   const text = String(question || '');
-  const m = text.match(/第\s*(\d{1,4})\s*页/) || text.match(/\bp\.?\s*(\d{1,4})\b/i);
+  const m = text.match(/第\s*(\d{1,4})\s*页/) || text.match(/\b(?:p\.?|page)\s*(\d{1,4})\b/i);
   const n = m ? Number(m[1]) : null;
   if (!n || n < 1) return null;
   if (numPages && n > numPages) return null;

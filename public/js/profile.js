@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 
 import { PROFILE_RULES } from './prompts/memory.js';
 
@@ -148,7 +149,7 @@ export const profileStore = {
       this.error = '';
     } catch (e) {
       this.data = emptyProfile();
-      this.error = `学习档案读取失败：${e.message || e}`;
+      this.error = tr("学习档案读取失败：{0}", e.message || e);
     }
     this.loaded = true;
     return this.data;
@@ -163,7 +164,7 @@ export const profileStore = {
       updatedAt: nowISO(),
     };
     const parsed = validateProfile(candidate);
-    if (!parsed.ok) throw new Error(`学习档案校验失败：${parsed.error}`);
+    if (!parsed.ok) throw new Error(tr("学习档案校验失败：{0}", parsed.error));
     try {
       const r = await fetch(PROFILE_API, {
         method: 'POST',

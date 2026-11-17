@@ -4,6 +4,8 @@
 
 **在论文旁边，把问题读明白。**
 
+**简体中文** · [English](README.en.md)
+
 面向 Windows 的本地 PDF 阅读器，将原文、翻译、问答与笔记放在同一个工作区。
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square&label=release)](https://github.com/975952/prt/releases/latest)
@@ -29,12 +31,15 @@
 | 连贯地追问 | 同文件夹会话、跨窗口同步、输入草稿与翻译任务恢复 |
 | 留下阅读线索 | 全文搜索、目录、高亮笔记与参考文献检索 |
 | 调整阅读观感 | 透光、米宣与深色主题，可调透明、磨砂、字号及夜读文字亮度 |
+| 使用自己的语言 | 简体中文 / English 全局界面；回答语言与翻译目标分别设置 |
 
 ## 开始使用
 
 1. 从 [Releases](https://github.com/975952/prt/releases/latest) 下载 **prt.exe**，放入一个可写文件夹。
 2. 双击启动，拖入 PDF 或点击导入，即可阅读、搜索和记笔记。
 3. 需要翻译或问答时，在设置中填写 **OpenAI 兼容接口地址、模型名和 API Key**。图表与扫描件需要支持图像的模型。
+
+在 **设置 → 语言 / Language** 中切换简体中文或 English。界面切换会保存当前阅读位置、会话和草稿；回答语言可跟随界面或独立选择，翻译目标保持单独设置。
 
 桌面版免安装，无需 Node.js。支持 Windows 10/11 x64，需要 [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（多数系统已安装）。模型服务由你自行配置，服务费用按对应提供商规则计算。
 

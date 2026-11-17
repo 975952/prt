@@ -19,9 +19,12 @@ const CONFIG = path.join(DATA, 'config.json');
 const desktop = process.argv.includes('--desktop');
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 let chatCalls = 0;
+let lastChatBody = null;
 let rejectChat = false;
 const upstream = http.createServer(async (req, res) => {
-  for await (const _ of req) { /* consume synthetic request */ }
+  const chunks = [];
+  for await (const chunk of req) chunks.push(chunk);
+  lastChatBody = JSON.parse(Buffer.concat(chunks).toString('utf8'));
   chatCalls++;
   res.writeHead(rejectChat ? 401 : 200, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify(rejectChat ? { error: { message: 'synthetic connection failure' } }
@@ -226,6 +229,8 @@ try {
   await page.waitForFunction(() => document.querySelector('#testResult').textContent.includes('连接正常'));
   await enabled();
   assert.equal(chatCalls, 1);
+  assert.ok(lastChatBody.tools?.some((tool) => tool.function?.name === 'get_reading_state'),
+    'connection test must cover the function-calling shape used by paper Q&A');
   rejectChat = true;
   await page.click('#testModel');
   await page.waitForFunction(() => document.querySelector('#testResult').textContent.includes('配置仍已保存'));

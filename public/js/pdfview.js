@@ -1,3 +1,4 @@
+import { t as tr } from './i18n.js';
 import { clamp, throttle, sleep } from './util.js';
 import { stripPageLabels } from './reading-context.js';
 import { orderSelectionRuns, clipSelectionRuns, selectionTextOf, selectionRunAt } from './selection-reading-order.js';
@@ -203,7 +204,7 @@ export async function renderPdfPageImage(url, pageNum, { maxDim = 1400, quality 
   const { pdf } = await openPdfDocument(url);
   try {
     const n = Number(pageNum) || 1;
-    if (n < 1 || n > pdf.numPages) throw new Error(`页码超出范围（1–${pdf.numPages}）`);
+    if (n < 1 || n > pdf.numPages) throw new Error(tr("页码超出范围（1–{0}）", pdf.numPages));
     const page = await pdf.getPage(n);
     const base = page.getViewport({ scale: 1 });
     const scale = Math.min(2.2, Math.max(0.5, maxDim / Math.max(base.width, base.height)));
@@ -577,7 +578,7 @@ export class PdfViewer {
     this.scale = Number(handle.scale) || this._computeFitScale();
     this.layout();
     this.opts.onScale?.(this.scale);
-    this.opts.onStatus?.(`共 ${this.numPages} 页`);
+    this.opts.onStatus?.(tr("共 {0} 页", this.numPages));
     // 恢复页码与滚动位置（热切换要「看起来没动过」）
     this.current = Math.min(Math.max(1, Number(handle.page) || 1), this.numPages);
     const targetTop = Number(handle.scrollTop) > 0
@@ -620,7 +621,7 @@ export class PdfViewer {
       disableAutoFetch: big,
       disableStream: big,
     });
-    this.opts.onStatus?.('正在解析 PDF…');
+    this.opts.onStatus?.(tr("正在解析 PDF…"));
     const pdf = await task.promise;
     if (this._destroyed || gen !== this._gen) { pdf.destroy(); return { numPages: 0, stale: true }; }
     this.pdf = pdf;
@@ -652,7 +653,7 @@ export class PdfViewer {
     this.layout();
     this.opts.onScale?.(this.scale);
 
-    this.opts.onStatus?.(`共 ${this.numPages} 页`);
+    this.opts.onStatus?.(tr("共 {0} 页", this.numPages));
 
     // 其余页尺寸后台补齐（不影响首屏）
     this._loadRemainingSizes(first, gen);
@@ -1193,7 +1194,7 @@ export class PdfViewer {
     }
     // 90ms（原来 140）：用户要「缩放快一点」，松手到开始重画之间的空档再短一点
     this._scheduleRerender(90);
-    this.opts.onStatus?.(`缩放 ${Math.round(this.scale * 100)}%`);
+    this.opts.onStatus?.(tr("缩放 {0}%", Math.round(this.scale * 100)));
   }
 
   /** 内容坐标（纵坐标）→ 页面元素（用缓存的 offsets/heights 做数学判定，不做命中测试） */
@@ -1422,7 +1423,7 @@ export class PdfViewer {
     }
     this._scheduleRerender();     // 停下后再重画出清晰版
     this.opts.onScale?.(this.scale);
-    this.opts.onStatus?.(`缩放 ${Math.round(this.scale * 100)}%`);
+    this.opts.onStatus?.(tr("缩放 {0}%", Math.round(this.scale * 100)));
   }
 
   /** Keep the PDF point under a touchpad pinch in place, including horizontal scroll. */
@@ -1454,7 +1455,7 @@ export class PdfViewer {
     this.container.scrollLeft = Math.max(0, (this.container.scrollWidth - this.container.clientWidth) / 2);
     this._scheduleRerender(80);
     this.opts.onScale?.(this.scale);
-    this.opts.onStatus?.(`适应宽度 ${Math.round(this.scale * 100)}%`);
+    this.opts.onStatus?.(tr("适应宽度 {0}%", Math.round(this.scale * 100)));
   }
 
   /* ------------------------------------------------- 虚拟化渲染 */
@@ -1643,7 +1644,7 @@ export class PdfViewer {
       try {
         page = await this.pdf.getPage(i);
       } catch (e) {
-        if (!stale()) this.opts.onStatus?.(`第 ${i} 页加载失败：${e.message}`);
+        if (!stale()) this.opts.onStatus?.(tr("第 {0} 页加载失败：{1}", i, e.message));
         return;
       }
       if (stale() || !this.pageEls[i]) return;
@@ -1750,7 +1751,7 @@ export class PdfViewer {
         await renderTask.promise;
       } catch (e) {
         if (e?.name !== 'RenderingCancelledException' && !stale()) {
-          this.opts.onStatus?.(`第 ${i} 页渲染失败：${e.message}`);
+          this.opts.onStatus?.(tr("第 {0} 页渲染失败：{1}", i, e.message));
         }
         // 这次没画成：把藏着的半成品摘掉，让上一张预览继续顶着
         if (prevCanvas) {
@@ -2097,7 +2098,7 @@ export class PdfViewer {
     const key = `${pageNum}:${maxDim}`;
     const hit = this._pageImageCache.get(key);
     if (hit) return hit;
-    if (!this.pdf) throw new Error('没有打开的文档');
+    if (!this.pdf) throw new Error(tr("没有打开的文档"));
     const page = await this.pdf.getPage(pageNum);
     const base = page.getViewport({ scale: 1 });
     const scale = Math.min(2.5, Math.max(0.4, maxDim / Math.max(base.width, base.height)));
@@ -2643,7 +2644,7 @@ export class PdfViewer {
    * @param {{x:number,y:number,w:number,h:number}} rectCss 相对页面元素左上角的 CSS 像素
    */
   async captureRegion(pageNum, rectCss, { maxDim = 1600 } = {}) {
-    if (!this.pdf) throw new Error('没有打开的文档');
+    if (!this.pdf) throw new Error(tr("没有打开的文档"));
     const page = await this.pdf.getPage(pageNum);
     const baseScale = this.scale || 1;
     // 以放大约 3 倍 PDF 单位的清晰度重新渲染这一页，再裁剪
@@ -3100,7 +3101,7 @@ export class PdfViewer {
           d.style.top = `${citeTop}px`;
           d.style.width = `${citeW}px`;
           d.style.height = `${citeH}px`;
-          d.title = `引用 [${nums.join(', ')}] —— 点击跳到参考文献`;
+          d.title = tr("引用 [{0}] —— 点击跳到参考文献", nums.join(', '));
           entry.pinLayer.append(d);
           entry.citeHits.push({ el: d, nums, raw, page: i, x: citeLeft, y: citeTop, w: citeW, h: citeH });
         }
@@ -3228,7 +3229,7 @@ export class PdfViewer {
    * 兼容旧调用：{ pageStart, pageEnd, x, w, yStart, yEnd }（同宽单列选区）。
    */
   async captureRange({ slices: givenSlices, pageStart, pageEnd, x, w, yStart, yEnd }, { ratio = 2.5, maxDim = 3000 } = {}) {
-    if (!this.pdf) throw new Error('没有打开的文档');
+    if (!this.pdf) throw new Error(tr("没有打开的文档"));
     /* 单位换算（2026-11-05 修复 m10435/m10452）：
        选区坐标 x / yStart / yEnd 和 heights 都是**当前缩放比例**下的 CSS 像素
        （页面元素宽高 = PDF 尺寸 × this.scale），而 page.render 这里用
@@ -3255,7 +3256,7 @@ export class PdfViewer {
         slices.push({ page: p, top, height: bottom - top, x, w });
       }
     }
-    if (!slices.length) throw new Error('选区太小');
+    if (!slices.length) throw new Error(tr("选区太小"));
 
     const totalH = slices.reduce((s, x2) => s + x2.height, 0);
     const maxW = Math.max(...slices.map((s) => s.w));
@@ -3328,7 +3329,7 @@ export class PdfViewer {
       const pinH = entry.cssH || entry.pageEl?.clientHeight || 0;
       pin.style.top = pinH > 0 ? `${(topY * pinH - 9).toFixed(2)}px` : '0px';
       pin.dataset.id = h.id;
-      pin.title = h.note ? `笔记：${h.note.slice(0, 80)}` : `收藏：${(h.text || '').slice(0, 80)}`;
+      pin.title = h.note ? tr("笔记：{0}", h.note.slice(0, 80)) : tr("收藏：{0}", (h.text || '').slice(0, 80));
       pin.addEventListener('click', (e) => {
         e.stopPropagation();
         this.opts.onNoteClick?.(h.id);

@@ -1,3 +1,4 @@
+import { t as tr } from '../../i18n.js';
 /**
  * 深入阅读（操作）提示词：op.evidence / op.limits。
  *
@@ -25,18 +26,18 @@ export const OPS = [
     promptId: 'op.evidence',
     icon: 'chart',
     title: '实验够不够支撑结论',
-    hint: '数据集/基线/指标/消融逐项对照（深入阅读时用）',
+    hint: tr("数据集/基线/指标/消融逐项对照（深入阅读时用）"),
     sys: `${BASE_OPS}\n\n${TASK_EVIDENCE}`,
-    ask: '这篇论文的实验能支撑它的结论吗？逐项说明。',
+    ask: tr("这篇论文的实验能支撑它的结论吗？逐项说明。"),
   },
   {
     id: 'limits',
     promptId: 'op.limits',
     icon: 'warn',
     title: '局限与可疑之处',
-    hint: '作者承认的 + 你看出但作者没说的问题（深入阅读时用）',
+    hint: tr("作者承认的 + 你看出但作者没说的问题（深入阅读时用）"),
     sys: `${BASE_OPS}\n\n${TASK_LIMITS}`,
-    ask: '这篇论文有什么局限和可疑之处？',
+    ask: tr("这篇论文有什么局限和可疑之处？"),
   },
 ];
 

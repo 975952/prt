@@ -14,6 +14,7 @@ const INCLUDE = [
   'model-profiles.js',
   'start.bat',
   'README.md',
+  'README.en.md',
   'LICENSE',
   'CHANGELOG.md',
   'CONTRIBUTING.md',
@@ -112,6 +113,8 @@ const REQUIRED_PUBLIC = [
   'public/js/prompts/capabilities/qa.js',
   'public/js/prompts/capabilities/teach.js',
   'public/js/app.js',
+  'public/js/i18n.js',
+  'public/js/locales/en.js',
   'public/js/ai.js',
   'public/js/teaching.js',
   // B 线 P1：多标签工作区（tabs.css 是新增样式文件，同样必须进包）

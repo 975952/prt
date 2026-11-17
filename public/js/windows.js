@@ -1,3 +1,4 @@
+import { t as tr, localizeErrorResponse } from './i18n.js';
 /** Multi-window coordination. No user credentials or PDF bytes cross windows. */
 import { windowId, windowStorage, storageKey } from './window-storage.js';
 export { windowId, windowStorage, storageKey } from './window-storage.js';
@@ -64,7 +65,7 @@ window.fetch = async (input, init = {}) => {
       return navigator.locks ? navigator.locks.request('prt.save.progress', save) : save();
     }
   }
-  return serviceFetch(input, init);
+  return localizeErrorResponse(await serviceFetch(input, init));
 };
 
 function renderWindowMenu() {
@@ -74,11 +75,11 @@ function renderWindowMenu() {
     const b = document.createElement('button'); b.type = 'button'; b.className = 'ctx-item'; b.textContent = text;
     b.onclick = () => { menu.hidden = true; fn(); }; menu.append(b);
   };
-  if (hooks.current?.()) add('当前论文在新窗口打开', () => openReaderWindow(hooks.current()));
+  if (hooks.current?.()) add(tr("当前论文在新窗口打开"), () => openReaderWindow(hooks.current()));
   if (desktopWindows) {
-    add('平铺所有窗口', () => nativePost('windows-tile'));
+    add(tr("平铺所有窗口"), () => nativePost('windows-tile'));
     for (const row of windowRows) add(`${row.key === windowId ? '✓ ' : ''}${row.title || 'prt'}`, () => nativePost('window-focus', { key: row.key }));
-    add('保存窗口布局并退出', () => nativePost('windows-quit'));
+    add(tr("保存窗口布局并退出"), () => nativePost('windows-quit'));
   }
 }
 
@@ -102,7 +103,7 @@ export async function openReaderWindow(doc, { move = false } = {}) {
       const timeout = setTimeout(() => {
         requests.delete(request);
         if (desktopWindows) nativePost('window-open-cancel', { request });
-        reject(new Error('新窗口未确认打开，原标签已保留'));
+        reject(new Error(tr("新窗口未确认打开，原标签已保留")));
       }, 45000);
       requests.set(request, { resolve, reject, timeout });
     });
@@ -112,13 +113,13 @@ export async function openReaderWindow(doc, { move = false } = {}) {
       url.searchParams.set('readerWindow', key); url.searchParams.set('document', doc.docId);
       url.searchParams.set('windowRequest', request);
       const child = window.open(url.href, '_blank');
-      if (!child) completeRequest({ request, ok: false, error: '浏览器阻止了新窗口，请允许本站弹出窗口' });
+      if (!child) completeRequest({ request, ok: false, error: tr("浏览器阻止了新窗口，请允许本站弹出窗口") });
     }
     await result;
     if (move) {
       await hooks.closeTab?.(doc.docId);
       // Only hand the document over after the original tab has actually closed.
-      if (hooks.hasTab?.(doc.docId)) throw new Error('原标签尚未关闭，请先保存后重试');
+      if (hooks.hasTab?.(doc.docId)) throw new Error(tr("原标签尚未关闭，请先保存后重试"));
       releaseDocument(doc.docId);
     }
   } catch (e) { hooks.notify?.(String(e.message || e)); }
@@ -128,7 +129,7 @@ function completeRequest(message) {
   const request = requests.get(message.request);
   if (!request) return;
   requests.delete(message.request); clearTimeout(request.timeout);
-  if (message.ok) request.resolve(); else request.reject(new Error(message.error || '新窗口打开失败'));
+  if (message.ok) request.resolve(); else request.reject(new Error(message.error || tr("新窗口打开失败")));
 }
 async function closeWindow() {
   if (closeInFlight) return;
@@ -139,7 +140,7 @@ async function closeWindow() {
     nativePost('close-commit');
   } catch (e) {
     nativePost('close-cancel');
-    hooks.notify?.(`保存失败，窗口已保留：${e.message || e}`);
+    hooks.notify?.(tr("保存失败，窗口已保留：{0}", e.message || e));
   } finally { closeInFlight = false; }
 }
 window.addEventListener('prt-desktop', ({ detail }) => {
@@ -158,7 +159,7 @@ bus?.addEventListener('message', ({ data }) => {
 export function windowReady() {
   if (!ready) return;
   const doc = hooks.current?.();
-  if (desktopWindows) nativePost('window-ready', { doc: doc?.docId || '', title: doc?.name || '书架' });
+  if (desktopWindows) nativePost('window-ready', { doc: doc?.docId || '', title: doc?.name || tr("书架") });
   const url = new URL(location.href);
   const request = url.searchParams.get('windowRequest');
   if (request) bus?.postMessage({ type: 'open-result', request, ok: doc?.docId === url.searchParams.get('document') });
@@ -171,7 +172,7 @@ export function startWindows(callbacks) {
   hooks = callbacks;
   const button = document.createElement('button');
   button.id = 'windowsBtn'; button.type = 'button'; button.className = 'tbtn';
-  button.textContent = '窗口'; button.title = '多文档窗口'; button.setAttribute('aria-haspopup', 'menu');
+  button.textContent = tr("窗口"); button.title = tr("多文档窗口"); button.setAttribute('aria-haspopup', 'menu');
   document.getElementById('homeBtn')?.before(button);
   menu = document.createElement('div'); menu.id = 'windowsMenu'; menu.className = 'ctx-menu'; menu.hidden = true;
   menu.setAttribute('role', 'menu'); document.body.append(menu);
