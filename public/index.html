@@ -399,8 +399,18 @@
         <label class="field"><span>纸面圆角 <output class="range-value" id="uiGlassRadiusValue"></output></span><input id="uiGlassRadius" type="range" min="0" max="32" step="1" /></label>
         <label class="field"><span>背景亮度 <output class="range-value" id="uiGlassBrightnessValue"></output></span><input id="uiGlassBrightness" type="range" min="60" max="100" step="1" /></label>
         <label class="field" id="glassToneField"><span>背景色调 <output class="range-value" id="uiGlassToneValue"></output></span><input id="uiGlassTone" type="range" min="0" max="100" step="1" /><span class="range-endpoints"><span>中性白</span><span>暖白</span></span></label>
-        <label class="field"><span>光影强度 <output class="range-value" id="uiGlassShadowValue"></output></span><input id="uiGlassShadow" type="range" min="0" max="100" step="1" /></label>
-        <label class="field" id="glassCrystalField"><span>水晶质感 <output class="range-value" id="uiGlassCrystalValue"></output></span><input id="uiGlassCrystal" type="range" min="0" max="100" step="1" /></label>
+        <label class="field"><span>PDF 悬浮强度 <output class="range-value" id="uiGlassShadowValue"></output></span><input id="uiGlassShadow" type="range" min="0" max="100" step="1" /></label>
+        <label class="field" id="glassCrystalField"><span>纸面边缘高光 <output class="range-value" id="uiGlassCrystalValue"></output></span><input id="uiGlassCrystal" type="range" min="0" max="100" step="1" /></label>
+      </div>
+    </fieldset>
+    <fieldset id="glassCardAppearanceControls" class="glass-appearance-controls" aria-label="译文卡片材质">
+      <div class="settings-section-title">译文卡片材质</div>
+      <div class="modal-note">两种材质分别记住参数。只改变背景，不降低文字清晰度。</div>
+      <div class="settings-grid settings-core-grid">
+        <label class="field"><span>卡片材质</span><select id="uiGlassCardMode"><option value="liquid">液态玻璃</option><option value="frosted">磨砂玻璃</option></select></label>
+        <label class="field"><span>卡片通透度 <output class="range-value" id="uiGlassCardTransparencyValue"></output></span><input id="uiGlassCardTransparency" type="range" min="15" max="85" step="1" /></label>
+        <label class="field"><span>卡片雾化程度 <output class="range-value" id="uiGlassCardBlurValue"></output></span><input id="uiGlassCardBlur" type="range" min="0" max="28" step="0.2" /></label>
+        <label class="field" id="glassCardRefractionField"><span>边缘折射 <output class="range-value" id="uiGlassCardRefractionValue"></output></span><input id="uiGlassCardRefraction" type="range" min="0" max="100" step="1" /></label>
       </div>
     </fieldset>
     <div id="nightAppearanceControls" class="hidden">

@@ -28,6 +28,7 @@ mod tests {
     fn index_is_embedded() {
         assert!(contains("index.html"));
         assert!(contains("js/app.js"));
+        assert!(contains("js/glass-material.js"));
         assert!(contains("js/i18n.js"));
         assert!(contains("js/locales/en.js"));
         assert!(contains("vendor/pdf.min.mjs"));

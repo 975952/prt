@@ -120,7 +120,9 @@ try {
   await page.setViewport({ width: 1440, height: 960 });
   await zoomKey('0');
   check('Ctrl+0 resets home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 100);
-  check('home outer corners clip both sidebar and content', await page.$eval('#home', n => parseFloat(getComputedStyle(n).borderRadius) >= 14 && getComputedStyle(n).overflow === 'hidden'));
+  check('only home main content has rounded corners', await page.evaluate(() => getComputedStyle(document.querySelector('#home')).borderRadius === '0px'
+    && getComputedStyle(document.querySelector('.home-sidebar')).borderRadius === '0px'
+    && parseFloat(getComputedStyle(document.querySelector('.home-content')).borderRadius) >= 14));
   const chooser = await Promise.all([page.waitForFileChooser(), page.click('#homeOpen')]).then(r => r[0]);
   check('open PDF launches file picker', chooser.isMultiple());
   await chooser.cancel();

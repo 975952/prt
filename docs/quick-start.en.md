@@ -2,7 +2,7 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.2.3](https://github.com/975952/prt/releases/tag/v1.2.3), including library zoom, automatic paper titles, resizable translation cards, and adjustable background tone in Glass.
+This guide covers [v1.2.4](https://github.com/975952/prt/releases/tag/v1.2.4), including library zoom, automatic paper titles, adjustable glass translation cards, and floating paper surfaces.
 
 ## Open a paper
 
@@ -36,7 +36,11 @@ With the right sidebar closed, translations appear in a floating card. Drag its 
 
 Choose Glass, Rice paper, or Dark in **Settings → Appearance**. Adjust transparency, blur, background brightness, lighting, and motion to taste. Dark mode offers separate text-brightness and colored-text controls. Images keep their original colors; image-only PDF pages retain square corners.
 
-Glass uses a near-white, subtly warm background. **Background tone** ranges from neutral white to warm white, with a default of 20%, independently of brightness. Its default page transparency is 12%, while interface transparency is 88%. Increase **Crystal intensity** for thicker glass edges, directional highlights, and layered shadows without changing text opacity or reading position. Settings apply immediately and are saved automatically. **Reset effects** restores the defaults; existing customized values are retained when upgrading.
+Glass uses a near-white, subtly warm background. **Background tone** ranges from neutral white to warm white, with a default of 20%, independently of brightness. Its default page transparency is 12%, while interface transparency is 88%. **PDF elevation** (76% by default) controls the soft outer shadow; **Page edge highlight** (70%) adjusts the fine edge separately. Rounded corners apply to the paper and the main home panel; sidebars stay flat and square.
+
+Under **Settings → Appearance → Translation card material**, choose **Liquid glass** or **Frosted glass**. Card transparency ranges from 15% to 85% and blur from 0 to 28px. Liquid glass also offers edge refraction from 0% to 100%. Liquid starts at 55% transparency and 1.2px blur; Frosted starts at 63% transparency and 15px blur. Both remain adjustable and remember their own settings when switching.
+
+Settings apply immediately and are saved automatically, without fading card text or changing PDF pixels, zoom, or reading position. **Reset effects** restores appearance defaults for both card materials while keeping the selected theme, material, font size, and reading position. Existing customized values are retained when upgrading.
 
 ## Back up and upgrade
 

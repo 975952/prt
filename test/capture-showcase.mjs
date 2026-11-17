@@ -3,10 +3,9 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
 import http from 'node:http';
-import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
 import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
-import { stopChild } from './_exe.mjs';
+import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 
 const input = process.argv[process.argv.indexOf('--pdf') + 1];
 const english = process.argv.includes('--en');
@@ -25,8 +24,8 @@ try {
   await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const port = probe.address().port;
   await new Promise(resolve => probe.close(resolve));
-  reader = spawn(process.execPath, [path.join(ROOT, 'server.js')], { windowsHide: true, stdio: 'ignore',
-    env: { ...process.env, PORT: String(port), PRT_DATA_DIR: data, PRT_PAPERS_DIR: papers,
+  reader = spawnReader(stageExe('showcase').exe, { args: ['--port', String(port)],
+    env: { PORT: String(port), PRT_DATA_DIR: data, PRT_PAPERS_DIR: papers,
       PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1', NO_OPEN: '1' } });
   const base = `http://127.0.0.1:${port}`;
   let ready = false;
@@ -35,6 +34,9 @@ try {
     if (!ready) await wait(100);
   }
   assert.ok(ready, 'isolated server starts');
+  for (const file of ['style.css', 'js/app.js', 'js/glass-material.js']) {
+    assert.equal(await fetch(`${base}/${file}`).then(r => r.text()), fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'), `current embedded ${file}`);
+  }
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
     headless: true, args: ['--no-sandbox'], defaultViewport: { width: 1500, height: 980, deviceScaleFactor: 1.5 } });
   const page = await browser.newPage(), errors = [], modelCalls = [];
@@ -111,6 +113,27 @@ $QK^{\mathsf T}$ 决定“看哪里”，加权后的 $V$ 提供“读到什么�
     assert.ok(await page.$eval('#aiArea', (node, english) => node.textContent.includes(english ? 'weighted values' : '跨越左右两侧的箭头'), english));
     await page.screenshot({ path: path.join(output, file) });
     console.log(`Captured ${file}`);
+  }
+  if (!english) {
+    await page.evaluate(() => {
+      const input = document.querySelector('#uiTheme'); input.value = 'glass'; input.dispatchEvent(new Event('input', { bubbles: true }));
+    });
+    if (await page.$eval('#rightCols', el => el.getBoundingClientRect().width > 0)) await page.click('#topbarRightToggle');
+    await page.evaluate(() => { window.__viewer.fitWidth(); window.__viewer.goToPage(3); });
+    await page.waitForFunction(() => !window.__viewer.renderTasks.size && window.__viewer.rendered.get(3)?.textDiv?.childElementCount > 0);
+    await wait(400);
+    await page.evaluate(() => {
+      const card = document.querySelector('#translationCard'), paper = window.__viewer.pageEls[3].getBoundingClientRect();
+      card.classList.remove('hidden'); card.style.width = '420px'; card.style.height = '280px';
+      card.style.left = `${Math.min(innerWidth - 450, paper.left + paper.width * .52)}px`; card.style.top = '280px';
+      document.querySelector('#translationCardQuote').textContent = 'The encoder maps an input sequence of symbol representations to a sequence of continuous representations.';
+      document.querySelector('#translationCardText').textContent = '编码器将输入符号序列映射为连续表示。解码器利用这些表示逐步生成输出，每一步结合先前已生成的符号来预测下一个符号。';
+    });
+    for (const mode of ['liquid', 'frosted']) {
+      await page.select('#uiGlassCardMode', mode); await wait(300);
+      await page.screenshot({ path: path.join(output, `translation-${mode}.png`) });
+      console.log(`Captured translation-${mode}.png`);
+    }
   }
   assert.deepEqual(errors, [], 'no application errors during capture');
   assert.deepEqual(modelCalls, [], 'showcase sends no model requests');

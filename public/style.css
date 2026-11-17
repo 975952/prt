@@ -1018,8 +1018,8 @@ body.dragging .viewer { pointer-events: none; }
 
 .home {
   flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 208px minmax(0, 1fr);
-  overflow: hidden; background: var(--bg-elev);
-  margin: 10px; border: 1px solid var(--border); border-radius: max(14px, var(--glass-radius, 24px));
+  overflow: hidden; background: transparent;
+  margin: 0; border: 0; border-radius: 0;
 }
 body:not(.reading) .viewer-wrap { zoom: var(--home-scale, 1); container: bookshelf / inline-size; }
 .home.hidden { display: none; }
@@ -1050,7 +1050,7 @@ body.reading .home { display: none; }
 .home-folders-empty { padding: 8px 12px; color: var(--fg-faint); font-size: var(--ui-fs-sm); }
 .home-sidebar-foot { display: flex; align-items: center; gap: 7px; margin: 24px 12px 0; color: var(--fg-faint); font-size: var(--ui-fs-sm); }
 .home-local-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ok-text); }
-.home-content { min-width: 0; min-height: 0; overflow: auto; }
+.home-content { min-width: 0; min-height: 0; overflow: auto; margin: 12px 16px; background: var(--bg-elev); border: 1px solid var(--border); border-radius: var(--glass-radius, 20px); box-shadow: 0 4px 18px rgba(60, 48, 30, .04); }
 .home-workspace { width: 100%; max-width: 1180px; padding: 44px 48px 28px; margin: 0 auto; }
 .home-head { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 32px; }
 .home-head > div { min-width: 0; }
@@ -3146,8 +3146,7 @@ body:not(.reading) #topbar :is(#homeBtn, #opsBtn, #searchBtn, .topbar-side-contr
   background: var(--reader-paper);
   border-radius: var(--glass-radius, 24px);
   backdrop-filter: blur(var(--glass-frost, 32px));
-  box-shadow: inset 0 0 0 1px rgba(var(--surface-rgb), calc(.5 * var(--glass-shadow-strength, 1))),
-    inset 0 1px 0 rgba(var(--surface-rgb), calc(.4 * var(--glass-shadow-strength, 1))), var(--shadow);
+  box-shadow: var(--pdf-float-shadow);
 }
 /* 切片画布不做圆角裁切，避免放大后切片接缝缺失或裁掉原始图文。 */
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .page canvas { border-radius: 0; }
@@ -3332,8 +3331,10 @@ body:not(.reading) #topbar :is(#homeBtn, #opsBtn, #searchBtn, .topbar-side-contr
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .answer-card-controls button { background: rgba(var(--surface-rgb), .2); border-color: rgba(var(--surface-rgb), .5); border-radius: 7px; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .page::before {
   content: ''; position: absolute; inset: 0; pointer-events: none; border-radius: inherit;
-  background: linear-gradient(125deg, rgba(var(--surface-rgb), .086), transparent 35% 80%, rgba(var(--surface-rgb), .063));
-  opacity: min(1, var(--glass-shadow-strength, 1));
+  z-index: 2; padding: 1px;
+  background: linear-gradient(140deg, rgba(var(--surface-rgb), 1), rgba(var(--surface-rgb), .85) 30%, rgba(var(--surface-rgb), .1) 58%, rgba(180, 164, 139, .3) 82%, rgba(var(--surface-rgb), .65));
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask-composite: exclude;
+  opacity: var(--glass-crystal, .7);
 }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .viewer-foot .grp { background: transparent; border-color: transparent; box-shadow: none; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .viewer-foot { height: 38px; padding-inline: 10px; }
@@ -3360,49 +3361,49 @@ body:not(.reading) #topbar :is(#homeBtn, #opsBtn, #searchBtn, .topbar-side-contr
 }
 .glass-appearance-controls { min-width: 0; padding: 0; margin: 0; border: 0; }
 
-/* Crystal highlights sit on the surface edges, never on top of PDF text. */
+/* Float the paper above a subtly warm workspace. Sidebars remain flat. */
 :root[data-theme="glass"] body {
   background: radial-gradient(ellipse at 8% 8%, rgba(255, 255, 255, .9), transparent 56%),
     radial-gradient(ellipse at 95% 95%, rgba(var(--glass-tint-rgb, 239, 227, 208), .16), transparent 58%),
     linear-gradient(135deg, var(--reader-bg), var(--reader-bg-low));
 }
-:root[data-theme="glass"] .home {
-  background: rgba(255, 255, 255, calc(.38 + var(--glass-surface-opacity, .12) * .6));
+:root[data-theme="glass"] .home-content {
+  background: rgba(255, 255, 255, calc(.75 + var(--glass-surface-opacity, .12) * .8));
   border-color: rgba(255, 255, 255, .88);
-  box-shadow: var(--crystal-surface-shadow);
   backdrop-filter: blur(var(--glass-frost, 18px));
 }
 :root[data-theme="glass"] .home-sidebar { background: rgba(var(--glass-panel-rgb, 249, 246, 240), .38); border-color: rgba(var(--glass-edge-rgb, 145, 132, 112), .18); }
 :root[data-theme="glass"] .home-search { background: rgba(255, 255, 255, .66); }
 :root[data-theme="glass"] .home-continue { background: rgba(255, 255, 255, .68); }
 :root[data-theme="glass"] .home-item:hover { background: rgba(255, 255, 255, .72); }
-:root[data-theme="glass"] {
-  --crystal-rim: calc(var(--glass-crystal, .55) * 8px);
-  --crystal-surface-shadow:
-    inset 0 0 0 1px rgba(255, 255, 255, calc(.35 + var(--glass-crystal, .55) * .65)),
-    inset 0 var(--crystal-rim) var(--crystal-rim) rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .96)),
-    inset var(--crystal-rim) 0 var(--crystal-rim) rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .7)),
-    inset calc(var(--crystal-rim) * -.65) calc(var(--crystal-rim) * -1) calc(var(--crystal-rim) * 1.6) rgba(var(--glass-edge-rgb, 145, 132, 112), calc(var(--glass-crystal, .55) * .34)),
-    0 0 0 1px rgba(var(--glass-edge-rgb, 145, 132, 112), calc(var(--glass-crystal, .55) * .3)),
-    0 3px 0 rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .85)),
-    0 5px 3px rgba(var(--glass-edge-rgb, 145, 132, 112), calc(var(--glass-crystal, .55) * .2)),
-    0 12px 30px rgba(var(--glass-edge-rgb, 145, 132, 112), calc(.06 * var(--glass-shadow-strength, 1) + var(--glass-crystal, .55) * .1));
+:root[data-theme="glass"] .viewer { --pdf-gutter: 24px; }
+:root[data-theme="glass"] .pages { --page-gap: 38px; padding-top: 24px; padding-bottom: 50px; }
+.glass-filter-defs { position: absolute; pointer-events: none; }
+.translation-material { display: none; }
+:root[data-theme="glass"] .translation-card[data-material] {
+  background: transparent; border: 0; border-radius: 22px; isolation: isolate;
+  box-shadow: 0 10px 32px rgba(50, 38, 20, .16); backdrop-filter: none;
 }
-:root[data-theme="glass"] .page:not([data-image-only="true"]) {
-  box-shadow: var(--crystal-surface-shadow);
+:root[data-theme="glass"] .translation-card[data-material="frosted"] { border-radius: 16px; box-shadow: 0 7px 22px rgba(71, 55, 29, .12); }
+:root[data-theme="glass"] .translation-material {
+  display: block; position: absolute; inset: 0; border-radius: inherit; z-index: -1; pointer-events: none; overflow: hidden;
+  background: linear-gradient(145deg, rgb(255 255 255 / calc(.7 + var(--card-sheen, .5) * .36)), rgb(255 253 251 / calc(.44 + var(--card-sheen, .5) * .42)) 40%, rgb(255 251 242 / calc(.33 + var(--card-sheen, .5) * .4)));
 }
-:root[data-theme="glass"] .page:not([data-image-only="true"])::before {
-  background: linear-gradient(122deg, rgba(255, 255, 255, .95), transparent 12% 88%, rgba(var(--glass-tint-rgb, 239, 227, 208), .32)),
-    linear-gradient(to bottom, rgba(255, 255, 255, .9), transparent 28px),
-    linear-gradient(to right, rgba(255, 255, 255, .65), transparent 18px);
-  opacity: var(--glass-crystal, .55);
+:root[data-theme="glass"] .translation-card[data-material="frosted"] .translation-material { background: rgb(255 253 246 / var(--card-fill, .5)); }
+.translation-material::before { content: ''; position: absolute; inset: 35px 5px 24px; border-radius: 8px; background: rgb(255 254 252 / var(--card-veil, .92)); filter: blur(9px); }
+.translation-material::after {
+  content: ''; position: absolute; inset: 0; border-radius: inherit; padding: 1px;
+  background: linear-gradient(135deg, #fff, #ffffff5c 27%, #a3957b38 48%, #fffefaeb 77%, #ffffff4d);
+  mask: linear-gradient(#fff 0 0) content-box, linear-gradient(#fff 0 0); mask-composite: exclude;
 }
-:root[data-theme="glass"] .main-row .side {
-  border-radius: var(--glass-radius, 24px);
-  background: rgba(255, 255, 255, var(--glass-surface-opacity, .12));
-  background-image: linear-gradient(126deg, rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .72)), transparent 30% 70%, rgba(var(--glass-tint-rgb, 239, 227, 208), calc(var(--glass-crystal, .55) * .14)));
-  box-shadow: var(--crystal-surface-shadow);
-  backdrop-filter: blur(var(--glass-frost, 18px));
+.translation-card[data-material="frosted"] .translation-material::after { background: #ffffff87; }
+:root[data-theme="glass"] .translation-card .pop-head { min-height: 44px; padding: 8px 14px; background: transparent; border-color: rgba(139, 123, 97, .1); }
+:root[data-theme="glass"] .translation-card .note-quote { margin: 12px 16px 0; padding: 0 8px; border-left: 2px solid #bdb2a1; background: transparent; }
+:root[data-theme="glass"] .translation-card .text { padding: 12px 16px 28px; line-height: 1.8; }
+:root[data-theme="glass"] .translation-card .translation-card-resize { background: transparent; }
+@media (max-width: 700px) {
+  .home-content { margin: 8px; }
+  :root[data-theme="glass"] .viewer { --pdf-gutter: 16px; }
 }
 .settings-effects-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }
 .settings-pane .settings-effects-heading .settings-section-title { margin: 0; }

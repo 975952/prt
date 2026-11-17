@@ -818,11 +818,13 @@ export class PdfViewer {
   }
 
   _computeFitScale() {
-    // clientWidth 已扣除滚动条；直接用满可读宽度，不再预留两侧空白。
+    // The glass workspace reserves a small gutter for the floating paper edge.
+    // Other themes retain their full-width reading surface.
     // 双页向下取整到完整像素，避免奇数宽度让第二页被挤到下一行。
     const span = this._twoUp ? 2 : 1;
     const gap = this._twoUp ? TWO_UP_GAP : 0;
-    const avail = Math.max(1, Math.floor((this.container.clientWidth - gap) / span));
+    const gutter = Math.max(0, parseFloat(getComputedStyle(this.container).getPropertyValue('--pdf-gutter')) || 0);
+    const avail = Math.max(1, Math.floor((this.container.clientWidth - gutter * 2 - gap) / span));
     const size = this._sizeOf(1);
     const w = (size && size.width) || 612;   // 没有文档时 baseSizes 是空的
     return clamp(avail / w, 0.15, 6);

@@ -17,7 +17,7 @@ A local PDF reader for Windows, with translation, paper chat, and notes beside t
 
 ![prt library home with search, folders, and continue reading](docs/assets/home-english.png)
 
-<sub>Actual v1.2.3 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
+<sub>Actual v1.2.4 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
 
 ## Pick up where you left off
 
@@ -37,7 +37,7 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 | Discuss figures | Screenshot selection, long captures, vision-model questions, equations, and tables |
 | Continue a discussion | Folder conversations, history, cross-window sync, and saved drafts |
 | Keep your bearings | Full-text search, outlines, highlights, notes, and reference lookup |
-| Read comfortably | Glass, Rice paper, and Dark themes; adjustable transparency, blur, and night text brightness |
+| Read comfortably | Glass, Rice paper, and Dark themes; adjustable PDF elevation, edge highlights, translation card materials, and night text brightness |
 | Choose your language | Simplified Chinese and English throughout the interface; separate answer and translation languages |
 
 ## Get started
@@ -49,7 +49,20 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 
 No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.2.3](https://github.com/975952/prt/releases/tag/v1.2.3). Glass adds a **Background tone** slider from neutral white to warm white, keeping a subtly warm default. **Crystal intensity** now visibly changes glass-edge thickness, highlights, and depth. Default page transparency is 12%, with 88% interface transparency. The rounded library supports keyboard zoom, numeric PDF names gain detectable paper titles, floating translations can be resized, and individual translations can be deleted immediately.
+**Current release:** [v1.2.4](https://github.com/975952/prt/releases/tag/v1.2.4). Glass combines a near-white, subtly warm background with space around the PDF, soft outer shadows, and fine edge highlights. Rounded corners apply to the paper and the main home panel; sidebars stay flat and square. Library zoom, automatic paper titles, movable and resizable translation cards, and immediate deletion of individual translations remain available.
+
+In **Settings → Appearance**, adjust background tone, PDF elevation, and paper edge highlights. **Translation card material** offers Liquid glass and Frosted glass, each with independently saved transparency and blur; Liquid glass also has adjustable edge refraction. Initial card transparency is 55% for Liquid glass and 63% for Frosted glass, and both remain adjustable. Default page transparency is 12%, with 88% interface transparency.
+
+<details>
+<summary>Preview both translation card materials</summary>
+
+![Liquid glass translation card](docs/assets/translation-liquid.png)
+
+![Frosted glass translation card](docs/assets/translation-frosted.png)
+
+The cards show illustrative Chinese translations in the actual desktop interface. Both materials have adjustable, independently saved settings.
+
+</details>
 
 ## Your data
 

@@ -1,6 +1,11 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "PDF 悬浮强度": "PDF elevation", "纸面边缘高光": "Page edge highlight",
+  "译文卡片材质": "Translation card material", "卡片材质": "Card material",
+  "液态玻璃": "Liquid glass", "磨砂玻璃": "Frosted glass",
+  "卡片通透度": "Card transparency", "卡片雾化程度": "Card blur", "边缘折射": "Edge refraction",
+  "两种材质分别记住参数。只改变背景，不降低文字清晰度。": "Each material remembers its settings. Effects apply to the background while text stays sharp.",
   "背景色调": "Background tone", "中性白": "Neutral white", "暖白": "Warm white",
   "首页缩放 {0}%": "Library zoom {0}%", "水晶质感": "Crystal intensity",
   "拖动调整大小；方向键微调": "Drag to resize; use arrow keys for fine adjustment", "调整译文卡片大小": "Resize translation card",

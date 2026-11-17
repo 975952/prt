@@ -49,7 +49,7 @@ try {
     const cr = c.getBoundingClientRect(), pr = p.getBoundingClientRect();
     return { scale: v.scale, left: c.scrollLeft, max: c.scrollWidth - c.clientWidth,
       centerError: pr.left + pr.width / 2 - (cr.left + c.clientLeft + c.clientWidth / 2),
-      width: c.clientWidth, pageWidth: p.offsetWidth,
+      width: c.clientWidth, pageWidth: p.offsetWidth, gutter: 2 * (parseFloat(getComputedStyle(c).getPropertyValue('--pdf-gutter')) || 0),
       footerGap: document.querySelector('#viewerFoot').getBoundingClientRect().top - cr.bottom,
       layers: [...p.children].map(el => ({ cls: el.className, w: el.getBoundingClientRect().width, left: el.offsetLeft,
         tf: getComputedStyle(el).transform })).filter(el => el.w > p.offsetWidth + 1) };
@@ -64,7 +64,7 @@ try {
     await page.click('#footFitWidth');
     await wait(500);
     const fit = await geometry();
-    check(`fit fills and centers paper at ${width}px`, Math.abs(fit.centerError) <= 1 && fit.max <= 1 && Math.abs(fit.width - fit.pageWidth) <= 1, fit);
+    check(`fit centers paper inside its floating gutter at ${width}px`, Math.abs(fit.centerError) <= 1 && fit.max <= 1 && Math.abs(fit.width - fit.pageWidth - fit.gutter) <= 1, fit);
     check('scrollbar meets footer without an empty strip', Math.abs(fit.footerGap) <= 1, fit.footerGap);
     await page.evaluate(() => window.__viewer.setScale(window.__viewer.scale * 1.7));
     const zoom = await geometry();
@@ -77,7 +77,7 @@ try {
     await page.evaluate(() => { window.__viewer.container.scrollLeft = 99999; });
     await page.click('#footFitWidth');
     const reset = await geometry();
-    check('fit clears previous pan immediately', Math.abs(reset.centerError) <= 1 && reset.max <= 1 && reset.left === 0 && Math.abs(reset.width - reset.pageWidth) <= 1, reset);
+    check('fit clears previous pan immediately', Math.abs(reset.centerError) <= 1 && reset.max <= 1 && reset.left === 0 && Math.abs(reset.width - reset.pageWidth - reset.gutter) <= 1, reset);
     await wait(550);
     const rendered = await geometry();
     check('fit stays centered after repaint', Math.abs(rendered.centerError) <= 1 && rendered.max <= 1, rendered);
@@ -99,7 +99,7 @@ try {
   const spread = await page.evaluate(() => {
     const v = window.__viewer, c = v.container, a = v.pageEls[1].getBoundingClientRect(), b = v.pageEls[2].getBoundingClientRect();
     return { width: c.clientWidth, sameRow: Math.abs(a.top - b.top) <= 1, max: c.scrollWidth - c.clientWidth,
-      unused: c.clientWidth - (b.right - a.left),
+      unused: c.clientWidth - (b.right - a.left) - 2 * (parseFloat(getComputedStyle(c).getPropertyValue('--pdf-gutter')) || 0),
       center: (a.left + b.right) / 2 - (c.getBoundingClientRect().left + c.clientWidth / 2) };
   });
   check('two-page fit fills available width without wrapping at odd widths', spread.width % 2 === 1 && spread.sameRow && spread.max <= 1 && Math.abs(spread.center) <= 1 && Math.abs(spread.unused) <= 1, spread);

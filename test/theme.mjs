@@ -116,7 +116,7 @@ try {
       transparency: Number(cs.getPropertyValue('--glass-paper-opacity')), bg: getComputedStyle(document.body).backgroundColor };
   });
   check('玻璃纸底透明，文字像素保持不透明', glass.empty > 1000 && glass.ink > 100 && glass.opacity === '1', JSON.stringify(glass));
-  check('默认采用低透明纸面 12% / 磨砂 18px / 圆角 24px', Math.abs(glass.transparency - .88) < .001 && glass.frost === '18px' && glass.radius === '24px');
+  check('默认采用低透明纸面 12% / 磨砂 18px / 圆角 20px', Math.abs(glass.transparency - .88) < .001 && glass.frost === '18px' && glass.radius === '20px');
   check('界面背景保持高透明度，底色近白并带极淡暖意', await page.evaluate(() => {
     const cs = getComputedStyle(document.documentElement);
     return Math.abs(Number(cs.getPropertyValue('--glass-surface-opacity')) - .12) < .001
@@ -128,7 +128,7 @@ try {
     const low = set(0), high = set(100);
     return { low, high, sameCanvas: canvas === window.__viewer.rendered.get(1).canvas };
   });
-  check('水晶滑杆明显改变边缘光与高光且不重建正文', crystal.low[0] !== crystal.high[0] && crystal.low[1] === '0' && crystal.high[1] === '1' && crystal.sameCanvas);
+  check('边缘高光独立于悬浮阴影且不重建正文', crystal.low[0] === crystal.high[0] && crystal.low[1] === '0' && crystal.high[1] === '1' && crystal.sameCanvas);
   const shotPixel = await page.evaluate(async () => {
     const shot = await window.__viewer.capturePageImage(1, { maxDim: 600 });
     const img = new Image(); img.src = shot.dataUrl; await img.decode();
@@ -275,8 +275,8 @@ try {
     check(`${theme} 重置效果不改变主题、字号或阅读位置`, await page.evaluate(before => {
       const style = JSON.parse(localStorage.getItem('reader.ui')).style;
       return style.theme === before.theme && style.fontSize === before.font && window.__viewer.current === before.page && window.__viewer.scale === before.scale
-        && style.glassFrost === 18 && style.glassRadius === 24 && style.glassShadow === 48 && style.glassSurfaceTransparency === 88
-        && style.glassTransparency === 12 && style.glassCrystal === 55;
+        && style.glassFrost === 18 && style.glassRadius === 20 && style.glassShadow === 76 && style.glassSurfaceTransparency === 88
+        && style.glassTransparency === 12 && style.glassCrystal === 70;
     }, beforeReset));
     await page.screenshot({ path: path.join(artifactDir, `theme-${theme}-adjustable-settings.png`) });
   }
@@ -389,11 +389,25 @@ try {
         glassSurfaceTransparency: 80, glassBrightness: brightness, glassFrost: 32, glassShadow: 35 } }));
     }, { transparency, brightness });
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 2);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 3);
     check(custom ? '升级保留用户自定义透明度和亮度' : '升级将旧默认值迁移到微暖透光默认值', await page.evaluate(custom => {
       const s = JSON.parse(localStorage.getItem('reader.ui')).style;
-      return s.appearanceVersion === 2 && s.glassTransparency === (custom ? 41 : 12)
+      return s.appearanceVersion === 3 && s.glassTransparency === (custom ? 41 : 12)
         && s.glassBrightness === (custom ? 91 : 100) && s.glassSurfaceTransparency === 88;
+    }, custom));
+  }
+  for (const custom of [false, true]) {
+    await page.evaluate(custom => {
+      localStorage.setItem('reader.ui', JSON.stringify({ style: { theme: 'glass', appearanceVersion: 2,
+        glassTransparency: 33, glassTone: 9, glassRadius: custom ? 11 : 24,
+        glassShadow: custom ? 29 : 48, glassCrystal: custom ? 87 : 55 } }));
+    }, custom);
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 3);
+    check(custom ? '新悬浮外观保留已调圆角、光影与高光' : '新悬浮外观迁移上一版默认圆角、光影与高光', await page.evaluate(custom => {
+      const s = JSON.parse(localStorage.getItem('reader.ui')).style;
+      return s.glassRadius === (custom ? 11 : 20) && s.glassShadow === (custom ? 29 : 76)
+        && s.glassCrystal === (custom ? 87 : 70) && s.glassTransparency === 33 && s.glassTone === 9;
     }, custom));
   }
   check('操作期间没有页面错误', pageErrors.length === 0, pageErrors.join(' | '));

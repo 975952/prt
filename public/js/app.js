@@ -8,6 +8,7 @@ import { createDraftPersistence } from './draft-persistence.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle } from './pdfview.js';
 import { createPaperTitleIndex } from './paper-titles.js';
+import { CARD_MATERIAL_DEFAULTS, updateTranslationMaterial } from './glass-material.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
 import {
@@ -647,8 +648,9 @@ function initPanels() {
 const DEFAULT_UI_STYLE = Object.freeze({
   theme: 'glass', density: 'standard', fontSize: 14, lineHeight: 1.72,
   codeSize: 12, maxWidth: 760, opacity: 1,
-  glassTransparency: 12, glassSurfaceTransparency: 88, glassFrost: 18, glassRadius: 24,
-  glassBrightness: 100, glassTone: 20, glassShadow: 48, glassCrystal: 55, appearanceVersion: 2,
+  glassTransparency: 12, glassSurfaceTransparency: 88, glassFrost: 18, glassRadius: 20,
+  glassBrightness: 100, glassTone: 20, glassShadow: 76, glassCrystal: 70, appearanceVersion: 3,
+  glassCardMode: 'liquid', glassCardTransparency: 55, glassCardBlur: 1.2, glassCardRefraction: 60,
   nightSaturation: 50, nightBrightness: 90, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
   paper: 'tint',
@@ -672,6 +674,9 @@ const GLASS_CONTROLS = Object.freeze({
   glassTone: { id: 'uiGlassTone', min: 0, max: 100, unit: '%' },
   glassShadow: { id: 'uiGlassShadow', min: 0, max: 100, unit: '%' },
   glassCrystal: { id: 'uiGlassCrystal', min: 0, max: 100, unit: '%' },
+  glassCardTransparency: { id: 'uiGlassCardTransparency', min: 15, max: 85, unit: '%' },
+  glassCardBlur: { id: 'uiGlassCardBlur', min: 0, max: 28, unit: 'px' },
+  glassCardRefraction: { id: 'uiGlassCardRefraction', min: 0, max: 100, unit: '%' },
   nightSaturation: { id: 'uiNightSaturation', min: 0, max: 100, unit: '%' },
   nightBrightness: { id: 'uiNightBrightness', min: 65, max: 100, unit: '%' },
 });
@@ -1301,10 +1306,17 @@ function initLayout() {
   const saved = readUi();
   uiStyle = { ...DEFAULT_UI_STYLE, ...(saved.style || {}) };
   // Upgrade untouched legacy glass defaults once; retain deliberately adjusted values.
-  if (saved.style?.appearanceVersion !== 2 && (!saved.style?.theme || ['glass', 'mist'].includes(saved.style.theme))) {
+  if ((saved.style?.appearanceVersion || 0) < 2 && (!saved.style?.theme || ['glass', 'mist'].includes(saved.style.theme))) {
     const previous = { glassTransparency: 76, glassSurfaceTransparency: 80, glassFrost: 32, glassBrightness: 93, glassShadow: 35 };
     for (const [key, value] of Object.entries(previous)) if (saved.style?.[key] === value) uiStyle[key] = DEFAULT_UI_STYLE[key];
     uiStyle.appearanceVersion = 2;
+    try { localStorage.setItem('reader.ui', JSON.stringify({ ...saved, style: uiStyle })); } catch {}
+  }
+  if ((saved.style?.appearanceVersion || 0) < 3) {
+    for (const [key, oldDefault] of Object.entries({ glassRadius: 24, glassShadow: 48, glassCrystal: 55 })) {
+      if (uiStyle[key] === oldDefault) uiStyle[key] = DEFAULT_UI_STYLE[key];
+    }
+    uiStyle.appearanceVersion = 3;
     try { localStorage.setItem('reader.ui', JSON.stringify({ ...saved, style: uiStyle })); } catch {}
   }
   applyUiStyle();
@@ -1804,10 +1816,20 @@ function applyUiStyle() {
   root.style.setProperty('--home-scale', String(clamp(Number(style.homeZoom) || 100, 70, 160) / 100));
   root.style.setProperty('--glass-paper-opacity', String(1 - glassValue('glassTransparency') / 100));
   root.style.setProperty('--glass-surface-opacity', String(1 - glassValue('glassSurfaceTransparency') / 100));
-  root.style.setProperty('--glass-shadow-strength', String(glassValue('glassShadow') / 35));
+  // Menus and controls retain a quiet shadow; PDF elevation is independent.
+  root.style.setProperty('--glass-shadow-strength', String(48 / 35));
   root.style.setProperty('--glass-crystal', String(glassValue('glassCrystal') / 100));
   root.style.setProperty('--glass-frost', `${glassValue('glassFrost')}px`);
   root.style.setProperty('--glass-radius', `${glassValue('glassRadius')}px`);
+  const elevation = glassValue('glassShadow') / 100;
+  const shadowInk = style.theme === 'dark' ? '0 0 0' : '84 66 44';
+  root.style.setProperty('--pdf-float-shadow', `0 ${2 + elevation * 29}px ${8 + elevation * 48}px ${-2 - elevation * 12}px rgb(${shadowInk} / ${.025 + elevation * .28}), 0 ${1 + elevation * 5}px ${3 + elevation * 10}px -3px rgb(${shadowInk} / ${.02 + elevation * .13})`);
+  if (!Object.hasOwn(CARD_MATERIAL_DEFAULTS, style.glassCardMode)) style.glassCardMode = 'liquid';
+  root.dataset.cardMaterial = style.glassCardMode;
+  updateTranslationMaterial({ enabled: style.theme === 'glass', mode: style.glassCardMode,
+    transparency: glassValue('glassCardTransparency'), blur: glassValue('glassCardBlur'), refraction: glassValue('glassCardRefraction') });
+  $('#glassCardAppearanceControls')?.classList.toggle('hidden', style.theme !== 'glass');
+  $('#glassCardRefractionField')?.classList.toggle('hidden', style.glassCardMode !== 'liquid');
   const glassColor = rgb => `rgb(${rgb.map(v => Math.round(v * glassValue('glassBrightness') / 100)).join(' ')})`;
   // 20 preserves the accepted subtly warm palette; zero is neutral white.
   const tone = glassValue('glassTone');
@@ -12710,6 +12732,7 @@ function fillUiSettings() {
   if (size) size.value = uiStyle.fontSize;
   const zoom = $('#uiZoomSpeed');
   if (zoom) zoom.value = String(clampZoomSpeed(uiStyle.zoomSpeed));
+  if ($('#uiGlassCardMode')) $('#uiGlassCardMode').value = uiStyle.glassCardMode;
   for (const [key, { id }] of Object.entries(GLASS_CONTROLS)) {
     const input = document.getElementById(id);
     if (input) input.value = String(glassValue(key));
@@ -12827,12 +12850,32 @@ const refreshNightInk = debounce(() => viewer?.refreshPaper?.(), 160);
 
 function resetAppearanceEffects() {
   for (const key of Object.keys(GLASS_CONTROLS)) uiStyle[key] = DEFAULT_UI_STYLE[key];
+  const preset = CARD_MATERIAL_DEFAULTS[uiStyle.glassCardMode] || CARD_MATERIAL_DEFAULTS.liquid;
+  uiStyle.glassCardTransparency = preset.transparency;
+  uiStyle.glassCardBlur = preset.blur;
+  uiStyle.glassCardRefraction = preset.refraction;
+  uiStyle.glassCardPresets = {};
   uiStyle.motion = DEFAULT_UI_STYLE.motion;
   applyUiStyle();
   saveUi();
   fillUiSettings();
   if (uiStyle.theme === 'dark') refreshNightInk();
   toast(tr("已恢复默认效果"), 'ok');
+}
+
+function changeCardMaterial() {
+  const next = $('#uiGlassCardMode')?.value;
+  if (!Object.hasOwn(CARD_MATERIAL_DEFAULTS, next) || next === uiStyle.glassCardMode) return;
+  const presets = { ...uiStyle.glassCardPresets, [uiStyle.glassCardMode]: {
+    transparency: glassValue('glassCardTransparency'), blur: glassValue('glassCardBlur'), refraction: glassValue('glassCardRefraction'),
+  } };
+  const target = { ...CARD_MATERIAL_DEFAULTS[next], ...presets[next] };
+  uiStyle.glassCardMode = next;
+  uiStyle.glassCardPresets = presets;
+  uiStyle.glassCardTransparency = glassValue('glassCardTransparency', target.transparency);
+  uiStyle.glassCardBlur = glassValue('glassCardBlur', target.blur);
+  uiStyle.glassCardRefraction = glassValue('glassCardRefraction', target.refraction);
+  applyUiStyle(); saveUi(); fillUiSettings();
 }
 
 function updateUiRangeLabels() {
@@ -13125,6 +13168,7 @@ function initSettings() {
   [...Object.values(GLASS_CONTROLS).map(({ id }) => id), 'uiMotion']
     .forEach((id) => document.getElementById(id)?.addEventListener('input', applyGlassSettingsFromControls));
   $('#resetAppearanceEffects')?.addEventListener('click', resetAppearanceEffects);
+  $('#uiGlassCardMode')?.addEventListener('change', changeCardMaterial);
   // 「会话」分类：四项都只影响本机行为，切换/勾选立刻生效。
   $('#settScopeMode')?.addEventListener('change', () => applySessionScopeMode($('#settScopeMode').value));
   $('#settAiTitle')?.addEventListener('change', () => {

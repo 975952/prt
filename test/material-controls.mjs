@@ -1,4 +1,4 @@
-/** Isolated visual/interaction checks for background tone and crystal surfaces. */
+/** Isolated checks of floating PDF pages and two optical card materials. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -25,74 +25,81 @@ try {
   let ready = false;
   for (let i = 0; i < 100 && !ready; i++) { try { ready = (await fetch(`${base}/api/health`)).ok; } catch {} if (!ready) await wait(100); }
   assert.ok(ready);
-  for (const file of ['js/app.js', 'style.css']) assert.equal(await fetch(`${base}/${file}`).then(r => r.text()), fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'));
-  browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true, args: ['--no-sandbox'], defaultViewport: { width: 1280, height: 900 } });
+  for (const file of ['js/app.js', 'js/glass-material.js', 'js/pdfview.js', 'style.css']) assert.equal(await fetch(`${base}/${file}`).then(r => r.text()), fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'));
+  browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true, defaultViewport: { width: 1440, height: 960 } });
   const page = await browser.newPage(), errors = [];
   page.on('pageerror', e => errors.push(String(e)));
   await page.goto(`${base}/?open=sample.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0 && !window.__viewer.renderTasks.size);
-  await page.evaluate(() => document.fonts.ready);
-  if (await page.$eval('#rightCols', el => el.getBoundingClientRect().width === 0)) await page.click('#topbarRightToggle');
-  await page.waitForFunction(() => document.querySelector('#rightCols').getBoundingClientRect().width > 200 && !window.__viewer.renderTasks.size);
-  await wait(350);
+  await page.evaluate(() => document.fonts.ready); await wait(400);
   const set = (id, value) => page.$eval(`#${id}`, (n, v) => { n.value = v; n.dispatchEvent(new Event('input', { bubbles: true })); }, value);
-  const snapshot = () => page.evaluate(() => ({
-    bg: getComputedStyle(document.documentElement).getPropertyValue('--glass-bg').trim(),
-    low: getComputedStyle(document.documentElement).getPropertyValue('--glass-bg-low').trim(),
-    title: document.querySelector('#uiGlassToneValue').textContent,
-    canvas: window.__viewer.rendered.get(1).canvas.toDataURL(),
-    scroll: window.__viewer.container.scrollTop, scale: window.__viewer.scale,
-  }));
+  const mode = value => page.select('#uiGlassCardMode', value);
+  const snapshot = () => page.evaluate(() => {
+    const v = window.__viewer, p = v.pageEls[1], c = v.rendered.get(1).canvas, style = getComputedStyle(p);
+    return { bg: getComputedStyle(document.documentElement).getPropertyValue('--glass-bg').trim(), canvas: c.toDataURL(),
+      scroll: v.container.scrollTop, scale: v.scale, shadow: style.boxShadow, highlight: getComputedStyle(p, '::before').opacity,
+      sideRadii: [...document.querySelectorAll('.main-row .side')].map(n => getComputedStyle(n).borderRadius) };
+  });
   const initial = await snapshot();
-  assert.equal(initial.bg, 'rgb(252 250 247)', 'default retains the accepted subtly warm background');
-  await set('uiGlassTone', 0); const neutral = await snapshot();
-  await page.screenshot({ path: path.join(scratch, 'neutral.png') });
-  await set('uiGlassTone', 100); const warm = await snapshot();
-  await page.screenshot({ path: path.join(scratch, 'warm.png') });
-  assert.equal(neutral.bg, 'rgb(253 253 253)'); assert.equal(warm.bg, 'rgb(255 244 224)');
-  assert.notEqual(neutral.low, warm.low); assert.equal(warm.title, '100%');
-  assert.equal(neutral.canvas, warm.canvas); assert.equal(neutral.scroll, warm.scroll); assert.equal(neutral.scale, warm.scale);
-  console.log('PASS tone changes neutral white to warm white without recoloring PDF pixels or moving the page');
+  assert.equal(initial.bg, 'rgb(252 250 247)'); assert(initial.sideRadii.every(r => r === '0px'));
+  await set('uiGlassTone', 0); assert.equal((await snapshot()).bg, 'rgb(253 253 253)');
+  await set('uiGlassTone', 100); assert.equal((await snapshot()).bg, 'rgb(255 244 224)');
   await set('uiGlassTone', 20);
-  const screenshots = [];
-  for (const value of [0, 55, 100]) {
-    await set('uiGlassCrystal', value); await wait(100);
-    screenshots.push(Buffer.from(await page.screenshot({ path: path.join(scratch, `crystal-${value}.png`) })).toString('base64'));
-  }
-  const difference = await page.evaluate(async ([low, high]) => {
-    const decode = async b64 => {
-      const im = new Image(); im.src = `data:image/png;base64,${b64}`; await im.decode();
-      const c = document.createElement('canvas'); c.width = im.width; c.height = im.height;
-      const x = c.getContext('2d'); x.drawImage(im, 0, 0); return x.getImageData(0, 0, c.width, c.height);
-    };
-    const [a, b] = await Promise.all([decode(low), decode(high)]);
-    const r = document.querySelector('#rightSide').getBoundingClientRect();
-    const areas = [{ x: r.right - 14, y: r.top + 40, width: 12, height: r.height - 80 }];
-    let total = 0, count = 0, changed = 0;
-    for (const area of areas) for (let y = Math.ceil(area.y); y < Math.min(a.height, area.y + area.height); y++) for (let x = Math.ceil(area.x); x < Math.min(a.width, area.x + area.width); x++) {
-      const i = (y * a.width + x) * 4;
-      const d = (Math.abs(a.data[i] - b.data[i]) + Math.abs(a.data[i + 1] - b.data[i + 1]) + Math.abs(a.data[i + 2] - b.data[i + 2])) / 3;
-      total += d; count++; if (d > 5) changed++;
-    }
-    return { mean: total / count, changed: changed / count };
-  }, [screenshots[0], screenshots[2]]);
-  assert.ok(difference.mean > 6 && difference.changed > .5, `material visibly changes rendered edge pixels: ${JSON.stringify(difference)}`);
-  assert.equal((await snapshot()).canvas, initial.canvas, 'crystal does not modify the PDF canvas');
-  console.log(`PASS crystal 0–100 visibly changes rendered edge pixels: ${JSON.stringify(difference)}`);
-  await page.click('#settingsBtn'); await page.click('#settingsNavAppearance');
-  await page.waitForSelector('#uiGlassTone', { visible: true });
-  await page.focus('#uiGlassTone'); await page.keyboard.press('End'); await page.keyboard.press('ArrowLeft');
-  assert.equal(await page.$eval('#uiGlassTone', n => n.value), '99');
+  await set('uiGlassShadow', 0); await set('uiGlassCrystal', 0); const low = await snapshot();
+  await page.screenshot({ path: path.join(scratch, 'paper-flat.png') });
+  await set('uiGlassShadow', 100); await set('uiGlassCrystal', 100); const high = await snapshot();
+  await page.screenshot({ path: path.join(scratch, 'paper-floating.png') });
+  assert.notEqual(low.shadow, high.shadow); assert.equal(low.highlight, '0'); assert.equal(high.highlight, '1');
+  assert(!high.shadow.includes('inset'), 'paper elevation is external');
+  assert.equal(initial.canvas, high.canvas); assert.equal(initial.scroll, high.scroll); assert.equal(initial.scale, high.scale);
+  console.log('PASS background tone, elevation/highlight, flat sidebars and unchanged PDF pixels/position');
+  await set('uiGlassShadow', 76); await set('uiGlassCrystal', 70);
+  await page.evaluate(() => {
+    const card = document.querySelector('#translationCard'), p = document.querySelector('.page').getBoundingClientRect();
+    card.classList.remove('hidden'); card.style.left = `${p.left + Math.min(180, p.width / 4)}px`; card.style.top = '260px';
+    document.querySelector('#translationCardQuote').textContent = 'The encoder maps an input sequence to continuous representations.';
+    document.querySelector('#translationCardText').textContent = '编码器将输入序列映射为连续表示，解码器利用这些表示逐步生成输出。';
+  });
+  await page.waitForFunction(() => document.querySelector('#prt-translation-refraction feImage')?.getAttribute('href')?.startsWith('data:image/png'));
+  const optical = await page.evaluate(async () => {
+    const node = document.querySelector('#prt-translation-refraction feImage'), im = new Image(); im.src = node.getAttribute('href'); await im.decode();
+    const canvas = document.createElement('canvas'); canvas.width = im.width; canvas.height = im.height;
+    const ctx = canvas.getContext('2d'); ctx.drawImage(im, 0, 0);
+    return { center: [...ctx.getImageData(Math.floor(im.width / 2), Math.floor(im.height / 2), 1, 1).data],
+      edge: [...ctx.getImageData(1, Math.floor(im.height / 2), 1, 1).data], max: Math.max(im.width, im.height) };
+  });
+  assert.deepEqual(optical.center, [128, 128, 128, 255]); assert.notDeepEqual(optical.edge, optical.center); assert(optical.max <= 512);
+  await page.screenshot({ path: path.join(scratch, 'card-liquid.png') });
+  await set('uiGlassCardTransparency', 72); await set('uiGlassCardBlur', 2.4); await set('uiGlassCardRefraction', 90);
+  assert.equal(await page.$eval('#prt-translation-refraction feDisplacementMap', n => n.getAttribute('scale')), '36');
+  await mode('frosted');
+  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '63'); assert.equal(await page.$eval('#uiGlassCardBlur', n => n.value), '15');
+  assert(await page.$eval('#glassCardRefractionField', n => n.classList.contains('hidden')));
+  assert.equal(await page.$eval('.translation-material', n => getComputedStyle(n).backdropFilter), 'blur(15px) saturate(0.85)');
+  await page.screenshot({ path: path.join(scratch, 'card-frosted.png') });
+  await set('uiGlassCardTransparency', 68); await set('uiGlassCardBlur', 19);
+  await mode('liquid');
+  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '72'); assert.equal(await page.$eval('#uiGlassCardBlur', n => n.value), '2.4');
+  await mode('frosted'); assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '68');
+  const grip = await page.$('#translationCardResize'), rect = await grip.boundingBox();
+  await page.mouse.move(rect.x + 10, rect.y + 10); await page.mouse.down(); await page.mouse.move(rect.x + 100, rect.y + 90, { steps: 5 }); await page.mouse.up();
+  await mode('liquid'); await wait(150);
+  assert(await page.evaluate(() => Number(document.querySelector('#prt-translation-refraction').getAttribute('width')) === document.querySelector('#translationCard').clientWidth));
+  assert.equal(await page.$$eval('#prt-translation-refraction', n => n.length), 1);
+  console.log('PASS bounded edge-only refraction, per-material memory and live resize');
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => document.documentElement.style.getPropertyValue('--glass-crystal') === '1');
-  const saved = await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style);
-  assert.equal(saved.glassTone, 99); assert.equal(saved.glassCrystal, 100);
+  await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0);
   await page.click('#settingsBtn'); await page.click('#settingsNavAppearance');
-  assert.equal(await page.$eval('#uiGlassTone', n => n.value), '99');
-  await page.screenshot({ path: path.join(scratch, 'settings.png') });
+  assert.equal(await page.$eval('#uiGlassCardMode', n => n.value), 'liquid');
+  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '72');
+  await mode('frosted'); assert.equal(await page.$eval('#uiGlassCardBlur', n => n.value), '19');
+  await page.waitForSelector('#uiGlassCardTransparency', { visible: true });
+  await page.focus('#uiGlassCardTransparency'); await page.keyboard.press('Home'); await page.keyboard.press('ArrowRight');
+  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '16');
   await page.click('#resetAppearanceEffects');
-  assert.equal(await page.$eval('#uiGlassTone', n => n.value), '20');
-  assert.equal(await page.$eval('#uiGlassCrystal', n => n.value), '55');
+  assert.equal(await page.$eval('#uiGlassCardTransparency', n => n.value), '63');
+  assert.equal(await page.$eval('#uiGlassShadow', n => n.value), '76'); assert.equal(await page.$eval('#uiGlassCrystal', n => n.value), '70');
+  await page.screenshot({ path: path.join(scratch, 'settings.png') });
   assert.deepEqual(errors, []);
-  console.log(`PASS keyboard adjustment, reload persistence and default reset (${desktop ? 'embedded desktop' : 'Node'}). Artifacts: ${scratch}`);
+  console.log(`PASS keyboard, reset, reload persistence and current embedded assets (${desktop ? 'desktop' : 'Node'}). Artifacts: ${scratch}`);
 } finally { await browser?.close(); await stopChild(child); }
