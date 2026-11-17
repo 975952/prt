@@ -39,8 +39,11 @@ const open = async (query = '') => {
   if (query) {
     await page.goto(`${BASE}/${query}`, { waitUntil: 'domcontentloaded' });
   } else {
-    await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
-    await page.evaluate(() => { try { localStorage.removeItem('reader.workspace.v1'); } catch { /* ignore */ } });
+    // Clear before app boot; a temporary restored tab would write progress on reload.
+    await page.evaluateOnNewDocument(() => { try {
+      localStorage.removeItem('reader.workspace.v1');
+      localStorage.removeItem('reader.window.main.progress');
+    } catch { /* ignore */ } });
     await page.goto(`${BASE}/`, { waitUntil: 'domcontentloaded' });
   }
   await sleep(2600);
@@ -60,7 +63,7 @@ const view = (page) => page.evaluate(() => {
     homeVisible: vis('#home'),
     viewerVisible: vis('#viewer'),
     docName: (document.getElementById('docName')?.textContent || '').trim(),
-    activeDocId: activeLi?.dataset.id || null,
+    activeDocId: document.querySelector('.doc-tab.active')?.dataset.doc || activeLi?.dataset.id || null,
     pageCount: (document.getElementById('pageCount')?.textContent || '').trim(),
     aiBarVisible: vis('#aiBar'),
     continueCards: document.querySelectorAll('#homeContinueWrap .home-continue').length,
@@ -93,7 +96,7 @@ console.log('A1 首次启动、没有阅读记录');
   check('两个入口都在', v.openBtn && v.dropZone);
   check('没有继续阅读卡片', v.continueCards === 0, `cards=${v.continueCards}`);
   check('状态栏已删除', v.statusbar === 0, `statusbar=${v.statusbar}`);
-  check('没有阅读记录时给出空态文案', /还没有阅读记录|还没有论文/.test(v.emptyText), JSON.stringify(v.emptyText));
+  check('没有阅读记录时仍列出已导入论文', v.items.length === papers.length && !v.emptyText, `items=${v.items.length}/${papers.length}`);
   check('零页面报错', errs.length === 0, errs.slice(0, 2).join(' | '));
   await page.close();
 }
@@ -208,7 +211,7 @@ console.log('\nA8 最近文件已被移动/删除 + 移除最近记录');
   const stillThere = papers.some((p) => p.docId === target);
   check('**papers/ 里的文件没有被删除**（只移除记录）', stillThere);
   const v2 = await view(page);
-  check('列表随之更新', !v2.items.some((i) => i.id === target), JSON.stringify(v2.items.map((i) => i.id)));
+  check('列表保留论文并更新为未读', v2.items.some((i) => i.id === target && !i.hasX && i.meta === '未读'), JSON.stringify(v2.items.map((i) => i.id)));
   check('零页面报错', errs.length === 0, errs.slice(0, 2).join(' | '));
   await page.close();
 }

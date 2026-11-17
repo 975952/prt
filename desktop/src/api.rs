@@ -960,7 +960,9 @@ pub fn config(rq: Request, method: &Method, body: &[u8]) {
 
 /* ---------------------------------------------------------------- 进度 */
 
-pub fn state(rq: Request, method: &Method, body: &[u8]) {
+pub fn state(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
+    static STATE_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());
     match method {
         Method::Get => {
             let cur = store::read_json("state.json", json!({}));
@@ -977,6 +979,25 @@ pub fn state(rq: Request, method: &Method, body: &[u8]) {
                 return send_json(rq, 500, &err_json("保存阅读进度失败，请重试"));
             }
             send_json(rq, 200, &json!({ "ok": true }));
+        }
+        Method::Delete => {
+            let doc = query_get(raw_query, "doc").unwrap_or_default();
+            if doc.is_empty() {
+                return send_json(rq, 400, &err_json("缺少 doc"));
+            }
+            let mut next = store::read_json("state.json", json!({}));
+            if !next.is_object() { next = json!({}); }
+            let removed = next.get_mut("docs").and_then(Value::as_object_mut)
+                .and_then(|docs| docs.remove(&doc)).is_some();
+            if next.get("lastDoc").and_then(Value::as_str) == Some(doc.as_str()) {
+                next["lastDoc"] = Value::Null;
+                next["lastUrl"] = Value::Null;
+                next["lastName"] = Value::Null;
+            }
+            if !store::write_json("state.json", &next) {
+                return send_json(rq, 500, &err_json("保存阅读进度失败，请重试"));
+            }
+            send_json(rq, 200, &json!({ "ok": true, "removed": removed }));
         }
         _ => send_text(rq, 405, "Method Not Allowed"),
     }

@@ -2122,7 +2122,7 @@ async function loadServerState() {
 }
 
 const saveProgress = debounce(async () => {
-  if (!state.doc || !viewer) return;
+  if (!state.doc || !viewer?.pdf || !document.body.classList.contains('reading')) return;
   const docs = { ...(serverState.docs || {}) };
   docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };
   serverState = { ...serverState, docs, lastDoc: state.doc.docId, lastUrl: state.doc.url, lastName: state.doc.name };
@@ -2139,7 +2139,7 @@ const saveProgress = debounce(async () => {
 }, 500);
 
 async function saveProgressNow({ silent = false } = {}) {
-  if (!state.doc || !viewer?.pdf) return;
+  if (!state.doc || !viewer?.pdf || !document.body.classList.contains('reading')) return;
   const docs = { ...(serverState.docs || {}) };
   docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };
   const payload = { ...serverState, docs, lastDoc: state.doc.docId, lastUrl: state.doc.url, lastName: state.doc.name };
@@ -2160,6 +2160,7 @@ function setView(view) {
     return;
   }
   // 首页由样式临时隐藏阅读侧栏，不把首页布局保存成用户的阅读偏好。
+  $('#docName').textContent = tr("书架");
   state.homeReady = true;
   renderHome();
 }
@@ -2194,13 +2195,14 @@ function recentDocs() {
   const byId = new Map((state.papers || []).map((p) => [p.docId, p]));
   const rows = [];
   for (const [docId, rec] of Object.entries(docs)) {
-    const paper = byId.get(docId);
+    const paper = (docId === serverState.lastDoc && (state.papers || []).find(p => p.docId === docId && p.url === serverState.lastUrl)) || byId.get(docId);
     if (!paper) continue;
     rows.push({
       docId,
       rec,
       name: paper.name,
       url: paper.url,
+      path: paper.path,
       page: Math.max(1, Number(rec?.page) || 1),
       ts: Number(rec?.ts) || 0,
     });
@@ -2228,57 +2230,110 @@ async function removeRecent(docId) {
   }
 }
 
-/**
- * 渲染首页。数据源是 `serverState.docs`（阅读记录），不是 `state.papers` ——
- * 左栏 `renderPaperList()` 管的是「磁盘上有什么」，首页管的是「我读到哪了」。
- * 两者共用同一个 `openDoc()` 出口。
- */
-function renderHome() {
+// 首页的筛选只作用于书架视图，不改变阅读工作区的当前文件夹与会话。
+const homeView = { filter: 'all', folder: null, query: '' };
+function chooseHomeView(filter, folder = null) {
+  homeView.filter = filter;
+  homeView.folder = folder;
+  homeView.query = '';
+  if ($('#homeSearch')) $('#homeSearch').value = '';
+  renderHome({ navigation: false });
+  $('#home .home-content')?.scrollTo({ top: 0 });
+}
+
+/** 书架来自磁盘文件，阅读状态来自 serverState；所有入口共用 openDoc。 */
+function renderHome({ navigation = true } = {}) {
   const list = $('#homeList');
   const contWrap = $('#homeContinueWrap');
   if (!list || !contWrap) return;
   const rows = recentDocs();
+  const recById = new Map(rows.map((r) => [r.docId, r]));
+  const allPapers = state.papers || [];
   const title = $('#homeRecentTitle');
+  const folders = [...(state.folders || [])];
+  // 根目录与缺少文件夹条目的服务端结果也有明确的导航入口。
+  if (allPapers.some(p => !p.folder)) folders.unshift({ path: '', name: tr("未分组") });
+  for (const p of allPapers) {
+    if (p.folder && !folders.some(f => f.path === p.folder)) folders.push({ path: p.folder, name: p.folder.split('/').pop() });
+  }
+  const inFolder = (p, folder) => (p.folder || '') === folder || (!!folder && (p.folder || '').startsWith(`${folder}/`));
+  if (homeView.folder !== null && !folders.some(f => f.path === homeView.folder)) homeView.folder = null;
+  const heading = homeView.folder !== null ? folders.find(f => f.path === homeView.folder)?.name
+    : homeView.filter === 'recent' ? tr("最近阅读") : homeView.filter === 'unread' ? tr("未读论文") : tr("书架");
+  if ($('#homeHeading')) $('#homeHeading').textContent = heading;
+  if (title) title.textContent = homeView.folder !== null ? tr("文件夹中的论文")
+    : homeView.filter === 'recent' ? tr("按最近阅读排序") : homeView.filter === 'unread' ? tr("尚未开始阅读") : tr("全部论文");
+  const readCount = allPapers.filter(p => recById.has(p.docId)).length;
+  for (const [id, count] of [['homeAllCount', allPapers.length], ['homeReadCount', readCount], ['homeUnreadCount', allPapers.length - readCount]]) {
+    if ($(`#${id}`)) $(`#${id}`).textContent = String(count);
+  }
+  const folderNav = $('#homeFolders');
+  if (navigation && folderNav) {
+    folderNav.replaceChildren();
+    for (const folder of folders) {
+      const count = allPapers.filter(p => inFolder(p, folder.path)).length;
+      const depth = folder.path ? Math.min(3, folder.path.split('/').length - 1) : 0;
+      folderNav.append(el('button', {
+        type: 'button', class: 'home-nav-btn', dataset: { homeFolder: folder.path }, title: folder.path || folder.name,
+        style: `--depth:${depth}`, onclick: () => chooseHomeView('all', folder.path),
+      }, el('span', { class: 'home-nav-icon' }, iconEl('folder')),
+      el('span', { text: folder.name }), el('span', { class: 'home-nav-count', text: String(count) })));
+    }
+    if (!folders.length) folderNav.append(el('div', { class: 'home-folders-empty', text: tr("导入后在这里整理") }));
+  }
+  for (const button of $$('#home [data-home-filter]')) button.setAttribute('aria-pressed', String(homeView.folder === null && button.dataset.homeFilter === homeView.filter));
+  for (const button of $$('#home [data-home-folder]')) button.setAttribute('aria-pressed', String(button.dataset.homeFolder === homeView.folder));
 
   // ── 继续阅读卡片：只在「确实有一篇可以接着读」时出现 ──
   contWrap.replaceChildren();
   const last = rows.find((r) => r.docId === serverState.lastDoc) || rows[0];
-  if (last) {
+  if (last && homeView.folder === null && homeView.filter !== 'unread' && !homeView.query.trim()) {
     const go = el('button', { type: 'button', class: 'home-continue', 'aria-label': tr("继续阅读「{0}」，从第 {1} 页开始", last.name, last.page) },
+      el('span', { class: 'hc-cover', 'aria-hidden': 'true' }, iconEl('book', { size: 26 })),
       el('span', { class: 'hc-main' },
         el('span', { class: 'hc-label', text: tr("继续阅读") }),
         el('span', { class: 'hc-name', text: last.name.replace(/\.pdf$/i, ''), title: last.name }),
         el('span', { class: 'hc-meta', text: tr("第 {0} 页 · {1}", last.page, relTime(last.ts)) })),
       el('span', { class: 'hc-go' }, tr("继续 →")));
-    go.onclick = () => openDoc({ name: last.name, url: last.url, docId: last.docId });
+    go.onclick = () => openDoc({ name: last.name, url: last.url, docId: last.docId, path: last.path });
     contWrap.append(go);
   }
 
   // ── 书架：**按文件夹分组**列出 papers 里全部论文（用户口径：不要全部散着铺开） ──
   list.replaceChildren();
-  const allPapers = state.papers || [];
-  if (title) title.textContent = allPapers.length ? tr("书架 · {0} 篇", allPapers.length) : tr("书架");
-  if (!allPapers.length) {
+  const query = homeView.query.trim().toLocaleLowerCase();
+  let visible = allPapers.filter(p => {
+    if (homeView.folder !== null && !inFolder(p, homeView.folder)) return false;
+    if (homeView.filter === 'recent' && !recById.has(p.docId)) return false;
+    if (homeView.filter === 'unread' && recById.has(p.docId)) return false;
+    return !query || `${p.name} ${p.folder || ''}`.toLocaleLowerCase().includes(query);
+  });
+  if ($('#homeResultCount')) $('#homeResultCount').textContent = query ? tr("找到 {0} 篇论文", visible.length) : tr("{0} 篇论文", visible.length);
+  if (!visible.length) {
+    const emptyTitle = !allPapers.length ? tr("还没有论文") : query ? tr("没有找到匹配的论文")
+      : homeView.filter === 'recent' ? tr("还没有阅读记录") : homeView.filter === 'unread' ? tr("所有论文都已开始阅读") : tr("这个文件夹还没有论文");
+    const emptyHint = !allPapers.length || homeView.folder !== null && !query ? tr("点「打开 PDF」选一个，或直接把 PDF 拖进来")
+      : query ? tr("试试其他关键词，或返回全部论文。") : tr("在全部论文中选择一篇，开始阅读。");
     list.append(el('li', { class: 'home-empty' },
-      el('div', { text: tr("还没有论文") }),
-      el('div', { class: 'home-empty-sub', text: tr("点「打开 PDF」选一个，或直接把 PDF 拖进来") })));
+      el('span', { class: 'home-empty-icon', 'aria-hidden': 'true' }, iconEl(query ? 'search' : 'book', { size: 26 })),
+      el('div', { text: emptyTitle }),
+      el('div', { class: 'home-empty-sub', text: emptyHint }),
+      allPapers.length ? el('button', { type: 'button', class: 'home-reset', text: tr("查看全部论文"), onclick: () => chooseHomeView('all') }) : null));
     return;
   }
-  const recById = new Map(rows.map((r) => [r.docId, r]));
   const groups = [];
-  const rootFiles = allPapers.filter((p) => !p.folder);
-  if (rootFiles.length) groups.push({ path: '', name: tr("未分组"), files: rootFiles });
-  for (const f of (state.folders || [])) {
-    const files = allPapers.filter((p) => p.folder === f.path);
-    if (files.length) groups.push({ path: f.path, name: f.name, files });
+  if (homeView.filter === 'recent') {
+    visible.sort((a, b) => recById.get(b.docId).ts - recById.get(a.docId).ts);
+    groups.push({ path: '', name: '', files: visible });
+  } else {
+    for (const f of folders) {
+      const files = visible.filter(p => (p.folder || '') === f.path);
+      if (files.length) groups.push({ path: f.path, name: f.path || f.name, files });
+    }
   }
-  // 兜底：papers 的 folder 不在 folders 清单里（理论上不会）→ 归到「其它」
-  const grouped = new Set(groups.flatMap((g) => g.files));
-  const restFiles = allPapers.filter((p) => !grouped.has(p));
-  if (restFiles.length) groups.push({ path: '?', name: tr("其它"), files: restFiles });
   for (const group of groups) {
-    const depth = group.path && group.path !== '?' ? group.path.split('/').length - 1 : 0;
-    list.append(el('li', {
+    const depth = group.path ? Math.min(3, group.path.split('/').length - 1) : 0;
+    if (group.name) list.append(el('li', {
       class: 'home-folder',
       style: `--depth:${depth}`,
       title: group.path === '?' ? tr("其它") : tr("papers/{0}（{1} 篇）", group.path ? `${group.path}/` : '', group.files.length),
@@ -2292,6 +2347,7 @@ function renderHome() {
       const meta = rec ? tr("第 {0} 页 · {1}", page, relTime(rec.ts)) : tr("未读");
       const item = el('li', { class: 'home-item', dataset: { id: paper.docId }, style: `--depth:${depth}` },
         el('button', { type: 'button', class: 'home-item-go', title: paper.name },
+          el('span', { class: 'hi-icon', 'aria-hidden': 'true' }, iconEl('book', { size: 15 })),
           el('span', { class: 'hi-name', text: paper.name.replace(/\.pdf$/i, '') }),
           el('span', { class: 'hi-meta', text: meta })),
         rec ? el('button', {
@@ -2682,6 +2738,19 @@ function initFiles() {
   });
 
   $('#homeOpen')?.addEventListener('click', () => $('#fileInput')?.click());
+  for (const node of $$('#home [data-home-icon]')) node.append(iconEl(node.dataset.homeIcon));
+  for (const button of $$('#home [data-home-filter]')) button.addEventListener('click', () => chooseHomeView(button.dataset.homeFilter));
+  $('#homeSearch')?.addEventListener('input', (e) => {
+    homeView.query = e.target.value;
+    renderHome({ navigation: false });
+  });
+  $('#homeSearch')?.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+      e.stopPropagation();
+      e.target.value = homeView.query = '';
+      renderHome({ navigation: false });
+    }
+  });
   const drop = $('#homeDrop');
   if (drop) {
     for (const ev of ['dragenter', 'dragover']) {
@@ -3607,7 +3676,7 @@ async function goWelcome({ skipSave = false } = {}) {
   state.folderClosed = true;   // 这个文件夹已完全关闭：下次打开默认新会话
   cleanStaleLastDoc();
   setView('home');
-  $('#docName').textContent = tr("未打开文档");
+  $('#docName').textContent = tr("书架");
   $('#docName').title = '';
   document.title = 'prt';
   refreshReturnButton();
@@ -3871,7 +3940,7 @@ async function openDocColdSwitch({ name, url, docId, path }) {
     state.doc = null;
     state.viewerDocId = null;
     document.title = 'prt';
-    $('#docName').textContent = tr("未打开文档");
+    $('#docName').textContent = tr("书架");
     $('#docName').title = '';
     // 打开失败退回首页（不再是一个既不像欢迎页、又不像错误页的模糊容器）
     setView('home');
@@ -13105,13 +13174,12 @@ function cleanStaleLastDoc() {
   const stale = serverState.lastDoc
     && !state.papers.some((p) => p.docId === serverState.lastDoc || p.name === serverState.lastName);
   if (!stale) return;
+  const staleId = serverState.lastDoc;
   const docs = { ...(serverState.docs || {}) };
   delete docs[serverState.lastDoc];
   serverState = { ...serverState, docs, lastDoc: null, lastUrl: null, lastName: null };
-  fetch('/api/state', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(serverState),
+  fetch(`/api/state?doc=${encodeURIComponent(staleId)}`, {
+    method: 'DELETE',
   }).catch(() => { /* 清不掉也不影响首页显示：recentDocs() 本来就会过滤掉它 */ });
 }
 
@@ -13145,7 +13213,7 @@ window.addEventListener('beforeunload', (event) => {
       }
     } catch { /* unload fallback */ }
   }
-  if (!state.doc || !viewer) return;
+  if (!state.doc || !viewer?.pdf || !document.body.classList.contains('reading')) return;
   try {
     const docs = { ...(serverState.docs || {}) };
     docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };

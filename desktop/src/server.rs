@@ -190,7 +190,7 @@ fn handle(mut rq: Request, ctx: &Ctx) {
         "/api/pdf" => return api::pdf(rq, &raw_query, &method),
         "/api/upload" => return api::upload(rq, &method, &raw_query, &body),
         "/api/config" => return api::config(rq, &method, &body),
-        "/api/state" => return api::state(rq, &method, &body),
+        "/api/state" => return api::state(rq, &method, &raw_query, &body),
         "/api/profile" => return api::profile(rq, &method, &body),
         "/api/notes" => return api::notes(rq, &method, &raw_query, &body),
         "/api/session" => return api::session(rq, &method, &raw_query, &body),

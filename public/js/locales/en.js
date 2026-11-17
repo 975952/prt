@@ -1,6 +1,17 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "书架导航": "Library navigation", "论文阅读工作台": "A space for your papers", "论文筛选": "Filter papers",
+  "最近阅读": "Recently read", "未读论文": "Unread papers", "按文件夹筛选": "Filter by folder",
+  "本地文献库": "Local library", "阅读与思考，从这里继续": "A place to read and think",
+  "整理你的论文，接着上次的进度阅读。": "Your papers, organized. Pick up where you left off.",
+  "搜索论文或文件夹": "Search papers or folders", "文献名称": "Document name",
+  "文件夹中的论文": "Papers in this folder", "按最近阅读排序": "Last read, newest first", "尚未开始阅读": "Ready to read",
+  "导入后在这里整理": "Your folders will appear here", "找到 {0} 篇论文": "{0} matching papers", "{0} 篇论文": "{0} papers",
+  "没有找到匹配的论文": "No matching papers", "还没有阅读记录": "No reading history yet",
+  "所有论文都已开始阅读": "You have started every paper", "这个文件夹还没有论文": "This folder is empty",
+  "试试其他关键词，或返回全部论文。": "Try another search, or return to all papers.",
+  "在全部论文中选择一篇，开始阅读。": "Choose a paper from your library to start reading.", "查看全部论文": "View all papers",
   "语言": "Language",
   "不要调用工具，只回复两个字：可用": "Do not call tools. Reply with only: OK",
   "图片读取失败": "Could not read image", "只支持 PNG / JPEG / WebP 截图": "Screenshots must be PNG, JPEG, or WebP",
@@ -423,6 +434,7 @@ export const en = {
 
 // English singular forms are chosen only for known count labels.
 export const enSingular = {
+  '{0} 篇论文': '{0} paper', '找到 {0} 篇论文': '{0} matching paper',
   '{0} 个会话': '{0} conversation', '{0} 条': '{0} message', '{0} 条消息 · {1}': '{0} message · {1}',
   '{0} 篇': '{0} paper', '已选 {0} 个文件': '{0} file selected', '移动 {0} 个文件到': 'Move {0} file to',
   '{0} 张截图': '{0} screenshot', '选区 {0} 段': '{0} passage', '图片 {0} 张': '{0} image', '页图 {0} 张': '{0} page image',

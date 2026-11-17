@@ -64,6 +64,23 @@ window.fetch = async (input, init = {}) => {
       };
       return navigator.locks ? navigator.locks.request('prt.save.progress', save) : save();
     }
+    if (method === 'DELETE') {
+      const remove = async () => {
+        const response = await serviceFetch(input, init);
+        const doc = url.searchParams.get('doc');
+        if (response.ok && doc) {
+          // The per-window overlay must not restore a deliberately removed record on reload.
+          for (const key of Object.keys(rawStorage).filter(key => /^reader\.window\..+\.progress$/.test(key))) {
+            const own = readJSON(key);
+            if (own.docs) delete own.docs[doc];
+            if (own.lastDoc === doc) Object.assign(own, { lastDoc: null, lastUrl: null, lastName: null });
+            rawStorage.setItem(key, JSON.stringify(own));
+          }
+        }
+        return localizeErrorResponse(response);
+      };
+      return navigator.locks ? navigator.locks.request('prt.save.progress', remove) : remove();
+    }
   }
   return localizeErrorResponse(await serviceFetch(input, init));
 };
