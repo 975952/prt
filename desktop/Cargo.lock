@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "prt"
-version = "1.2.10"
+version = "1.2.11"
 dependencies = [
  "rust-embed",
  "serde_json",

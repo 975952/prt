@@ -1,4 +1,4 @@
-/** Isolated regression: fit alignment, balanced horizontal travel and compact footer. */
+/** Isolated regression: edge-to-edge fit, sidebar resizing, balanced pan and compact footer. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -47,9 +47,11 @@ try {
   const geometry = () => page.evaluate(() => {
     const v = window.__viewer, c = v.container, p = v.pageEls[1];
     const cr = c.getBoundingClientRect(), pr = p.getBoundingClientRect();
-    return { scale: v.scale, left: c.scrollLeft, max: c.scrollWidth - c.clientWidth,
+    const contentLeft = cr.left + c.clientLeft;
+    return { scale: v.scale, fitMode: v._fitMode, left: c.scrollLeft, max: c.scrollWidth - c.clientWidth,
       centerError: pr.left + pr.width / 2 - (cr.left + c.clientLeft + c.clientWidth / 2),
-      width: c.clientWidth, pageWidth: p.offsetWidth, gutter: 2 * (parseFloat(getComputedStyle(c).getPropertyValue('--pdf-gutter')) || 0),
+      width: c.clientWidth, pageWidth: p.offsetWidth, edgeLeft: pr.left - contentLeft,
+      edgeRight: contentLeft + c.clientWidth - pr.right,
       footerGap: document.querySelector('#viewerFoot').getBoundingClientRect().top - cr.bottom,
       layers: [...p.children].map(el => ({ cls: el.className, w: el.getBoundingClientRect().width, left: el.offsetLeft,
         tf: getComputedStyle(el).transform })).filter(el => el.w > p.offsetWidth + 1) };
@@ -58,14 +60,17 @@ try {
     console.log(`${ok ? 'PASS' : 'FAIL'} ${label}: ${JSON.stringify(detail)}`);
     if (!probeOnly) assert.ok(ok, label);
   };
+  const fillsWidth = g => g.fitMode && Math.abs(g.edgeLeft) <= 1 && Math.abs(g.edgeRight) <= 1
+    && g.max <= 1 && Math.abs(g.width - g.pageWidth) <= 1;
   for (const width of [1500, 1051]) {
     await page.setViewport({ width, height: 950 });
     await wait(250);
     await page.click('#footFitWidth');
     await wait(500);
     const fit = await geometry();
-    check(`fit centers paper inside its floating gutter at ${width}px`, Math.abs(fit.centerError) <= 1 && fit.max <= 1 && Math.abs(fit.width - fit.pageWidth - fit.gutter) <= 1, fit);
+    check(`fit reaches both viewer edges at ${width}px`, fillsWidth(fit), fit);
     check('scrollbar meets footer without an empty strip', Math.abs(fit.footerGap) <= 1, fit.footerGap);
+    await page.screenshot({ path: path.join(scratch, `fit-width-${width}.png`) });
     await page.evaluate(() => window.__viewer.setScale(window.__viewer.scale * 1.7));
     const zoom = await geometry();
     check('zoom from center gives equal left/right travel immediately', zoom.max > 20 && Math.abs(zoom.left * 2 - zoom.max) <= 2, zoom);
@@ -77,10 +82,10 @@ try {
     await page.evaluate(() => { window.__viewer.container.scrollLeft = 99999; });
     await page.click('#footFitWidth');
     const reset = await geometry();
-    check('fit clears previous pan immediately', Math.abs(reset.centerError) <= 1 && reset.max <= 1 && reset.left === 0 && Math.abs(reset.width - reset.pageWidth - reset.gutter) <= 1, reset);
+    check('fit clears previous pan immediately and fills both edges', fillsWidth(reset) && reset.left === 0, reset);
     await wait(550);
     const rendered = await geometry();
-    check('fit stays centered after repaint', Math.abs(rendered.centerError) <= 1 && rendered.max <= 1, rendered);
+    check('fit keeps both edges filled after repaint', fillsWidth(rendered), rendered);
     await page.evaluate(() => {
       const range = document.querySelector('#zoomRange');
       range.value = String(Math.round(window.__viewer.scale * 180));
@@ -91,6 +96,35 @@ try {
     check('slider zoom also centers its horizontal travel', slider.max > 20 && Math.abs(slider.left * 2 - slider.max) <= 2, slider);
     await page.click('#footFitWidth');
   }
+  await page.setViewport({ width: 1500, height: 950 });
+  await wait(250);
+  await page.click('#footFitWidth');
+  await wait(500);
+  for (const [side, button] of [['right', '#topbarRightToggle'], ['left', '#topbarLeftToggle']]) {
+    const initiallyClosed = await page.evaluate(side => document.body.classList.contains(`no-${side}`), side);
+    for (let step = 0; step < 2; step++) {
+      await page.click(button);
+      await wait(550);
+      const closed = await page.evaluate(side => document.body.classList.contains(`no-${side}`), side);
+      check(`${side} sidebar visibility changes`, closed === (step === 0 ? !initiallyClosed : initiallyClosed), { closed, initiallyClosed, step });
+      const resized = await geometry();
+      check(`fit reaches both edges with ${side} sidebar ${closed ? 'closed' : 'open'}`, fillsWidth(resized), resized);
+      await page.screenshot({ path: path.join(scratch, `fit-width-${side}-${closed ? 'closed' : 'open'}.png`) });
+    }
+    await page.evaluate(() => window.__viewer.setScale(window.__viewer.scale * 1.6));
+    const manual = await geometry();
+    for (let step = 0; step < 2; step++) {
+      await page.click(button);
+      await wait(550);
+      const resized = await geometry();
+      check(`${side} sidebar toggle preserves manual zoom ${step + 1}`, !resized.fitMode && Math.abs(resized.scale - manual.scale) < 1e-8, resized);
+    }
+    await page.evaluate(() => { window.__viewer.container.scrollLeft = 99999; });
+    await page.click('#footFitWidth');
+    await wait(550);
+    const restored = await geometry();
+    check(`fit clears pan after ${side} sidebar manual-zoom changes`, fillsWidth(restored) && restored.left === 0, restored);
+  }
   await page.setViewport({ width: 1050, height: 950 });
   await wait(250);
   await page.click('#footFitWidth');
@@ -98,11 +132,15 @@ try {
   await wait(300);
   const spread = await page.evaluate(() => {
     const v = window.__viewer, c = v.container, a = v.pageEls[1].getBoundingClientRect(), b = v.pageEls[2].getBoundingClientRect();
+    const contentLeft = c.getBoundingClientRect().left + c.clientLeft;
     return { width: c.clientWidth, sameRow: Math.abs(a.top - b.top) <= 1, max: c.scrollWidth - c.clientWidth,
-      unused: c.clientWidth - (b.right - a.left) - 2 * (parseFloat(getComputedStyle(c).getPropertyValue('--pdf-gutter')) || 0),
-      center: (a.left + b.right) / 2 - (c.getBoundingClientRect().left + c.clientWidth / 2) };
+      unused: c.clientWidth - (b.right - a.left), edgeLeft: a.left - contentLeft,
+      edgeRight: contentLeft + c.clientWidth - b.right,
+      center: (a.left + b.right) / 2 - (contentLeft + c.clientWidth / 2) };
   });
-  check('two-page fit fills available width without wrapping at odd widths', spread.width % 2 === 1 && spread.sameRow && spread.max <= 1 && Math.abs(spread.center) <= 1 && Math.abs(spread.unused) <= 1, spread);
+  check('two-page fit fills both edges without wrapping at odd widths', spread.width % 2 === 1 && spread.sameRow && spread.max <= 1
+    && Math.abs(spread.center) <= 1 && Math.abs(spread.unused) <= 1 && Math.abs(spread.edgeLeft) <= 1 && Math.abs(spread.edgeRight) <= 1, spread);
+  await page.screenshot({ path: path.join(scratch, 'fit-width-two-page.png') });
   await page.click('#footTwoUp');
   await wait(250);
   const numbers = await page.evaluate(() => {
