@@ -28,6 +28,8 @@ mod tests {
     fn index_is_embedded() {
         assert!(contains("index.html"));
         assert!(contains("js/app.js"));
+        assert!(contains("js/i18n.js"));
+        assert!(contains("js/locales/en.js"));
         assert!(contains("vendor/pdf.min.mjs"));
         assert!(count() > 100);
     }
@@ -52,7 +54,6 @@ mod tests {
             "js/prompts/capabilities/teach.js",
             "js/prompts/capabilities/ops.js",
             "js/prompts/capabilities/background.js",
-            "js/prompts/capabilities/legacy.js",
             // A 线 P1.5 / P2.5 新增的独立模块（同样靠 build.bat touch 才会重编）
             "js/citation-validator.js",
             "js/agent.js",
