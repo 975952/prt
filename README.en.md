@@ -6,7 +6,7 @@
 
 [简体中文](README.md) · **English**
 
-A local PDF reader for Windows, with translation, paper chat, and notes beside the original.
+A local PDF reader for Windows, with translation, cross-file questions, and notes beside the original.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
@@ -21,7 +21,7 @@ A local PDF reader for Windows, with translation, paper chat, and notes beside t
 
 ## Pick up where you left off
 
-Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach.
+Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach. During reading, use the top-bar Home button to browse the library, then select a tab to return with its reading position, zoom, and background generation preserved.
 
 ![prt reading workspace with a paper and an illustrative answer](docs/assets/reading-english.png)
 
@@ -32,12 +32,12 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 | Task | In prt |
 | --- | --- |
 | Find your next paper | Library search, recent and unread filters, folders, and continue reading |
-| Compare papers | Tabs, separate windows, window tiling, and saved reading positions |
+| Compare papers | Tabs across folders, separate windows, window tiling, saved reading positions, and restored tab order after reload |
 | Understand a passage | Selection translation, explanations, source comparison, direct deletion of individual results, and clickable citations |
 | Discuss figures | Screenshot selection, long captures, vision-model questions, equations, and tables |
-| Continue a discussion | Per-paper or shared folder conversations, background generation, cross-window sync, and saved drafts |
+| Continue a discussion | Per-paper, shared folder, or global conversations; background generation, cross-window sync, and saved drafts |
 | Keep your bearings | Full-text search, outlines, highlights, notes, and reference lookup |
-| Read comfortably | Glass, Rice paper, and Dark themes; adjustable PDF elevation, edge highlights, translation card materials, and night text brightness |
+| Read comfortably | Fit width fills the reading area, fullscreen keeps navigation visible, and Glass, Rice paper, and Dark themes offer adjustable materials |
 | Choose your language | Simplified Chinese and English throughout the interface; separate answer and translation languages |
 
 ## Get started
@@ -49,7 +49,9 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 
 No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.2.10](https://github.com/975952/prt/releases/tag/v1.2.10). Questions can target other imported files and specific pages without scanning an entire textbook. Scanned pages are supplied as images, and comparisons keep each file's page numbers separate. Generation stays with its conversation through navigation; cancellation, retries and ordered saves prevent late results from entering another conversation or replacing a newer answer.
+**Current release:** [v1.2.13](https://github.com/975952/prt/releases/tag/v1.2.13). Switching between folders keeps open tabs, and reloading restores their order. Choosing a folder browses it on Home; the reading context changes when you open a PDF. Fullscreen keeps the tab bar and Home button visible, and generation continues while you browse Home. **Fit width** fills the available reading area and adapts when sidebars or window size change.
+
+Questions can target other imported files and specific pages without scanning an entire textbook. Scanned pages are supplied as images, and comparisons keep each file's page numbers separate. Generation stays with its conversation through navigation; cancellation, retries and ordered saves prevent late results from entering another conversation or replacing a newer answer.
 
 Updated appearance defaults include 17px reading text, 140% home zoom, 16% page transparency, 100% interface transparency, and 92% background brightness. All remain adjustable in **Settings → Appearance**. **Translation card material** offers independently saved Liquid glass and Frosted glass settings: Liquid starts at 35% transparency, 11.4px blur, and 99% edge refraction; Frosted starts at 71% transparency and 9.4px blur. See the [quick start](docs/quick-start.en.md#adjust-the-appearance) for the other defaults.
 

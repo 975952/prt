@@ -2,13 +2,19 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.2.10](https://github.com/975952/prt/releases/tag/v1.2.10), including questions about specific pages in other imported files, conversation switching and save protection, parallel translation, browser paper searches, and updated appearance defaults.
+This guide covers [v1.2.13](https://github.com/975952/prt/releases/tag/v1.2.13), including tabs across folders, Home and fullscreen navigation, Fit width, questions about specific pages in other files, background generation, and save protection.
 
 Name an imported file and page in your question to read it without opening it on screen. Comparisons can specify a different page for each file. “Next page” follows the previous source; “current page” refers to the visible file. Use a full path when names or editions are ambiguous. Page numbers initially refer to PDF positions; printed book numbers may require checking an offset. Stopping rejects late output, and regenerating replaces both the answer and its corresponding conversation history.
 
 ## Open a paper
 
 Put `prt.exe` in a writable folder and launch it. Import a PDF or drag it into the app. Use tabs for multiple papers, or open a tab in another window for comparison. The page number, fit-width control, and zoom slider are in the bottom toolbar. Use `Ctrl+F` to search.
+
+Tabs belong to the window's whole workspace. Switching between folders keeps the other tabs, and reloading restores existing files in their original order. A tab's close button closes only that tab. Selecting a folder in the reader sidebar opens that folder on Home; the reading and conversation context changes when you open a PDF.
+
+The top-bar **Home** button and tabs remain available in fullscreen. Visiting Home preserves the reading position, zoom, and conversation; generation continues while the app stays open. Select the original tab to return without reloading the same conversation.
+
+**Fit width** fills the available reading area and stays fitted when sidebars or window size change. Two-page mode keeps the gap between pages. Margins inside the PDF itself are unchanged.
 
 The home sidebar offers All papers, Recent, Unread, and folders. Search by filename or folder and use Continue reading to return to your saved page.
 
@@ -31,6 +37,8 @@ In **Settings → Model**, enter the service URL, model name, and API key. Save 
 Select text to translate (`T`), explain (`E`), or add it to a question (`Q`). Use screenshot selection (`R`) for figures or pages without a text layer. You can also paste text into Translation or type a question in Chat. Press Enter to send and Shift+Enter for a new line.
 
 Conversations are managed per paper by default, with history ordered by time. **Settings → Conversations** lets you choose independent paper conversations, shared folder conversations, or global sharing, and choose how conversations open. Use history to switch, rename, or manage conversations. Saved drafts and unfinished translation tasks can be restored.
+
+Returning to papers or folders already open in the workspace resumes their conversation without repeating the initial New or Choose policy. Browsing a folder on Home does not replace a running conversation.
 
 Switching papers within the same conversation preserves the message view and continues generation. Switching to another conversation hides the original view while its task keeps running; you can ask a question in the other conversation and return to see the original task's latest output. Every task keeps the paper materials and page context from when its question was submitted.
 
