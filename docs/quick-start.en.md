@@ -2,7 +2,7 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.2.2](https://github.com/975952/prt/releases/tag/v1.2.2), including library zoom, automatic paper titles, resizable translation cards, and the subtly warm Glass theme.
+This guide covers [v1.2.3](https://github.com/975952/prt/releases/tag/v1.2.3), including library zoom, automatic paper titles, resizable translation cards, and adjustable background tone in Glass.
 
 ## Open a paper
 
@@ -36,7 +36,7 @@ With the right sidebar closed, translations appear in a floating card. Drag its 
 
 Choose Glass, Rice paper, or Dark in **Settings → Appearance**. Adjust transparency, blur, background brightness, lighting, and motion to taste. Dark mode offers separate text-brightness and colored-text controls. Images keep their original colors; image-only PDF pages retain square corners.
 
-Glass uses a near-white, subtly warm background. Its default page transparency is 12%, while interface transparency is 88%. Increase **Crystal intensity** for stronger edge highlights and depth without changing text opacity. **Reset effects** restores the defaults; existing customized values are retained when upgrading.
+Glass uses a near-white, subtly warm background. **Background tone** ranges from neutral white to warm white, with a default of 20%, independently of brightness. Its default page transparency is 12%, while interface transparency is 88%. Increase **Crystal intensity** for thicker glass edges, directional highlights, and layered shadows without changing text opacity or reading position. Settings apply immediately and are saved automatically. **Reset effects** restores the defaults; existing customized values are retained when upgrading.
 
 ## Back up and upgrade
 

@@ -1639,6 +1639,7 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .field input[type="range"] { width: 100%; accent-color: var(--accent); }
 .field select { border: 1px solid var(--border-strong); background: var(--bg); color: var(--fg); border-radius: 7px; padding: calc(7px * var(--ctl-scale)) calc(8px * var(--ctl-scale)); font: inherit; font-size: calc(12px * var(--ctl-scale)); }
 .field .range-value { font-size: var(--ui-fs-2xs); color: var(--fg-faint); float: right; }
+.field .range-endpoints { display: flex; justify-content: space-between; font-size: var(--ui-fs-2xs); color: var(--fg-faint); }
 .settings-reset { display: flex; gap: 8px; margin-top: 13px; }
 .settings-reset button { border: 1px solid var(--border-strong); background: var(--bg); color: var(--fg-dim); border-radius: 7px; padding: calc(6px * var(--ctl-scale)) calc(10px * var(--ctl-scale)); font-size: calc(11px * var(--ctl-scale)); }
 .settings-reset button:hover { border-color: var(--accent); color: var(--accent); }
@@ -3362,37 +3363,45 @@ body:not(.reading) #topbar :is(#homeBtn, #opsBtn, #searchBtn, .topbar-side-contr
 /* Crystal highlights sit on the surface edges, never on top of PDF text. */
 :root[data-theme="glass"] body {
   background: radial-gradient(ellipse at 8% 8%, rgba(255, 255, 255, .9), transparent 56%),
-    radial-gradient(ellipse at 95% 95%, rgba(239, 227, 208, .16), transparent 58%),
+    radial-gradient(ellipse at 95% 95%, rgba(var(--glass-tint-rgb, 239, 227, 208), .16), transparent 58%),
     linear-gradient(135deg, var(--reader-bg), var(--reader-bg-low));
 }
 :root[data-theme="glass"] .home {
   background: rgba(255, 255, 255, calc(.38 + var(--glass-surface-opacity, .12) * .6));
   border-color: rgba(255, 255, 255, .88);
-  box-shadow: inset 0 1px 0 #fff, 0 8px 28px rgba(108, 90, 62, .06);
+  box-shadow: var(--crystal-surface-shadow);
   backdrop-filter: blur(var(--glass-frost, 18px));
 }
-:root[data-theme="glass"] .home-sidebar { background: rgba(249, 246, 240, .38); border-color: rgba(206, 193, 171, .25); }
+:root[data-theme="glass"] .home-sidebar { background: rgba(var(--glass-panel-rgb, 249, 246, 240), .38); border-color: rgba(var(--glass-edge-rgb, 145, 132, 112), .18); }
 :root[data-theme="glass"] .home-search { background: rgba(255, 255, 255, .66); }
 :root[data-theme="glass"] .home-continue { background: rgba(255, 255, 255, .68); }
 :root[data-theme="glass"] .home-item:hover { background: rgba(255, 255, 255, .72); }
+:root[data-theme="glass"] {
+  --crystal-rim: calc(var(--glass-crystal, .55) * 8px);
+  --crystal-surface-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, calc(.35 + var(--glass-crystal, .55) * .65)),
+    inset 0 var(--crystal-rim) var(--crystal-rim) rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .96)),
+    inset var(--crystal-rim) 0 var(--crystal-rim) rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .7)),
+    inset calc(var(--crystal-rim) * -.65) calc(var(--crystal-rim) * -1) calc(var(--crystal-rim) * 1.6) rgba(var(--glass-edge-rgb, 145, 132, 112), calc(var(--glass-crystal, .55) * .34)),
+    0 0 0 1px rgba(var(--glass-edge-rgb, 145, 132, 112), calc(var(--glass-crystal, .55) * .3)),
+    0 3px 0 rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .85)),
+    0 5px 3px rgba(var(--glass-edge-rgb, 145, 132, 112), calc(var(--glass-crystal, .55) * .2)),
+    0 12px 30px rgba(var(--glass-edge-rgb, 145, 132, 112), calc(.06 * var(--glass-shadow-strength, 1) + var(--glass-crystal, .55) * .1));
+}
 :root[data-theme="glass"] .page:not([data-image-only="true"]) {
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, calc(.45 + var(--glass-crystal, .55) * .55)),
-    inset 0 2px 1px rgba(255, 255, 255, var(--glass-crystal, .55)),
-    inset 0 -2px 2px rgba(183, 162, 127, calc(var(--glass-crystal, .55) * .22)),
-    0 0 0 1px rgba(187, 172, 148, calc(var(--glass-crystal, .55) * .5)),
-    0 8px 24px rgba(100, 83, 58, calc(.08 * var(--glass-shadow-strength, 1))),
-    0 18px 48px rgba(161, 135, 94, calc(var(--glass-crystal, .55) * .14));
+  box-shadow: var(--crystal-surface-shadow);
 }
 :root[data-theme="glass"] .page:not([data-image-only="true"])::before {
-  background: linear-gradient(120deg, rgba(255, 255, 255, .8), transparent 15% 85%, rgba(239, 224, 199, .25));
+  background: linear-gradient(122deg, rgba(255, 255, 255, .95), transparent 12% 88%, rgba(var(--glass-tint-rgb, 239, 227, 208), .32)),
+    linear-gradient(to bottom, rgba(255, 255, 255, .9), transparent 28px),
+    linear-gradient(to right, rgba(255, 255, 255, .65), transparent 18px);
   opacity: var(--glass-crystal, .55);
 }
 :root[data-theme="glass"] .main-row .side {
   border-radius: var(--glass-radius, 24px);
   background: rgba(255, 255, 255, var(--glass-surface-opacity, .12));
-  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .85)),
-    inset 0 2px 0 rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .6)),
-    0 6px 22px rgba(108, 90, 62, calc(var(--glass-crystal, .55) * .08));
+  background-image: linear-gradient(126deg, rgba(255, 255, 255, calc(var(--glass-crystal, .55) * .72)), transparent 30% 70%, rgba(var(--glass-tint-rgb, 239, 227, 208), calc(var(--glass-crystal, .55) * .14)));
+  box-shadow: var(--crystal-surface-shadow);
   backdrop-filter: blur(var(--glass-frost, 18px));
 }
 .settings-effects-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 16px; }

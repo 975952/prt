@@ -648,7 +648,7 @@ const DEFAULT_UI_STYLE = Object.freeze({
   theme: 'glass', density: 'standard', fontSize: 14, lineHeight: 1.72,
   codeSize: 12, maxWidth: 760, opacity: 1,
   glassTransparency: 12, glassSurfaceTransparency: 88, glassFrost: 18, glassRadius: 24,
-  glassBrightness: 100, glassShadow: 48, glassCrystal: 55, appearanceVersion: 2,
+  glassBrightness: 100, glassTone: 20, glassShadow: 48, glassCrystal: 55, appearanceVersion: 2,
   nightSaturation: 50, nightBrightness: 90, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
   paper: 'tint',
@@ -669,6 +669,7 @@ const GLASS_CONTROLS = Object.freeze({
   glassFrost: { id: 'uiGlassFrost', min: 0, max: 48, unit: 'px' },
   glassRadius: { id: 'uiGlassRadius', min: 0, max: 32, unit: 'px' },
   glassBrightness: { id: 'uiGlassBrightness', min: 60, max: 100, unit: '%' },
+  glassTone: { id: 'uiGlassTone', min: 0, max: 100, unit: '%' },
   glassShadow: { id: 'uiGlassShadow', min: 0, max: 100, unit: '%' },
   glassCrystal: { id: 'uiGlassCrystal', min: 0, max: 100, unit: '%' },
   nightSaturation: { id: 'uiNightSaturation', min: 0, max: 100, unit: '%' },
@@ -1808,7 +1809,17 @@ function applyUiStyle() {
   root.style.setProperty('--glass-frost', `${glassValue('glassFrost')}px`);
   root.style.setProperty('--glass-radius', `${glassValue('glassRadius')}px`);
   const glassColor = rgb => `rgb(${rgb.map(v => Math.round(v * glassValue('glassBrightness') / 100)).join(' ')})`;
-  const glassBg = glassColor([252, 250, 247]), glassBgLow = glassColor([246, 242, 235]);
+  // 20 preserves the accepted subtly warm palette; zero is neutral white.
+  const tone = glassValue('glassTone');
+  const toneColor = (neutral, subtle, warm) => {
+    const [a, b, t] = tone <= 20 ? [neutral, subtle, tone / 20] : [subtle, warm, (tone - 20) / 80];
+    return a.map((v, i) => Math.round(v + (b[i] - v) * t));
+  };
+  const glassBg = glassColor(toneColor([253, 253, 253], [252, 250, 247], [255, 244, 224]));
+  const glassBgLow = glassColor(toneColor([248, 248, 248], [246, 242, 235], [248, 231, 203]));
+  root.style.setProperty('--glass-tint-rgb', toneColor([239, 239, 239], [239, 227, 208], [242, 208, 151]).join(', '));
+  root.style.setProperty('--glass-panel-rgb', toneColor([249, 249, 249], [249, 246, 240], [253, 242, 221]).join(', '));
+  root.style.setProperty('--glass-edge-rgb', toneColor([136, 136, 136], [145, 132, 112], [161, 127, 76]).join(', '));
   root.style.setProperty('--glass-bg', glassBg);
   root.style.setProperty('--glass-bg-low', glassBgLow);
   const palette = style.theme === 'dark' ? [[28, 30, 32], [24, 26, 28]] : [[248, 245, 235], [241, 237, 224]];
@@ -1817,6 +1828,7 @@ function applyUiStyle() {
   root.style.setProperty('--appearance-bg', style.theme === 'glass' ? glassBg : adjusted(palette[0]));
   root.style.setProperty('--appearance-bg-low', style.theme === 'glass' ? glassBgLow : adjusted(palette[1]));
   $('#glassCrystalField')?.classList.toggle('hidden', style.theme !== 'glass');
+  $('#glassToneField')?.classList.toggle('hidden', style.theme !== 'glass');
   root.dataset.nightSaturation = String(glassValue('nightSaturation'));
   root.dataset.nightBrightness = String(glassValue('nightBrightness'));
   const nightInk = (rgb) => `rgb(${rgb.map(v => Math.round(v * glassValue('nightBrightness') / 100)).join(' ')})`;
