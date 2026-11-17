@@ -271,7 +271,9 @@ async function deleteRowFile(row) {
     if (!doc) continue;
     await st.ctx?.discardSessionFile?.(doc, row.sid);
     const q = new URLSearchParams({ doc, sid: row.sid });
-    const r = await fetch(`/api/session?${q}`, { method: 'DELETE' });
+    let r;
+    try { r = await fetch(`/api/session?${q}`, { method: 'DELETE' }); }
+    finally { st.ctx?.finishSessionFileDiscard?.(doc, row.sid); }
     if (r.ok || r.status === 404) continue;
     const j = await r.json().catch(() => ({}));
     lastErr = new Error(errorOf(j, r));
@@ -280,6 +282,10 @@ async function deleteRowFile(row) {
 }
 
 /* ───────────────────────────── 列表刷新 ───────────────────────────── */
+let listRequest = 0;
+let allListRequest = 0;
+let docOpenRequest = 0;
+const contextKey = () => JSON.stringify([st.ctx?.doc?.()?.docId || '', listScopeKey(), st.ctx?.currentSid?.() || '']);
 
 async function refreshList({ force = false } = {}) {
   if (!st.ctx?.hasDoc?.()) return st.list;
@@ -288,19 +294,24 @@ async function refreshList({ force = false } = {}) {
   st.docId = st.ctx.doc()?.docId || '';
   st.currentSid = st.ctx.currentSid();
   if (st.listLoading && !force) return st.list;
+  const request = ++listRequest, owner = contextKey();
+  const current = () => request === listRequest && owner === contextKey();
   st.listLoading = true;
   try {
     const rows = await fetchFolderList();
+    if (!current()) return st.list;
     st.list = rows;
     st.listLoaded = true;
     st.ctx.adoptList?.(rows);
   } catch (e) {
+    if (!current()) return st.list;
     if (!st.listLoaded) st.list = [];
     st.listLoaded = true;
     toast(tr("会话列表读取失败：{0}", e.message), 'err', 4200);
   } finally {
-    st.listLoading = false;
+    if (request === listRequest) st.listLoading = false;
   }
+  if (!current()) return st.list;
   renderHeader();
   if (st.quickOpen) renderQuickList();
   if (st.historyOpen) {
@@ -314,16 +325,22 @@ async function refreshList({ force = false } = {}) {
 
 async function refreshAllList() {
   if (!st.ctx?.hasDoc?.()) return;
+  const request = ++allListRequest, owner = contextKey();
+  const current = () => request === allListRequest && owner === contextKey();
   st.allLoading = true;
   if (st.historyOpen) renderHistoryList();
   try {
-    st.allList = await fetchAllList();
+    const rows = await fetchAllList();
+    if (!current()) return;
+    st.allList = rows;
   } catch (e) {
+    if (!current()) return;
     st.allList = [];
     toast(tr("全部会话读取失败：{0}", e.message), 'err', 4200);
   } finally {
-    st.allLoading = false;
+    if (request === allListRequest) st.allLoading = false;
   }
+  if (!current()) return;
   if (st.historyOpen) renderHistoryList();
   renderHeader();
 }
@@ -398,6 +415,8 @@ function scopeMode() {
 
 /** app.js 刚打开一篇文档：决定「接上哪段对话」或「按打开文件夹时的策略执行」 */
 export async function sessionsOnDocOpened(docId) {
+  const request = ++docOpenRequest, openedDoc = String(docId || '');
+  const openedScope = listScopeKey();
   st.docId = String(docId || '');
   st.currentSid = st.ctx?.currentSid?.() || '';
   // 先把上一轮可能残留的选择卡片收起来（aiArea 里可能还挂着旧节点）
@@ -406,7 +425,7 @@ export async function sessionsOnDocOpened(docId) {
   st.ctx?.renderAi?.();
 
   await refreshList({ force: true });
-  if (!st.ctx?.hasDoc?.() || (st.ctx.doc()?.docId || '') !== st.docId) return;
+  if (request !== docOpenRequest || !st.ctx?.hasDoc?.() || (st.ctx.doc()?.docId || '') !== openedDoc || listScopeKey() !== openedScope) return;
 
   st.currentSid = st.ctx?.currentSid?.() || '';
   // 历史面板/选择卡片已经指定了要打开的会话：打开文档只是顺路加载论文，

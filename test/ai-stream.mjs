@@ -17,6 +17,13 @@ const sse = (chunks) => new Response(new ReadableStream({
     controller.close();
   },
 }), { headers: { 'Content-Type': 'text/event-stream' } });
+const deferred = () => { let resolve; const promise = new Promise(done => { resolve = done; }); return { promise, resolve }; };
+const nextTurn = () => new Promise(resolve => setImmediate(resolve));
+const bounded = async promise => {
+  let timer;
+  try { return await Promise.race([promise, new Promise((_, reject) => { timer = setTimeout(() => reject(Error('Cancellation did not finish')), 1500); })]); }
+  finally { clearTimeout(timer); }
+};
 
 try {
   let request;
@@ -60,6 +67,67 @@ try {
   globalThis.fetch = async () => sse(['data: {"error":{"message":"stream error"}}\n\n']);
   await assert.rejects(streamChat({ messages, rawResponse: true }), /stream error/);
   console.log('PASS: ordinary text modes and upstream error propagation');
+
+  {
+    const ctl = new AbortController(); ctl.abort(); let fetches = 0;
+    globalThis.fetch = async () => { fetches++; return sse([event({ content: 'late' })]); };
+    await assert.rejects(streamChat({ messages, signal: ctl.signal }), { name: 'AbortError' });
+    assert.equal(fetches, 0);
+    console.log('PASS: already stopped requests never call the provider');
+  }
+  {
+    const ctl = new AbortController(), late = deferred(), deltas = [];
+    globalThis.fetch = () => late.promise; // deliberately ignores the supplied signal
+    const pending = streamChat({ messages, signal: ctl.signal, onDelta: part => deltas.push(part) });
+    await nextTurn(); ctl.abort(); await assert.rejects(bounded(pending), { name: 'AbortError' });
+    late.resolve(sse([event({ content: 'must not appear' })])); await nextTurn();
+    assert.deepEqual(deltas, []);
+    console.log('PASS: Stop releases a hung fetch and ignores its late response');
+  }
+  {
+    const ctl = new AbortController(), late = deferred(), entered = deferred(), deltas = [], reasons = [];
+    let cancellations = 0;
+    globalThis.fetch = async () => ({ ok: true, headers: new Headers({ 'Content-Type': 'text/event-stream' }), body: {
+      getReader: () => ({ read() { entered.resolve(); return late.promise; }, cancel() { cancellations++; return Promise.resolve(); }, releaseLock() {} }),
+    } });
+    const pending = streamChat({ messages, signal: ctl.signal, rawResponse: true,
+      onDelta: part => deltas.push(part), onReasoning: part => reasons.push(part) });
+    await entered.promise; ctl.abort(); await assert.rejects(bounded(pending), { name: 'AbortError' });
+    late.resolve({ value: encoder.encode(event({ reasoning_content: 'late reason', content: 'late answer',
+      tool_calls: [{ index: 0, id: 'late', function: { name: 'read_page', arguments: '{"page":3}' } }] })), done: false });
+    await nextTurn(); assert.deepEqual(deltas, []); assert.deepEqual(reasons, []); assert(cancellations > 0);
+    console.log('PASS: Stop releases a hung reader and rejects late content, reasoning and tool calls');
+  }
+  {
+    for (const [contentType, raw, stream] of [
+      ['application/json', JSON.stringify({ choices: [{ message: { content: 'late JSON answer' } }] }), true],
+      ['text/event-stream', event({ content: 'late buffered answer' }), false],
+    ]) {
+      const ctl = new AbortController(), late = deferred(), entered = deferred(), deltas = [];
+      globalThis.fetch = async () => ({ ok: true, headers: new Headers({ 'Content-Type': contentType }), text() { entered.resolve(); return late.promise; } });
+      const pending = streamChat({ messages, signal: ctl.signal, stream, onDelta: part => deltas.push(part) });
+      await entered.promise; ctl.abort(); await assert.rejects(bounded(pending), { name: 'AbortError' });
+      late.resolve(raw); await nextTurn(); assert.deepEqual(deltas, []);
+    }
+    console.log('PASS: late JSON and buffered SSE bodies cannot deliver after Stop');
+  }
+  {
+    const ctl = new AbortController(), deltas = [];
+    globalThis.fetch = async () => sse([event({ reasoning_content: 'first', content: 'same-chunk stale answer' })]);
+    await assert.rejects(streamChat({ messages, signal: ctl.signal,
+      onReasoning: () => ctl.abort(), onDelta: part => deltas.push(part) }), { name: 'AbortError' });
+    assert.deepEqual(deltas, []);
+    console.log('PASS: cancellation inside a callback prevents later data in the same chunk');
+  }
+  {
+    let cancellations = 0;
+    globalThis.fetch = async () => ({ ok: true, headers: new Headers({ 'Content-Type': 'text/event-stream' }), body: {
+      getReader: () => ({ read: () => new Promise(() => {}), cancel() { cancellations++; return Promise.resolve(); }, releaseLock() {} }),
+    } });
+    await assert.rejects(bounded(streamChat({ messages, idleMs: 25 })), { name: 'TimeoutError' });
+    assert(cancellations > 0);
+    console.log('PASS: idle watchdog ends unresponsive reads even when cancellation is ignored');
+  }
 } finally {
   globalThis.fetch = nativeFetch;
 }

@@ -1,3 +1,4 @@
+import { snapshotPaperTarget } from './paper-target.js';
 /** 阅读对象随会话保存；界面引用、模型历史和检索共用同一个对象。 */
 const MAX_FOCUS = 6000;
 const pageNumber = (p) => Number.isInteger(Number(p)) && Number(p) > 0 ? Number(p) : null;
@@ -12,13 +13,45 @@ function cleanFocus(focus) {
   return { text: String(focus.text).slice(0, MAX_FOCUS), page: fromRight ? null : pageNumber(focus.page),
     kind: focus.kind === 'question' ? 'question' : 'selection',
     // 右栏回答/译文里划的词不是 PDF 原文，不能冒充某一页的原文
-    source: fromRight ? 'right' : '' };
+    source: fromRight ? 'right' : '',
+    ...(snapshotPaperTarget(focus.document, focus.document?.page || focus.page)
+      ? { document: snapshotPaperTarget(focus.document, focus.document?.page || focus.page) } : {}) };
 }
 
 export function snapshotHistory(history = []) {
   return (Array.isArray(history) ? history : []).filter((m) => m && ['user', 'assistant'].includes(m.role))
     .slice(-80).map((m) => ({ role: m.role, content: String(m.content || '').slice(0, 12000),
+      ...(typeof m.entryId === 'string' && m.entryId ? { entryId: m.entryId.slice(0, 80),
+        generation: Number.isSafeInteger(m.generation) && m.generation >= 0 ? m.generation : 0,
+        generationId: typeof m.generationId === 'string' && /^[A-Za-z0-9_-]{1,80}$/.test(m.generationId) ? m.generationId : '' } : {}),
       ...(m.role === 'user' ? { focus: cleanFocus(m.focus), guidance: String(m.guidance || '').slice(0, 400) } : {}) }));
+}
+
+/** Preserve turn identity across retries, saving and model-history snapshots. */
+export function replaceReadingTurn(history, request, answer, entry, insertionIndex = null) {
+  const saved = snapshotHistory(history);
+  const priorIndex = saved.findIndex(row => row.entryId === entry.id);
+  const index = priorIndex >= 0 ? priorIndex : Number.isInteger(insertionIndex) ? insertionIndex : saved.length;
+  const kept = saved.filter(row => row.entryId !== entry.id);
+  const identity = { entryId: entry.id, generation: entry.generation || 0, generationId: entry.generationId || '' };
+  kept.splice(Math.min(index, kept.length), 0, ...readingTurn(request, answer).map(row => ({ ...row, ...identity })));
+  return snapshotHistory(kept);
+}
+
+function bindLegacyHistory(history, entries) {
+  const saved = snapshotHistory(history);
+  for (let i = 0; i + 1 < saved.length; i++) {
+    const user = saved[i], answer = saved[i + 1];
+    if (user.role !== 'user' || answer.role !== 'assistant' || user.entryId || answer.entryId) continue;
+    const matches = entries.filter((row, index) => row?.id && row.kind !== 'user' && row.block === 'chat'
+      && String(row.text || '').slice(0, 12000) === answer.content
+      && String(row.retry?.question || entries[index - 1]?.text || '').slice(0, 12000) === user.content);
+    if (matches.length !== 1) continue;
+    const entry = matches[0], identity = { entryId: entry.id, generation: entry.generation || 0, generationId: entry.generationId || '' };
+    Object.assign(user, identity); Object.assign(answer, identity);
+    if (!user.focus?.document && user.focus && entry.retry?.reading?.focus?.document) user.focus.document = snapshotPaperTarget(entry.retry.reading.focus.document);
+  }
+  return snapshotHistory(saved);
 }
 
 export function readingIntent(question, selection = '') {
@@ -66,7 +99,9 @@ export function explicitPageIn(question, numPages = null) {
 export function resolvePageRole({ question, reading = null, screenPage = null, attachmentPage = null, numPages = null } = {}) {
   const attach = pageNumber(attachmentPage);
   if (attach) return { page: attach, role: 'selection' };
-  const explicit = explicitPageIn(question, numPages);
+  // A named file may have many more pages than the visible PDF. Validate only
+  // after the source document has been resolved, never replace it with screenPage.
+  const explicit = explicitPageIn(question);
   if (explicit) return { page: explicit, role: 'explicit' };
   if (reading?.inherited && !screenPageRequested(question)) {
     const topic = pageNumber(reading?.focus?.page);
@@ -123,7 +158,7 @@ export function snapshotReadingRequest(request) {
 
 /** 老存档的界面条目比 history 更完整：补回「释」及丢掉的原文引用。 */
 export function restoreReadingHistory(history, entries = []) {
-  const saved = snapshotHistory(history);
+  const saved = bindLegacyHistory(history, entries);
   if (saved.some((m) => m.role === 'user' && m.focus)) return saved;
   const rebuilt = [];
   let user = null;
@@ -135,12 +170,13 @@ export function restoreReadingHistory(history, entries = []) {
       || row.retry?.reading?.focus?.source === 'right' ? 'right' : '';
     if (row.tag === 'explanation' && row.quote) {
       const request = resolveReadingRequest({ question: '请解释这段内容。', selection: row.quote, selectionSource, page: row.page, history: rebuilt });
-      rebuilt.push(...readingTurn(request, row.text));
+      rebuilt.push(...readingTurn(request, row.text).map(turn => ({ ...turn, entryId: row.id, generation: row.generation || 0, generationId: row.generationId || '' })));
       user = null;
     } else if (row.tag === 'answer' && user) {
       const request = resolveReadingRequest({ question: user.text, selection: user.quote || row.retry?.quoteText,
         selectionSource, page: row.page || user.page, history: rebuilt });
-      rebuilt.push(...readingTurn(request, row.text));
+      if (row.retry?.reading?.focus?.document && request.focus) request.focus.document = snapshotPaperTarget(row.retry.reading.focus.document);
+      rebuilt.push(...readingTurn(request, row.text).map(turn => ({ ...turn, entryId: row.id, generation: row.generation || 0, generationId: row.generationId || '' })));
       user = null;
     }
   }
@@ -159,7 +195,9 @@ export function historyMessages(history) {
     const focus = m.role === 'user' && m.focus?.kind === 'selection' ? m.focus : null;
     const heading = focus?.source === 'right' ? '当轮引用 · 来自右栏回答/译文，非论文原文'
       : `当轮原文${focus?.page ? ` · 第${focus.page}页` : ''}`;
-    return { role: m.role, content: focus
-      ? `【${heading}】\n${focus.text}\n\n【当轮问题】\n${m.content}` : m.content };
+    const source = m.role === 'user' && m.focus?.document;
+    const sourceHeading = source ? `【当轮材料文件】${source.path || source.name}${source.page ? ` · PDF p.${source.page}` : ''}\n` : '';
+    return { role: m.role, content: sourceHeading + (focus
+      ? `【${heading}】\n${focus.text}\n\n【当轮问题】\n${m.content}` : m.content) };
   });
 }

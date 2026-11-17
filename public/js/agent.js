@@ -1,4 +1,5 @@
 import { t as tr } from './i18n.js';
+import { runWithDeadline } from './task-deadline.js';
 /**
  * A 线 P2.5：让 AI 自己决定读哪些页（只读工具 + 有界循环）。
  *
@@ -338,22 +339,22 @@ export function parseModelResponse(json) {
  * runtime：{ numPages, getReadingState, readPage, searchPaper, readScanPage, readPageImage, readMemory }
  * 返回 { ok:true, value } 或 { ok:false, error }；任何异常都收敛成错误文本给模型。
  */
-export async function executeToolCall(call, runtime) {
+export async function executeToolCall(call, runtime, options = {}) {
   const check = validateToolCall(call, { numPages: runtime?.numPages || 0 });
   if (check.error) return { ok: false, error: check.error };
   try {
     const { name, args } = check;
     let value;
-    if (name === 'get_reading_state') value = await runtime.getReadingState();
-    else if (name === 'read_page') value = await runtime.readPage(args.page);
-    else if (name === 'search_paper') value = await runtime.searchPaper(args.query);
-    else if (name === 'read_scan_page') value = await runtime.readScanPage(args.page);
-    else if (name === 'read_page_image') value = await runtime.readPageImage(args.page);
-    else if (name === 'read_memory') value = await runtime.readMemory(args.topic);
-    else if (name === 'list_papers') value = await runtime.listPapers();
-    else if (name === 'search_papers') value = await runtime.searchPapers(args);
-    else if (name === 'read_other_paper') value = await runtime.readOtherPaper(args);
-    else if (name === 'read_other_paper_image') value = await runtime.readOtherPaperImage(args);
+    if (name === 'get_reading_state') value = await runtime.getReadingState(options);
+    else if (name === 'read_page') value = await runtime.readPage(args.page, options);
+    else if (name === 'search_paper') value = await runtime.searchPaper(args.query, options);
+    else if (name === 'read_scan_page') value = await runtime.readScanPage(args.page, options);
+    else if (name === 'read_page_image') value = await runtime.readPageImage(args.page, options);
+    else if (name === 'read_memory') value = await runtime.readMemory(args.topic, options);
+    else if (name === 'list_papers') value = await runtime.listPapers(options);
+    else if (name === 'search_papers') value = await runtime.searchPapers(args, options);
+    else if (name === 'read_other_paper') value = await runtime.readOtherPaper(args, options);
+    else if (name === 'read_other_paper_image') value = await runtime.readOtherPaperImage(args, options);
     else return { ok: false, error: `未知工具：${name}` };
     /* 工具实现用 { error } 表示「这次没办成」（例如对文本型 PDF 调 read_scan_page）。
        统一当失败处理：否则错误会被当成正常材料、页图集合也会误收。 */
@@ -475,6 +476,8 @@ export async function runAgentLoop({
   const calls = [];
   const pages = new Set();
   const imagePages = new Set();
+  const seenResults = new Set();
+  let repeatedBatches = 0;
   const deadline = Date.now() + totalTimeoutMs;
   let rounds = 0;
   for (let round = 0; round < maxRounds; round++) {
@@ -484,14 +487,14 @@ export async function runAgentLoop({
     emit({ type: 'round', round: round + 1 });
     let json;
     try {
-      json = await callModel({
+      json = await runWithDeadline(callSignal => callModel({
         messages: work,
         tools: AGENT_TOOL_SPECS,
-        timeoutMs: Math.max(1000, Math.min(callTimeoutMs, left)),
-        signal,
-      });
+        timeoutMs: Math.max(1, Math.min(callTimeoutMs, left)),
+        signal: callSignal,
+      }), { signal, timeoutMs: Math.max(1, Math.min(callTimeoutMs, left)) });
     } catch (e) {
-      return { ok: false, messages: work, calls, rounds, pages: [...pages], imagePages: [...imagePages], reason: `error:${e?.name || 'Error'}` };
+      return { ok: false, messages: work, calls, rounds, pages: [...pages], imagePages: [...imagePages], reason: signal?.aborted ? 'aborted' : e?.name === 'TimeoutError' ? 'timeout' : `error:${e?.name || 'Error'}` };
     }
     rounds = round + 1;
     if (signal?.aborted) return { ok: false, messages: work, calls, rounds, pages: [...pages], imagePages: [...imagePages], reason: 'aborted' };
@@ -516,17 +519,25 @@ export async function runAgentLoop({
     const results = await Promise.all(batch.map(async (call) => {
       if (signal?.aborted) return { ok: false, error: tr("已停止") };
       emit({ type: 'tool_start', round: rounds, call: { name: call.name, args: call.args } });
-      const result = await executeToolCall(call, runtime);
-      emit({
+      let result;
+      try {
+        result = await runWithDeadline(toolSignal => executeToolCall(call, runtime, { signal: toolSignal }),
+          { signal, timeoutMs: Math.max(1, Math.min(callTimeoutMs, deadline - Date.now())) });
+      } catch (error) { result = { ok: false, error: String(error?.message || error), interrupted: true }; }
+      if (!signal?.aborted) emit({
         type: 'tool_done', round: rounds,
         call: { name: call.name, args: call.args },
         ok: !!result.ok, error: result.error || '', summary: summarizeToolResult(call, result),
       });
       return result;
     }));
+    let newEvidence = false;
     for (let i = 0; i < batch.length; i++) {
       const call = batch[i];
       const result = results[i];
+      const resultKey = JSON.stringify([call.name, call.args, result.ok, result.ok ? result.value : result.error]);
+      if (!seenResults.has(resultKey)) newEvidence = true;
+      seenResults.add(resultKey);
       calls.push({ name: call.name, args: call.args, ok: result.ok, error: result.error || '' });
       if (result.ok) {
         const v = result.value || {};
@@ -550,6 +561,8 @@ export async function runAgentLoop({
       });
     }
     if (signal?.aborted) return { ok: false, messages: work, calls, rounds, pages: [...pages], imagePages: [...imagePages], reason: 'aborted' };
+    repeatedBatches = newEvidence ? 0 : repeatedBatches + 1;
+    if (repeatedBatches >= 2) return { ok: false, messages: work, calls, rounds, pages: [...pages], imagePages: [...imagePages], reason: 'no-progress' };
   }
   return { ok: true, messages: work, calls, rounds, pages: [...pages], imagePages: [...imagePages], reason: 'max-rounds' };
 }

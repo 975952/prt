@@ -288,7 +288,7 @@ try {
 
   await open('analog');
   await page.evaluate(() => __ctx.newSession({ silent: true }));
-  const expectedImage = await page.evaluate(async () => (await __viewer.capturePageImage(2, { maxDim: 1400 })).dataUrl);
+  const expectedImage = await page.evaluate(async () => (await __viewer.capturePageImage(2, { maxDim: 1400, quality: .82 })).dataUrl);
   await ask('AGENT_ORIGIN_A', { agent: true });
   const agentOwner = await owner();
   await open('other');
@@ -305,7 +305,7 @@ try {
     && r.body.tools && r.body.messages.filter(m => m.role === 'tool').length === 4).body.messages
     .filter(m => m.role === 'tool').map(m => [m.tool_call_id, JSON.parse(m.content)])));
   const result = id => results[id].value || results[id];
-  assert.equal(result('origin-state').docTitle, 'analog.pdf');
+  assert.equal(result('origin-state').docTitle, 'courses/analog.pdf', 'reading state carries the unique source path');
   assert.equal(result('origin-state').numPages, 4);
   assert(result('origin-page').text.includes('ANALOG_ONLY_PAGE_2'));
   assert(result('origin-search').pages.length > 0);

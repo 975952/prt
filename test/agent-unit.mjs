@@ -122,20 +122,30 @@ const baseMessages = [{ role: 'system', content: 'sys' }, { role: 'user', conten
 }
 
 {
-  // 模型一直要工具：轮数和每轮调用数都受常量上限约束
+  // 持续读取新页仍可用足轮数；每轮调用数受上限约束。
   let modelCalls = 0;
   const run = await runAgentLoop({
-    messages: baseMessages, runtime,
+    messages: baseMessages, runtime: { ...runtime, numPages: 1000 },
     callModel: async () => {
       modelCalls++;
       return { choices: [{ message: { content: '', tool_calls: [1, 2, 3, 4, 5].map((i) => ({
-        id: `c${modelCalls}_${i}`, function: { name: 'read_page', arguments: JSON.stringify({ page: ((i - 1) % 9) + 1 }) },
+        id: `c${modelCalls}_${i}`, function: { name: 'read_page', arguments: JSON.stringify({ page: (modelCalls - 1) * 5 + i }) },
       })) } }] };
     },
   });
   check(`最多 ${AGENT_MAX_ROUNDS} 轮`, modelCalls === AGENT_MAX_ROUNDS, `${modelCalls}`);
   check(`每轮最多 ${AGENT_MAX_CALLS_PER_ROUND} 个工具`, run.calls.length === AGENT_MAX_ROUNDS * AGENT_MAX_CALLS_PER_ROUND, `${run.calls.length}`);
   check('轮次用尽标记 max-rounds', run.reason === 'max-rounds');
+}
+
+{
+  let requests = 0;
+  const run = await runAgentLoop({ messages: baseMessages, runtime,
+    callModel: async () => { requests++; return { choices: [{ message: { tool_calls: [
+      { id: `repeat-${requests}`, function: { name: 'read_page', arguments: '{"page":2}' } },
+    ] } }] }; } });
+  check('重复相同读取无新材料时停止空转', run.reason === 'no-progress' && requests === 3);
+  check('停止空转仍保留已读材料和页码', run.messages.some(m => m.role === 'tool') && run.pages.includes(2));
 }
 
 {
@@ -180,6 +190,61 @@ const baseMessages = [{ role: 'system', content: 'sys' }, { role: 'user', conten
     callModel: async () => { ctl.abort(); return { choices: [{ message: { content: '' } }] }; },
   });
   check('abort 后不继续循环', run.reason === 'aborted', run.reason);
+}
+
+/* Providers may ignore cancellation; waiting and late results still stay bounded. */
+{
+  let finishLate, childSignal, reads = 0;
+  const events = [];
+  const run = await runAgentLoop({ messages: baseMessages, runtime: { ...runtime, readPage: async () => { reads++; return {}; } },
+    callTimeoutMs: 25, totalTimeoutMs: 1000,
+    callModel: ({ signal }) => { childSignal = signal; return new Promise(resolve => { finishLate = resolve; }); },
+    onStep: event => events.push(event.type) });
+  check('忽略取消的模型请求仍会超时退出', !run.ok && /TimeoutError|timeout/.test(run.reason), run.reason);
+  check('模型超时向子请求转发取消', childSignal.aborted);
+  const before = events.length;
+  finishLate({ choices: [{ message: { tool_calls: [{ id: 'late', function: { name: 'read_page', arguments: '{"page":2}' } }] } }] });
+  await new Promise(resolve => setImmediate(resolve));
+  check('超时后晚工具指令不执行且不刷新过程', reads === 0 && events.length === before);
+}
+{
+  const ctl = new AbortController(); let started, finishLate, calls = 0;
+  const entered = new Promise(resolve => { started = resolve; });
+  const pending = runAgentLoop({ messages: baseMessages, runtime, signal: ctl.signal,
+    callModel: () => { calls++; started(); return new Promise(resolve => { finishLate = resolve; }); } });
+  await entered; ctl.abort(); const run = await pending;
+  check('等待模型时Stop立即结束并保持aborted语义', !run.ok && run.reason === 'aborted', run.reason);
+  finishLate({ choices: [{ message: { content: '过期回答' } }] }); await new Promise(resolve => setImmediate(resolve));
+  check('停止后晚回答不进入directContent也不重开轮次', !run.directContent && calls === 1);
+}
+{
+  let finishLate, toolSignal, seenError = false, modelCalls = 0;
+  const events = [];
+  const run = await runAgentLoop({ messages: baseMessages,
+    runtime: { ...runtime, readPage: (_page, { signal }) => { toolSignal = signal; return new Promise(resolve => { finishLate = resolve; }); } },
+    callTimeoutMs: 25, totalTimeoutMs: 1000,
+    callModel: async ({ messages }) => {
+      modelCalls++;
+      if (modelCalls === 1) return { choices: [{ message: { tool_calls: [{ id: 'slow-page', function: { name: 'read_page', arguments: '{"page":3}' } }] } }] };
+      seenError = messages.some(m => m.role === 'tool' && JSON.parse(m.content).error);
+      return { choices: [{ message: { content: '明确说明材料读取失败' } }] };
+    }, onStep: event => events.push(event) });
+  check('工具超时显式传回错误而不是伪造空正文', run.ok && seenError && run.calls[0]?.ok === false);
+  check('工具超时取消底层读取且不添加来源页', toolSignal.aborted && !run.pages.includes(3));
+  const eventCount = events.length; finishLate({ page: 3, text: '迟到的正文' }); await new Promise(resolve => setImmediate(resolve));
+  check('晚工具结果不补来源页或发送后续UI事件', events.length === eventCount && !run.pages.includes(3));
+}
+{
+  const ctl = new AbortController(); let toolStarted, finishLate, modelCalls = 0;
+  const entered = new Promise(resolve => { toolStarted = resolve; }), events = [];
+  const pending = runAgentLoop({ messages: baseMessages, signal: ctl.signal,
+    runtime: { ...runtime, readPage: () => { toolStarted(); return new Promise(resolve => { finishLate = resolve; }); } },
+    callModel: async () => { modelCalls++; return { choices: [{ message: { tool_calls: [{ id: 'cancel-page', function: { name: 'read_page', arguments: '{"page":4}' } }] } }] }; },
+    onStep: event => events.push(event.type) });
+  await entered; ctl.abort(); const run = await pending;
+  check('工具读取途中Stop结束会话且没有工具完成事件', run.reason === 'aborted' && !events.includes('tool_done'), run.reason);
+  finishLate({ page: 4, text: '不可采用' }); await new Promise(resolve => setImmediate(resolve));
+  check('停止后迟到页不再触发模型请求', modelCalls === 1 && !run.pages.includes(4));
 }
 
 /* ── 6. 过程展示（右侧「一条一条列出干了什么」） ── */

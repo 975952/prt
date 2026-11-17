@@ -1,0 +1,124 @@
+[
+  { "name": "new pending regeneration replaces a longer completed answer",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old completed answer is longer." }] },
+      { "entries": [{ "id": "a", "status": "pending", "text": "", "generation": 100, "generationId": "new" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "pending", "text": "", "generation": 100, "generationId": "new" }]
+  },
+  { "name": "new shorter completion survives stale complete and pending windows",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old completed answer is longer." }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "New.", "generation": 100, "generationId": "new" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old completed answer is longer." }] },
+      { "entries": [{ "id": "a", "status": "pending", "text": "Late partial text is much longer.", "generation": 100, "generationId": "new" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "complete", "text": "New.", "generation": 100, "generationId": "new" }]
+  },
+  { "name": "failed new attempt is retained instead of resurrecting old success",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old success", "generation": 100, "generationId": "one" }] },
+      { "entries": [{ "id": "a", "status": "failed", "text": "New partial", "generation": 101, "generationId": "two" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Late old success", "generation": 100, "generationId": "one" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "failed", "text": "New partial", "generation": 101, "generationId": "two" }]
+  },
+  { "name": "simultaneous regenerations converge in forward order",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Window A answer", "generation": 100, "generationId": "a" }] },
+      { "entries": [{ "id": "a", "status": "pending", "text": "B", "generation": 100, "generationId": "b" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "pending", "text": "B", "generation": 100, "generationId": "b" }]
+  },
+  { "name": "simultaneous regenerations converge in reverse order",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "pending", "text": "B", "generation": 100, "generationId": "b" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Window A answer", "generation": 100, "generationId": "a" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "pending", "text": "B", "generation": 100, "generationId": "b" }]
+  },
+  { "name": "invalid versions cannot override a real attempt",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Valid", "generation": 100, "generationId": "valid" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Wrong", "generation": "999", "generationId": "later" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Wrong", "generation": 1000.5, "generationId": "later" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Wrong", "generation": 9007199254740992, "generationId": "later" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Wrong", "generation": 100, "generationId": "../invalid" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "complete", "text": "Valid", "generation": 100, "generationId": "valid" }]
+  },
+  { "name": "same attempt preserves completeness and legacy behavior",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "pending", "text": "Long unfinished material" }, { "id": "b", "status": "complete", "text": "Independent" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Done" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "complete", "text": "Done" }, { "id": "b", "status": "complete", "text": "Independent" }]
+  },
+  { "name": "deleted entries do not return through a newer regeneration",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old" }] },
+      { "entries": [], "deletedEntryIds": ["a"] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Late", "generation": 999, "generationId": "late" }] }
+    ],
+    "expectedEntries": []
+  },
+  { "name": "new history replaces old answer context and resists a stale window",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old long answer" }], "history": [{ "role": "user", "content": "Question", "entryId": "a", "generation": 0, "generationId": "" }, { "role": "assistant", "content": "Old long answer", "entryId": "a", "generation": 0, "generationId": "" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "New", "generation": 100, "generationId": "new" }], "history": [{ "role": "user", "content": "Question", "entryId": "a", "generation": 100, "generationId": "new" }, { "role": "assistant", "content": "New", "entryId": "a", "generation": 100, "generationId": "new" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old long answer" }], "history": [{ "role": "user", "content": "Question", "entryId": "a", "generation": 0, "generationId": "" }, { "role": "assistant", "content": "Old long answer", "entryId": "a", "generation": 0, "generationId": "" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "complete", "text": "New", "generation": 100, "generationId": "new" }],
+    "expectedHistory": [{ "role": "user", "content": "Question", "entryId": "a", "generation": 100, "generationId": "new" }, { "role": "assistant", "content": "New", "entryId": "a", "generation": 100, "generationId": "new" }]
+  },
+  { "name": "legacy unique pair migrates and its old answer cannot return",
+    "writes": [
+      { "entries": [{ "id": "a", "block": "chat", "kind": "assistant", "status": "complete", "text": "Old long answer", "retry": { "question": "Question" } }], "history": [{ "role": "user", "content": "Question" }, { "role": "assistant", "content": "Old long answer" }] },
+      { "entries": [{ "id": "a", "block": "chat", "kind": "assistant", "status": "complete", "text": "New", "retry": { "question": "Question" }, "generation": 100, "generationId": "new" }], "history": [{ "role": "user", "content": "Question", "entryId": "a", "generation": 100, "generationId": "new" }, { "role": "assistant", "content": "New", "entryId": "a", "generation": 100, "generationId": "new" }] },
+      { "entries": [{ "id": "a", "block": "chat", "kind": "assistant", "status": "complete", "text": "Old long answer", "retry": { "question": "Question" } }], "history": [{ "role": "user", "content": "Question" }, { "role": "assistant", "content": "Old long answer" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "block": "chat", "kind": "assistant", "status": "complete", "text": "New", "retry": { "question": "Question" }, "generation": 100, "generationId": "new" }],
+    "expectedHistory": [{ "role": "user", "content": "Question", "entryId": "a", "generation": 100, "generationId": "new" }, { "role": "assistant", "content": "New", "entryId": "a", "generation": 100, "generationId": "new" }]
+  },
+  { "name": "new pending attempt clears prior model context before completion",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old answer" }], "history": [{ "role": "user", "content": "Question", "entryId": "a" }, { "role": "assistant", "content": "Old answer", "entryId": "a" }] },
+      { "entries": [{ "id": "a", "status": "pending", "text": "", "generation": 101, "generationId": "new" }], "history": [] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "pending", "text": "", "generation": 101, "generationId": "new" }],
+    "expectedHistory": []
+  },
+  { "name": "ambiguous identical legacy pairs are preserved without guessing identity",
+    "writes": [
+      { "entries": [{ "id": "a", "block": "chat", "status": "complete", "text": "Same answer", "retry": { "question": "Same question" } }, { "id": "b", "block": "chat", "status": "complete", "text": "Same answer", "retry": { "question": "Same question" } }], "history": [{ "role": "user", "content": "Same question" }, { "role": "assistant", "content": "Same answer" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "block": "chat", "status": "complete", "text": "Same answer", "retry": { "question": "Same question" } }, { "id": "b", "block": "chat", "status": "complete", "text": "Same answer", "retry": { "question": "Same question" } }],
+    "expectedHistory": [{ "role": "user", "content": "Same question" }, { "role": "assistant", "content": "Same answer" }]
+  },
+  { "name": "completed entry wins over late same-attempt partial history",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Final", "generation": 100, "generationId": "new" }], "history": [{ "role": "assistant", "content": "Final", "entryId": "a", "generation": 100, "generationId": "new" }] },
+      { "entries": [{ "id": "a", "status": "pending", "text": "Long unfinished text", "generation": 100, "generationId": "new" }], "history": [{ "role": "assistant", "content": "Long unfinished text", "entryId": "a", "generation": 100, "generationId": "new" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "complete", "text": "Final", "generation": 100, "generationId": "new" }],
+    "expectedHistory": [{ "role": "assistant", "content": "Final", "entryId": "a", "generation": 100, "generationId": "new" }]
+  },
+  { "name": "deleted history is removed together with its entry",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "Old" }], "history": [{ "role": "assistant", "content": "Old", "entryId": "a" }] },
+      { "entries": [], "deletedEntryIds": ["a"], "history": [] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "Late", "generation": 999, "generationId": "late" }], "history": [{ "role": "assistant", "content": "Late", "entryId": "a", "generation": 999, "generationId": "late" }] }
+    ],
+    "expectedEntries": [],
+    "expectedHistory": []
+  },
+  { "name": "independent identified turns keep original order across stale saves",
+    "writes": [
+      { "entries": [{ "id": "a", "status": "complete", "text": "First" }], "history": [{ "role": "assistant", "content": "First", "entryId": "a" }] },
+      { "entries": [{ "id": "b", "status": "complete", "text": "Second" }], "history": [{ "role": "assistant", "content": "Second", "entryId": "b" }] },
+      { "entries": [{ "id": "a", "status": "complete", "text": "First" }], "history": [{ "role": "assistant", "content": "First", "entryId": "a" }] }
+    ],
+    "expectedEntries": [{ "id": "a", "status": "complete", "text": "First" }, { "id": "b", "status": "complete", "text": "Second" }],
+    "expectedHistory": [{ "role": "assistant", "content": "First", "entryId": "a" }, { "role": "assistant", "content": "Second", "entryId": "b" }]
+  }
+]

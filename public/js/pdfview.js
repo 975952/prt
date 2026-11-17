@@ -4,6 +4,7 @@ import { stripPageLabels } from './reading-context.js';
 import { orderSelectionRuns, clipSelectionRuns, selectionTextOf, selectionRunAt } from './selection-reading-order.js';
 import { applyNightReading, NIGHT_PAPER } from './pdf-reading-theme.js';
 import { cleanPaperTitle, firstPageTitle } from './paper-titles.js';
+import { createPaperAccess } from './paper-access.js';
 
 let pdfjsLib = null;
 
@@ -149,18 +150,25 @@ export async function extractPdfText(url, { maxPages = 40, onProgress } = {}) {
 }
 
 /* ── 跨论文读取（Agent 的 list_papers / read_other_paper 用）：打开**任意** PDF，不动当前文档 ── */
-async function openPdfDocument(url) {
-  const lib = await initPdfjs();
-  const task = lib.getDocument({
-    url,
-    cMapUrl: '/vendor/cmaps/',
-    cMapPacked: true,
-    standardFontDataUrl: '/vendor/standard_fonts/',
-    wasmUrl: '/vendor/wasm/',
-    useSystemFonts: true,
-    isEvalSupported: false,
+function pdfAbortReason(signal) {
+  return signal?.reason instanceof Error ? signal.reason : new DOMException('PDF access cancelled', 'AbortError');
+}
+
+function waitForPdfWork(promise, signal, cancel = () => {}) {
+  return new Promise((resolve, reject) => {
+    let done = false;
+    const finish = (fn, value) => {
+      if (done) return;
+      done = true; signal?.removeEventListener('abort', onAbort); fn(value);
+    };
+    const onAbort = () => {
+      try { Promise.resolve(cancel()).catch(() => {}); } catch { /* Already released. */ }
+      finish(reject, pdfAbortReason(signal));
+    };
+    signal?.addEventListener('abort', onAbort, { once: true });
+    Promise.resolve(promise).then(value => finish(resolve, value), error => finish(reject, error));
+    if (signal?.aborted) onAbort();
   });
-  return { lib, pdf: await task.promise };
 }
 
 function textOfContent(tc) {
@@ -172,6 +180,70 @@ function textOfContent(tc) {
   }
   return out.replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n');
 }
+
+/** The worker, CMaps, fonts and WASM match the visible reader. A separate PDF
+ * handle keeps cross-paper work independent of the currently displayed tab. */
+export function createPdfPaperAccess({ loadPdfjs = initPdfjs, ...cacheOptions } = {}) {
+  return createPaperAccess({ ...cacheOptions, openDocument: async (url, { signal }) => {
+    const lib = await waitForPdfWork(loadPdfjs(), signal);
+    if (signal.aborted) throw pdfAbortReason(signal);
+    const task = lib.getDocument({ url, cMapUrl: '/vendor/cmaps/', cMapPacked: true,
+      standardFontDataUrl: '/vendor/standard_fonts/', wasmUrl: '/vendor/wasm/',
+      useSystemFonts: true, isEvalSupported: false, disableAutoFetch: true, disableStream: true });
+    let destroying;
+    const destroy = () => destroying ||= Promise.resolve().then(() => task.destroy()).catch(() => {});
+    let pdf;
+    try { pdf = await waitForPdfWork(task.promise, signal, destroy); }
+    catch (error) { void destroy(); throw error; }
+    return {
+      numPages: pdf.numPages,
+      destroy,
+      async readPageText(n, { signal: pageSignal }) {
+        const page = await waitForPdfWork(pdf.getPage(n), pageSignal);
+        let reader;
+        const cancel = () => reader?.cancel(pdfAbortReason(pageSignal));
+        try {
+          if (!page.streamTextContent) return textOfContent(await waitForPdfWork(page.getTextContent(), pageSignal));
+          reader = page.streamTextContent().getReader();
+          const chunks = [];
+          while (true) {
+            const chunk = await waitForPdfWork(reader.read(), pageSignal, cancel);
+            if (chunk.done) break;
+            chunks.push(textOfContent(chunk.value));
+          }
+          return chunks.join('').replace(/[ \t]+/g, ' ').replace(/\n{3,}/g, '\n\n');
+        } finally {
+          try { reader?.releaseLock(); } catch { /* Pending cancellation owns the reader. */ }
+          try { page.cleanup(); } catch { /* A concurrent render may still use this page. */ }
+        }
+      },
+      async renderPageImage(n, { signal: pageSignal, maxDim = 1400, quality = .82 }) {
+        const page = await waitForPdfWork(pdf.getPage(n), pageSignal);
+        let canvas;
+        try {
+          const base = page.getViewport({ scale: 1 });
+          const scale = Math.min(2.2, Math.max(.5, maxDim / Math.max(base.width, base.height)));
+          const viewport = page.getViewport({ scale });
+          const width = Math.max(1, Math.floor(viewport.width)), height = Math.max(1, Math.floor(viewport.height));
+          canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
+          const ctx = canvas.getContext('2d', { alpha: false });
+          // Model input always sees the original, opaque page, never night colors.
+          ctx.fillStyle = '#FFFFFF'; ctx.fillRect(0, 0, width, height);
+          const render = page.render({ canvasContext: ctx, viewport, background: '#FFFFFF' });
+          await waitForPdfWork(render.promise, pageSignal, () => render.cancel());
+          let dataUrl = canvas.toDataURL('image/jpeg', quality);
+          if (dataUrl.length > 900_000) dataUrl = canvas.toDataURL('image/jpeg', .6);
+          return { dataUrl, width, height, page: n, numPages: pdf.numPages };
+        } finally {
+          if (canvas) { canvas.width = 0; canvas.height = 0; }
+          try { page.cleanup(); } catch { /* A concurrent text consumer may still use this page. */ }
+        }
+      },
+    };
+  } });
+}
+
+export const paperAccess = createPdfPaperAccess();
 
 /** Read local title metadata/first page only, with a deadline and worker cleanup. */
 export async function readPdfTitle(url, name) {
@@ -201,60 +273,14 @@ export async function readPdfTitle(url, name) {
 }
 
 /** 读任意 PDF 的若干页（pages 不传就按顺序读前 maxPages 页），返回 { numPages, pages:[{page,text}] } */
-export async function readPdfPages(url, { pages = [], maxPages = 30, onProgress } = {}) {
-  const { pdf } = await openPdfDocument(url);
-  try {
-    const total = pdf.numPages;
-    const wanted = (Array.isArray(pages) ? pages : [])
-      .map((n) => Number(n))
-      .filter((n) => Number.isInteger(n) && n >= 1 && n <= total)
-      .slice(0, 20);
-    const list = wanted.length ? wanted : Array.from({ length: Math.min(total, maxPages) }, (_, i) => i + 1);
-    const out = [];
-    for (const n of list) {
-      try {
-        const page = await pdf.getPage(n);
-        const tc = await page.getTextContent();
-        out.push({ page: n, text: textOfContent(tc) });
-      } catch {
-        out.push({ page: n, text: '' });
-      }
-      onProgress?.(n, total);
-    }
-    return { numPages: total, pages: out };
-  } finally {
-    try { pdf.destroy(); } catch { /* 忽略 */ }
-  }
+export async function readPdfPages(url, { pages = [], maxPages = 30, onProgress, ...options } = {}) {
+  return paperAccess.readPages(url, { ...options, pages: Array.isArray(pages) ? pages.slice(0, 20) : [], maxPages,
+    onProgress: progress => onProgress?.(progress.page, progress.numPages) });
 }
 
 /** 把任意 PDF 的某一页渲染成图片（扫描件跨论文阅读用），返回 { dataUrl, width, height, page } */
-export async function renderPdfPageImage(url, pageNum, { maxDim = 1400, quality = 0.82 } = {}) {
-  const { pdf } = await openPdfDocument(url);
-  try {
-    const n = Number(pageNum) || 1;
-    if (n < 1 || n > pdf.numPages) throw new Error(tr("页码超出范围（1–{0}）", pdf.numPages));
-    const page = await pdf.getPage(n);
-    const base = page.getViewport({ scale: 1 });
-    const scale = Math.min(2.2, Math.max(0.5, maxDim / Math.max(base.width, base.height)));
-    const viewport = page.getViewport({ scale });
-    const width = Math.max(1, Math.floor(viewport.width));
-    const height = Math.max(1, Math.floor(viewport.height));
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d', { alpha: false });
-    const paper = paperColor();
-    ctx.fillStyle = paper;
-    ctx.fillRect(0, 0, width, height);
-    await page.render({ canvasContext: ctx, viewport, background: paper }).promise;
-    let dataUrl = canvas.toDataURL('image/jpeg', quality);
-    if (dataUrl.length > 900_000) dataUrl = canvas.toDataURL('image/jpeg', 0.6);
-    canvas.width = 0;
-    canvas.height = 0;
-    return { dataUrl, width, height, page: n, numPages: pdf.numPages };
-  } finally {
-    try { pdf.destroy(); } catch { /* 忽略 */ }
-  }
+export async function renderPdfPageImage(url, pageNum, options = {}) {
+  return paperAccess.renderPageImage(url, Number(pageNum) || 1, options);
 }
 
 export class PdfViewer {

@@ -1098,11 +1098,17 @@ fn session_file_for(key: &str, sid: &str) -> String {
 fn session_file_resolved(doc: &str, sid: &str) -> String {
     for key in doc_key_candidates(doc) {
         let f = session_file_for(&key, sid);
-        if store::read_json_opt(&f).is_some() {
+        if session_was_deleted(&f) || store::read_json_opt(&f).is_some() {
             return f;
         }
     }
     session_file(doc, sid)
+}
+
+fn deleted_session_file(file: &str) -> String { format!("deleted-{}", file) }
+fn session_was_deleted(file: &str) -> bool { store::data_path(&deleted_session_file(file)).exists() }
+fn deleted_session_response() -> Value {
+    json!({"code":"SESSION_DELETED", "error":{"code":"SESSION_DELETED", "message":"会话已删除，请新建会话后继续。"}})
 }
 
 fn doc_key_candidates(doc: &str) -> Vec<String> {
@@ -1347,8 +1353,75 @@ fn shallow_merge(base: &Value, over: &Value) -> Value {
     }
 }
 
-/// 同一条目取更完整版本：用户/complete 优先，其次 text 更长。
+fn session_entry_generation(e: &Value) -> u64 {
+    e.get("generation").and_then(Value::as_f64)
+        .filter(|n| n.is_finite() && *n >= 0.0 && *n <= 9_007_199_254_740_991.0 && n.fract() == 0.0)
+        .map(|n| n as u64).unwrap_or(0)
+}
+
+fn session_entry_generation_id(e: &Value) -> &str {
+    if session_entry_generation(e) == 0 { return ""; }
+    let id = e.get("generationId").and_then(Value::as_str).unwrap_or("");
+    if !id.is_empty() && id.len() <= 80 && id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-') { id } else { "" }
+}
+
+fn compare_session_generation(a: &Value, b: &Value) -> std::cmp::Ordering {
+    (session_entry_generation(a), session_entry_generation_id(a))
+        .cmp(&(session_entry_generation(b), session_entry_generation_id(b)))
+}
+
+fn session_history_entry_id(row: &Value) -> String {
+    utf16_clip(&collaps_ws(row.get("entryId").and_then(Value::as_str).unwrap_or("")), 80)
+}
+
+/// Associate legacy history only when both question and answer identify one
+/// entry. Ambiguous repeated pairs stay untagged and keep their old behavior.
+fn session_history_with_entry_ids(data: &Value) -> Vec<Value> {
+    let normalized = session_with_entry_ids(data);
+    let entries = normalized.get("entries").and_then(Value::as_array).cloned().unwrap_or_default();
+    let mut user_text = String::new();
+    let mut pairs: Vec<(String, String, String, u64, String)> = Vec::new();
+    for entry in entries.iter() {
+        if entry.get("block").and_then(Value::as_str) != Some("chat") { continue; }
+        if entry.get("kind").and_then(Value::as_str) == Some("user") {
+            user_text = entry.get("text").and_then(Value::as_str).unwrap_or("").to_string();
+            continue;
+        }
+        let answer = entry.get("text").and_then(Value::as_str).unwrap_or("");
+        if answer.is_empty() { continue; }
+        let retry_question = entry.get("retry").and_then(|v| v.get("question")).and_then(Value::as_str).unwrap_or("");
+        let question = utf16_clip(if retry_question.is_empty() { &user_text } else { retry_question }, 12000);
+        let id = session_entry_id(entry);
+        if !id.is_empty() && !question.is_empty() {
+            pairs.push((question, utf16_clip(answer, 12000), id, session_entry_generation(entry), session_entry_generation_id(entry).to_string()));
+        }
+    }
+    let mut history = data.get("history").and_then(Value::as_array).cloned().unwrap_or_default();
+    for i in 0..history.len().saturating_sub(1) {
+        if history[i].get("role").and_then(Value::as_str) != Some("user")
+            || history[i + 1].get("role").and_then(Value::as_str) != Some("assistant")
+            || !session_history_entry_id(&history[i]).is_empty() || !session_history_entry_id(&history[i + 1]).is_empty() { continue; }
+        let question = history[i].get("content").and_then(Value::as_str).unwrap_or("");
+        let answer = history[i + 1].get("content").and_then(Value::as_str).unwrap_or("");
+        let hits: Vec<_> = pairs.iter().filter(|p| p.0 == question && p.1 == answer).collect();
+        if hits.len() != 1 { continue; }
+        let pair = hits[0];
+        for index in [i, i + 1] {
+            if let Some(row) = history[index].as_object_mut() {
+                row.insert("entryId".into(), json!(pair.2));
+                row.insert("generation".into(), json!(pair.3));
+                row.insert("generationId".into(), json!(pair.4));
+            }
+        }
+    }
+    history
+}
+
+/// A newer regeneration wins before completeness/length. Legacy entries use
+/// generation 0; within the same attempt retain the previous merge behavior.
 fn richer_entry(a: &Value, b: &Value) -> Value {
+    let version = compare_session_generation(a, b);
+    if !version.is_eq() { return if version.is_gt() { shallow_merge(b, a) } else { shallow_merge(a, b) }; }
     let ra = session_entry_rank(a);
     let rb = session_entry_rank(b);
     let pick_b = if ra != rb {
@@ -1417,6 +1490,21 @@ fn apply_session_deletions(payload: &Value, old: Option<&Value>) -> Value {
     normalized
 }
 
+fn replace_session_payload(payload: &Value, old: Option<&Value>) -> Value {
+    let mut next = payload.clone();
+    let clear = payload.get("entries").and_then(Value::as_array).map(Vec::is_empty).unwrap_or(false)
+        && payload.get("history").and_then(Value::as_array).map(Vec::is_empty).unwrap_or(true);
+    if clear {
+        let previous = session_with_entry_ids(old.unwrap_or(&Value::Null));
+        let mut removed = payload.get("deletedEntryIds").and_then(Value::as_array).cloned().unwrap_or_default();
+        if let Some(entries) = previous.get("entries").and_then(Value::as_array) {
+            removed.extend(entries.iter().map(session_entry_id).filter(|id| !id.is_empty()).map(Value::String));
+        }
+        if let Some(map) = next.as_object_mut() { map.insert("deletedEntryIds".into(), json!(removed)); }
+    }
+    apply_session_deletions(&next, old)
+}
+
 fn merge_session_payload(old: Option<&Value>, incoming: &Value) -> Value {
     let empty = json!({});
     let old_data: &Value = old.filter(|v| v.is_object()).unwrap_or(&empty);
@@ -1464,7 +1552,8 @@ fn merge_session_payload(old: Option<&Value>, incoming: &Value) -> Value {
         }
     }
     let entries: Vec<Value> = merged.into_iter().chain(appended.into_iter()).collect();
-    // history：旧消息先行，按 role+kind+content+page+docId 去重后追加新消息
+    // History follows its answer attempt, so a stale window cannot resurrect
+    // an old answer in the next model request after regeneration.
     let history_key = |m: &Value| -> String {
         [
             session_scalar_text(m.get("role")),
@@ -1476,12 +1565,31 @@ fn merge_session_payload(old: Option<&Value>, incoming: &Value) -> Value {
         .join("\u{1}")
     };
     let mut history: Vec<Value> = Vec::new();
-    let mut seen_history: HashSet<String> = HashSet::new();
-    let old_history: Vec<Value> = old_data.get("history").and_then(Value::as_array).cloned().unwrap_or_default();
-    let new_history: Vec<Value> = next.get("history").and_then(Value::as_array).cloned().unwrap_or_default();
-    for row in old_history.into_iter().chain(new_history.into_iter()) {
-        if seen_history.insert(history_key(&row)) {
-            history.push(row);
+    let mut history_slots: HashMap<String, usize> = HashMap::new();
+    let winning_entries: HashMap<String, &Value> = entries.iter().map(|e| (session_entry_id(e), e)).collect();
+    let deleted: HashSet<String> = [old_data, next].into_iter().flat_map(|source|
+        source.get("deletedEntryIds").and_then(Value::as_array).into_iter().flatten())
+        .filter_map(Value::as_str).map(|id| utf16_clip(&collaps_ws(id), 80)).collect();
+    for mut row in session_history_with_entry_ids(old_data).into_iter().chain(session_history_with_entry_ids(next)) {
+        let entry_id = session_history_entry_id(&row);
+        let winner = winning_entries.get(&entry_id).copied();
+        if !entry_id.is_empty() && (deleted.contains(&entry_id)
+            || winner.map(|entry| compare_session_generation(&row, entry).is_lt()).unwrap_or(false)) { continue; }
+        if let Some(entry) = winner {
+            if row.get("role").and_then(Value::as_str) == Some("assistant")
+                && entry.get("status").and_then(Value::as_str) == Some("complete")
+                && compare_session_generation(&row, entry).is_eq() {
+                if let Some(map) = row.as_object_mut() { map.insert("content".into(), json!(utf16_clip(entry.get("text").and_then(Value::as_str).unwrap_or(""), 12000))); }
+            }
+        }
+        let key = if entry_id.is_empty() { format!("legacy:{}", history_key(&row)) }
+            else { format!("entry:{}", json!([entry_id, row.get("role")])) };
+        match history_slots.get(&key).copied() {
+            None => { history_slots.insert(key, history.len()); history.push(row); }
+            Some(index) if !entry_id.is_empty() && !compare_session_generation(&row, &history[index]).is_lt() => {
+                history[index] = shallow_merge(&history[index], &row);
+            }
+            _ => {}
         }
     }
     // ops：按 id 取 at 较新的一份，不丢任何一边的 AI 结果记录
@@ -1716,6 +1824,7 @@ fn session_file_times(name: &str) -> (u64, u64) {
 
 /// 单条会话的列表项（与 Node 版 /api/sessions 的 describe 一致）
 fn describe_session(name: &str, sid: &str, folder_hint: &str) -> Option<Value> {
+    if session_was_deleted(name) { return None; }
     let data = store::read_json_opt(name)?;
     if !data.is_object() {
         return None;
@@ -1991,7 +2100,13 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     // 读 / 写 / 删 / 改都先解析到"真正存在的那一份"，避免修了幂等之后老会话读不到
     let file = session_file_resolved(&doc, &sid);
     match method {
-        Method::Get => send_json(rq, 200, &apply_session_deletions(&store::read_json(&file, json!({"entries":[],"history":[],"ops":[]})), None)),
+        Method::Get => {
+            if session_was_deleted(&file) {
+                send_json(rq, 200, &json!({"entries":[],"history":[],"ops":[],"deleted":true,"code":"SESSION_DELETED"}))
+            } else {
+                send_json(rq, 200, &apply_session_deletions(&store::read_json(&file, json!({"entries":[],"history":[],"ops":[]})), None))
+            }
+        }
         Method::Post => {
             let payload = match parse_json(body) {
                 Ok(v) => v,
@@ -2007,21 +2122,22 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
             let merge = query_get(raw_query, "merge").as_deref() == Some("1");
             let stored = {
                 let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
+                if session_was_deleted(&file) { return send_json(rq, 409, &deleted_session_response()); }
                 let old = store::read_json_opt(&file);
                 let merged = if merge {
                     merge_session_payload(old.as_ref(), &payload)
                 } else {
-                    apply_session_deletions(&payload, old.as_ref())
+                    replace_session_payload(&payload, old.as_ref())
                 };
                 let record = prepare_session_record(&merged, old.as_ref());
                 if !store::write_json(&file, &record) {
                     return send_json(rq, 500, &err_json("保存阅读会话失败，请重试"));
                 }
+                prune_attachments(&doc, &sid, &record);
                 record
             };
             // 图片单独存：会话写成功之后按「还引用着的 id」清理本会话的附件目录
             // （清空会话 = 没有引用 → 图全删；发送失败留下的孤儿图也在这里被清掉）
-            prune_attachments(&doc, &sid, &stored);
             send_json(
                 rq,
                 200,
@@ -2041,6 +2157,8 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
             if !patch.is_object() {
                 return send_json(rq, 400, &err_json("会话 meta 必须是对象"));
             }
+            let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
+            if session_was_deleted(&file) { return send_json(rq, 409, &deleted_session_response()); }
             let cur = match store::read_json_opt(&file) {
                 Some(v) if v.is_object() => v,
                 _ => return send_json(rq, 404, &err_json("会话不存在或已被删除")),
@@ -2145,6 +2263,10 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
         }
         // 删掉一个会话文件（不碰论文本身）。与 Node 版一致：文件本来就不在也算成功（幂等）。
         Method::Delete => {
+            let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
+            if !store::write_json(&deleted_session_file(&file), &json!({"v":1,"deletedAt":now_ms()})) {
+                return send_json(rq, 500, &err_json("删除会话失败"));
+            }
             let existed = store::data_path(&file).exists();
             if !existed || store::remove_file(&file) {
                 // 会话没了，它单独存的截图附件也一起删（否则会变成永远没人引用的垃圾文件）
@@ -3888,6 +4010,21 @@ pub fn ref_search(rq: Request, raw_query: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn session_regeneration_merge_matches_shared_fixtures() {
+        let cases: Value = serde_json::from_str(include_str!("../../test/fixtures/session-regeneration.json")).unwrap();
+        for case in cases.as_array().unwrap() {
+            let mut saved = json!({});
+            for write in case["writes"].as_array().unwrap() {
+                saved = merge_session_payload(Some(&saved), write);
+            }
+            assert_eq!(saved["entries"], case["expectedEntries"], "{}", case["name"]);
+            if let Some(history) = case.get("expectedHistory") {
+                assert_eq!(&saved["history"], history, "{} history", case["name"]);
+            }
+        }
+    }
 
     #[test]
     fn openalex_abstract_keeps_word_order_and_repetition() {

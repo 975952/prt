@@ -2,7 +2,9 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.2.9](https://github.com/975952/prt/releases/tag/v1.2.9), including background conversation generation, parallel translation, browser paper searches, and updated appearance defaults.
+This guide covers [v1.2.10](https://github.com/975952/prt/releases/tag/v1.2.10), including questions about specific pages in other imported files, conversation switching and save protection, parallel translation, browser paper searches, and updated appearance defaults.
+
+Name an imported file and page in your question to read it without opening it on screen. Comparisons can specify a different page for each file. “Next page” follows the previous source; “current page” refers to the visible file. Use a full path when names or editions are ambiguous. Page numbers initially refer to PDF positions; printed book numbers may require checking an offset. Stopping rejects late output, and regenerating replaces both the answer and its corresponding conversation history.
 
 ## Open a paper
 

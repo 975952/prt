@@ -216,6 +216,7 @@ try {
   // 明确采用逐篇会话归属，让后面的换论文断言对应实际启用的产品策略。
   await page.evaluateOnNewDocument(() => {
     localStorage.setItem('reader.session.onEnter', 'resume');
+    localStorage.setItem('reader.locale', 'zh-CN');
     localStorage.setItem('reader.session.scopeMode', 'paper');
   });
   page.on('pageerror', (e) => pageErrors.push(String(e)));

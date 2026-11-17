@@ -3,6 +3,7 @@ import { windowStorage as localStorage } from './window-storage.js';
 import { resolveReadingRequest, historyMessages, stripPageLabels } from './reading-context.js';
 import { nowContext, buildProfileBlock } from './profile.js';
 import { CONDENSE_SYS } from './teaching.js';
+import { abortError, runWithDeadline } from './task-deadline.js';
 
 export const PRESETS = {
   deepseek: { baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-flash', visionModel: '' },
@@ -119,9 +120,9 @@ export async function streamChat(opts) {
 
   // 自己的 controller：既能被调用方 abort，也能被看门狗 abort
   const ctl = new AbortController();
-  const forward = () => ctl.abort();
+  const forward = () => ctl.abort(signal?.reason);
   if (signal) {
-    if (signal.aborted) ctl.abort();
+    if (signal.aborted) forward();
     else signal.addEventListener('abort', forward, { once: true });
   }
 
@@ -132,11 +133,17 @@ export async function streamChat(opts) {
     if (idleTimer) clearTimeout(idleTimer);
     idleTimer = setTimeout(() => { stalled = true; ctl.abort(); }, idleMs);
   };
-  const tick = setInterval(() => onTick?.(Date.now() - startedAt), 1000);
+  const tick = setInterval(() => { if (!ctl.signal.aborted) onTick?.(Date.now() - startedAt); }, 1000);
+  let reader = null, streamDone = false;
+  const cancelReader = () => { try { reader?.cancel().catch(() => {}); } catch { /* already released */ } };
+  ctl.signal.addEventListener('abort', cancelReader, { once: true });
   const cleanup = () => {
     if (idleTimer) clearTimeout(idleTimer);
     clearInterval(tick);
     signal?.removeEventListener?.('abort', forward);
+    ctl.signal.removeEventListener('abort', cancelReader);
+    if (!streamDone) cancelReader();
+    try { reader?.releaseLock(); } catch { /* a provider may still be closing */ }
   };
 
   const stale = () => {
@@ -148,15 +155,20 @@ export async function streamChat(opts) {
     err.name = 'TimeoutError';   // 要与「用户主动停止」区分开，不能显示成「已停止」
     return err;
   };
+  const assertActive = () => { if (ctl.signal.aborted) throw stale() || abortError(ctl.signal.reason); };
+  // Fetch, body reads and stream reads may ignore AbortSignal. Stop waiting at
+  // cancellation independently, and never deliver callbacks from late results.
+  const waitFor = operation => runWithDeadline(operation, { signal: ctl.signal, timeoutMs: 0 });
 
   try {
+    assertActive();
     bump();
     // 带图请求：告诉服务端「这次要用视觉模型」（模型名仍只来自本机 config，
     // 前端不传 model，避免把模型选型暴露成可被请求覆盖的字段）。
     const hasImage = Array.isArray(messages) && messages.some(
       (m) => Array.isArray(m?.content) && m.content.some((p) => p && p.type === 'image_url'),
     );
-    const res = await fetch('/api/chat', {
+    const res = await waitFor(() => fetch('/api/chat', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -170,17 +182,24 @@ export async function streamChat(opts) {
         apiKey: Settings.data.apiKey || undefined,
       }),
       signal: ctl.signal,
-    });
+    }).then(response => {
+      if (ctl.signal.aborted) {
+        try { response.body?.cancel().catch(() => {}); } catch { /* already consumed */ }
+        assertActive();
+      }
+      return response;
+    }));
+    assertActive();
 
     if (!res.ok) {
       let msg = `HTTP ${res.status}`;
       try {
-        const j = await res.json();
+        const j = await waitFor(() => res.json());
         const detail = localizedError(j?.error?.message);
         if (detail) msg = `HTTP ${res.status}: ${detail}`;
       } catch {
         try {
-          const detail = (await res.text()).slice(0, 500);
+          const detail = (await waitFor(() => res.text())).slice(0, 500);
           if (detail) msg = `HTTP ${res.status}: ${detail}`;
         } catch { /* ignore */ }
       }
@@ -198,6 +217,7 @@ export async function streamChat(opts) {
       } else if (res.status === 429) {
         msg += tr(" —— 触发限流了，等一会儿再试");
       }
+      assertActive();
       throw new Error(msg);
     }
 
@@ -205,7 +225,8 @@ export async function streamChat(opts) {
 
     // 兼容网关 / 某些 Ollama 版本会忽略 stream:true，直接回普通 JSON
     if (!ctype.includes('event-stream')) {
-      const raw = await res.text();
+      const raw = await waitFor(() => res.text());
+      assertActive();
       let text = '';
       try {
         const j = JSON.parse(raw);
@@ -222,12 +243,13 @@ export async function streamChat(opts) {
           + tr("检查一下 API 地址是不是 OpenAI 兼容的 /v1 端点。"),
         );
       }
-      onDelta?.(text, text);
+      assertActive(); onDelta?.(text, text); assertActive();
       return text;
     }
 
     if (!stream && !rawResponse) {
-      const raw = await res.text();
+      const raw = await waitFor(() => res.text());
+      assertActive();
       let text = '';
       for (const line of raw.split('\n')) {
         const t = line.trim();
@@ -240,11 +262,11 @@ export async function streamChat(opts) {
         } catch { /* ignore */ }
       }
       if (!text) throw new Error(tr("服务端返回了流式数据但解析不出内容。"));
-      onDelta?.(text, text);
+      assertActive(); onDelta?.(text, text); assertActive();
       return text;
     }
 
-    const reader = res.body.getReader();
+    reader = res.body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let full = '';
@@ -252,6 +274,7 @@ export async function streamChat(opts) {
     const toolCalls = [];
     let finishReason = '';
     const consume = (raw) => {
+      assertActive();
       const line = raw.trim();
       if (!line.startsWith('data:')) return;
       const payload = line.slice(5).trim();
@@ -273,17 +296,18 @@ export async function streamChat(opts) {
       }
       if (typeof delta.reasoning_content === 'string' && delta.reasoning_content) {
         reasoning += delta.reasoning_content;
-        onReasoning?.(delta.reasoning_content, reasoning);
+        assertActive(); onReasoning?.(delta.reasoning_content, reasoning); assertActive();
       }
       const piece = typeof delta.content === 'string' ? delta.content : '';
       if (piece) {
         full += piece;
-        if (!toolCalls.length) onDelta?.(piece, full);
+        if (!toolCalls.length) { assertActive(); onDelta?.(piece, full); assertActive(); }
       }
     };
 
     while (true) {
-      const { value, done } = await reader.read();
+      const { value, done } = await waitFor(() => reader.read());
+      assertActive();
       if (done) break;
       bump();
       buffer += decoder.decode(value, { stream: true });
@@ -292,6 +316,7 @@ export async function streamChat(opts) {
       for (const raw of lines) consume(raw);
     }
     consume(buffer + decoder.decode());
+    streamDone = true;
 
     if (!full && !reasoning && !toolCalls.length) {
       throw new Error(tr("模型没有返回任何内容。可能是模型名不对、额度用尽，或被网关拦截了。"));
@@ -301,6 +326,7 @@ export async function streamChat(opts) {
   } catch (e) {
     const s = stale();
     if (s) throw s;
+    assertActive();
     throw e;
   } finally {
     cleanup();

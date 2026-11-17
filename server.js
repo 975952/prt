@@ -168,6 +168,22 @@ let writeChain = Promise.resolve();
 let profileWriteChain = Promise.resolve();
 /** 每个会话文件一条串行链：POST 的 read-modify-write 不能并发交错 */
 const sessionWriteChains = new Map();
+function queueSessionWrite(file, operation) {
+  const previous = sessionWriteChains.get(file) || Promise.resolve();
+  const task = previous.catch(() => {}).then(operation);
+  sessionWriteChains.set(file, task);
+  const release = () => { if (sessionWriteChains.get(file) === task) sessionWriteChains.delete(file); };
+  task.then(release, release);
+  return task;
+}
+const SESSION_DELETED = Symbol('session deleted');
+const deletedSessionFile = file => `deleted-${file}`;
+async function sessionWasDeleted(file) {
+  try { await fsp.access(path.join(DATA_DIR, deletedSessionFile(file))); return true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+const deletedSessionResponse = () => ({ code: 'SESSION_DELETED', error: {
+  code: 'SESSION_DELETED', message: '会话已删除，请新建会话后继续。' } });
 /** 串行化写盘，避免并发请求交叉写坏 JSON */
 function writeDataFile(name, obj) {
   // 注意先 catch：否则一次写失败会让整条 Promise 链永久处于 rejected 状态，
@@ -1851,6 +1867,59 @@ function applySessionDeletions(payload, old = {}) {
   return { ...normalized, deletedEntryIds, entries: normalized.entries.filter(row => !deleted.has(collapsWs(row?.id).slice(0, 80))) };
 }
 
+function replaceSessionPayload(payload, old) {
+  if (Array.isArray(payload?.entries) && !payload.entries.length && (!payload.history || !payload.history.length)) {
+    // Clear keeps the conversation usable, but old windows cannot restore the
+    // entries that the reader deliberately removed.
+    const removed = sessionWithEntryIds(old).entries.map(row => collapsWs(row?.id).slice(0, 80)).filter(Boolean);
+    payload = { ...payload, deletedEntryIds: [...(payload.deletedEntryIds || []), ...removed] };
+  }
+  return applySessionDeletions(payload, old);
+}
+
+function sessionEntryGeneration(row) {
+  return Number.isSafeInteger(row?.generation) && row.generation >= 0 ? row.generation : 0;
+}
+function sessionEntryGenerationId(row) {
+  return sessionEntryGeneration(row) > 0 && typeof row?.generationId === 'string'
+    && /^[A-Za-z0-9_-]{1,80}$/.test(row.generationId) ? row.generationId : '';
+}
+function compareSessionGeneration(a, b) {
+  const ga = sessionEntryGeneration(a), gb = sessionEntryGeneration(b);
+  if (ga !== gb) return ga > gb ? 1 : -1;
+  const ia = sessionEntryGenerationId(a), ib = sessionEntryGenerationId(b);
+  return ia === ib ? 0 : ia > ib ? 1 : -1;
+}
+const sessionHistoryEntryId = row => collapsWs(row?.entryId).slice(0, 80);
+
+/** Migrate only uniquely identifiable legacy question/answer pairs. Repeated
+ * identical pairs remain untagged rather than guessing their ownership. */
+function sessionHistoryWithEntryIds(data) {
+  const pairs = [];
+  let user = null;
+  for (const entry of sessionWithEntryIds(data).entries) {
+    if (entry?.block !== 'chat') continue;
+    if (entry.kind === 'user') { user = entry; continue; }
+    if (!entry.text) continue;
+    const question = String(entry.retry?.question || user?.text || '').slice(0, 12000);
+    const answer = String(entry.text || '').slice(0, 12000);
+    const entryId = collapsWs(entry.id).slice(0, 80);
+    if (entryId && question) pairs.push({ question, answer, entryId,
+      generation: sessionEntryGeneration(entry), generationId: sessionEntryGenerationId(entry) });
+  }
+  const history = (Array.isArray(data?.history) ? data.history : []).map(row => ({ ...row }));
+  for (let i = 0; i + 1 < history.length; i++) {
+    const a = history[i], b = history[i + 1];
+    if (a.role !== 'user' || b.role !== 'assistant' || sessionHistoryEntryId(a) || sessionHistoryEntryId(b)) continue;
+    const hits = pairs.filter(pair => pair.question === String(a.content || '') && pair.answer === String(b.content || ''));
+    if (hits.length !== 1) continue;
+    const { entryId, generation, generationId } = hits[0];
+    Object.assign(a, { entryId, generation, generationId });
+    Object.assign(b, { entryId, generation, generationId });
+  }
+  return history;
+}
+
 function mergeSessionPayload(old, incoming) {
   const oldData = old && typeof old === 'object' && !Array.isArray(old) ? old : {};
   const next = incoming && typeof incoming === 'object' && !Array.isArray(incoming) ? incoming : {};
@@ -1867,6 +1936,10 @@ function mergeSessionPayload(old, incoming) {
   const richer = (a, b) => {
     if (!a) return { ...b };
     if (!b) return { ...a };
+    // A deliberate regeneration is a new attempt. Its shorter/pending output
+    // must supersede a previous complete answer and resist stale window saves.
+    const version = compareSessionGeneration(a, b);
+    if (version) return version > 0 ? { ...b, ...a } : { ...a, ...b };
     const ra = rank(a); const rb = rank(b);
     const pick = ra !== rb ? (ra > rb ? a : b)
       : (String(b?.text || '').length >= String(a?.text || '').length ? b : a);
@@ -1903,14 +1976,24 @@ function mergeSessionPayload(old, incoming) {
     }
   }
   const entries = [...merged, ...appended];
-  // history：旧消息先行，按 role+content+page 去重后再追加新消息（并发提问时两边都能留在上下文里）
+  // A history turn belongs to the same answer attempt as its entry. Replacing
+  // an answer must replace its old model context too, even after a stale save.
   const historyKey = (m) => [m?.role, m?.kind, collapsWs(m?.content).slice(0, 300), m?.page || '', m?.docId || ''].join('\u0001');
   const history = [];
-  const seenHistory = new Set();
-  for (const row of [...(Array.isArray(oldData.history) ? oldData.history : []), ...(Array.isArray(next.history) ? next.history : [])]) {
-    const key = historyKey(row);
-    if (seenHistory.has(key)) continue;
-    seenHistory.add(key); history.push(row);
+  const historySlots = new Map();
+  const winningEntries = new Map(entries.map(entry => [idOf(entry), entry]));
+  const deleted = new Set([...(oldData.deletedEntryIds || []), ...(next.deletedEntryIds || [])].map(id => collapsWs(id).slice(0, 80)));
+  for (const original of [...sessionHistoryWithEntryIds(oldData), ...sessionHistoryWithEntryIds(next)]) {
+    const entryId = sessionHistoryEntryId(original), winner = winningEntries.get(entryId);
+    if (entryId && (deleted.has(entryId) || (winner && compareSessionGeneration(original, winner) < 0))) continue;
+    const row = { ...original };
+    if (entryId && winner?.status === 'complete' && row.role === 'assistant' && compareSessionGeneration(row, winner) === 0) {
+      row.content = String(winner.text || '').slice(0, 12000);
+    }
+    const key = entryId ? `entry:${JSON.stringify([entryId, row.role])}` : `legacy:${historyKey(row)}`;
+    const index = historySlots.get(key);
+    if (index === undefined) { historySlots.set(key, history.length); history.push(row); }
+    else if (entryId && compareSessionGeneration(row, history[index]) >= 0) history[index] = { ...history[index], ...row };
   }
   // ops：按 id 取较新的一份（at 更大的胜），不丢任何一边的 AI 结果记录
   const ops = [];
@@ -1988,6 +2071,7 @@ async function resolveSessionFileName(doc, sid) {
   const keys = docKeyCandidates(doc);
   for (const key of keys) {
     const name = sid ? `session-${key}-${sid}.json` : `session-${key}.json`;
+    if (await sessionWasDeleted(name)) return name;
     try {
       await fsp.access(path.join(DATA_DIR, name));
       return name;
@@ -2243,7 +2327,10 @@ async function handle(req, res) {
     const doc = url.searchParams.get('doc') || 'default';
     const sid = (url.searchParams.get('sid') || '').replace(/[^\w-]/g, '').slice(0, 40);
     const file = await resolveSessionFileName(doc, sid);
-    if (req.method === 'GET') return sendJson(res, 200, applySessionDeletions(await readDataFile(file, { entries: [], history: [], ops: [] })));
+    if (req.method === 'GET') {
+      if (await sessionWasDeleted(file)) return sendJson(res, 200, { entries: [], history: [], ops: [], deleted: true, code: 'SESSION_DELETED' });
+      return sendJson(res, 200, applySessionDeletions(await readDataFile(file, { entries: [], history: [], ops: [] })));
+    }
     if (req.method === 'POST') {
       // 审计 §P1：条目数 + 总字符数 + 附件元数据大小
       const payload = await readJsonBodyOrReq(req, res, sec.BODY_LIMITS.session);
@@ -2253,15 +2340,15 @@ async function handle(req, res) {
       // 多窗口：merge=1 时和磁盘旧内容按条目 id 合并，两个窗口同时保存不会互相覆盖。
       const merge = url.searchParams.get('merge') === '1';
       // 同一会话文件的 read-modify-write 串行化：否则并发 POST 各读旧内容，后写者抹掉先写者。
-      const prev = sessionWriteChains.get(file) || Promise.resolve();
-      const job = prev.catch(() => {}).then(async () => {
+      const job = queueSessionWrite(file, async () => {
+        if (await sessionWasDeleted(file)) return SESSION_DELETED;
         const old = await readDataFile(file, null);
-        const merged = merge ? mergeSessionPayload(old, payload) : applySessionDeletions(payload, old);
+        const merged = merge ? mergeSessionPayload(old, payload) : replaceSessionPayload(payload, old);
         const record = prepareSessionRecord(merged, old, Date.now());
         await writeDataFile(file, record);
+        await pruneAttachments(doc, sid, record);
         return record;
       });
-      sessionWriteChains.set(file, job);
       let stored;
       try {
         stored = await job;
@@ -2271,7 +2358,7 @@ async function handle(req, res) {
       }
       // 图片单独存：会话写成功之后按「还引用着的 id」清理本会话的附件目录
       // （清空会话 = 没有引用 → 图全删；发送失败留下的孤儿图也在这里被清掉）
-      await pruneAttachments(doc, sid, stored);
+      if (stored === SESSION_DELETED) return sendJson(res, 409, deletedSessionResponse());
       return sendJson(res, 200, { ok: true, updatedAt: stored.updatedAt, contentRev: stored.contentRev });
     }
     if (req.method === 'PATCH') {
@@ -2281,10 +2368,11 @@ async function handle(req, res) {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
         return sendJson(res, 400, { error: { message: '会话 meta 必须是对象' } });
       }
+      let next;
+      try { next = await queueSessionWrite(file, async () => {
+      if (await sessionWasDeleted(file)) return SESSION_DELETED;
       const cur = await readDataFile(file, null);
-      if (!cur || typeof cur !== 'object' || Array.isArray(cur)) {
-        return sendJson(res, 404, { error: { message: '会话不存在或已被删除' } });
-      }
+      if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return null;
       const now = Date.now();
       const next = { ...cur };
       if (Object.prototype.hasOwnProperty.call(patch, 'title')) {
@@ -2311,11 +2399,15 @@ async function handle(req, res) {
       }
       next.v = 4;
       if (!sessionTs(next.createdAt)) next.createdAt = sessionTs(cur.updatedAt) || now;
-      try { await writeDataFile(file, next); }
+      await writeDataFile(file, next);
+      return next;
+      }); }
       catch (e) {
         sec.diag(`更新会话失败: ${e && e.message}`);
         return sendJson(res, 500, { error: { message: '更新会话失败，请重试' } });
       }
+      if (next === SESSION_DELETED) return sendJson(res, 409, deletedSessionResponse());
+      if (!next) return sendJson(res, 404, { error: { message: '会话不存在或已被删除' } });
       return sendJson(res, 200, {
         ok: true,
         session: {
@@ -2331,13 +2423,16 @@ async function handle(req, res) {
       });
     }
     if (req.method === 'DELETE') {
-      try { await fsp.rm(path.join(DATA_DIR, file), { force: true }); }
+      try { await queueSessionWrite(file, async () => {
+        await writeDataFile(deletedSessionFile(file), { v: 1, deletedAt: Date.now() });
+        await fsp.rm(path.join(DATA_DIR, file), { force: true });
+        await removeAttachmentDir(doc, sid);
+      }); }
       catch (e) {
         sec.diag(`删除阅读会话失败: ${e && e.message}`);
         return sendJson(res, 500, { error: { message: '删除阅读会话失败，请重试' } });
       }
       // 会话没了，它单独存的截图附件也一起删（否则会变成永远没人引用的垃圾文件）
-      await removeAttachmentDir(doc, sid);
       return sendJson(res, 200, { ok: true });
     }
     return send(res, 405, 'Method Not Allowed');
@@ -2419,6 +2514,7 @@ async function handle(req, res) {
     const describe = async (fileName, sid, folderPathHint) => {
       if (seen.has(fileName)) return;
       seen.add(fileName);
+      if (await sessionWasDeleted(fileName)) return;
       const data = await readDataFile(fileName, null);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return;
       let stat = null;
@@ -2694,4 +2790,4 @@ if (require.main === module) {
  * 自检出口：给 test/artifacts 下的单元脚本用。
  * 放在文件末尾，避免在 `const MAX_REDIRECTS` 初始化之前取它的值。
  */
-module.exports.__test = { isPrivateHost, isPrivateIPv4, checkFetchUrl, MAX_REDIRECTS };
+module.exports.__test = { isPrivateHost, isPrivateIPv4, checkFetchUrl, MAX_REDIRECTS, mergeSessionPayload };

@@ -1,6 +1,12 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "这段会话已被删除，已停止旧任务并打开新会话。": "This conversation was deleted. Its task has stopped and a new conversation is open.",
+  "找到多份匹配文件，请使用完整文件名或路径：{0}": "Several files match. Use a full filename or path: {0}",
+  "书架中未找到「{0}」，请确认文件名或导入该文件。": "The library has no match for “{0}”. Check the filename or import the file.",
+  "页码必须是大于 0 的整数。": "The page number must be a positive integer.",
+  "《{0}》只有 {1} 个 PDF 页面，请核对指定页码 {2}。": "“{0}” has {1} PDF pages. Check the requested page {2}.",
+  "正在读取《{0}》第 {1} 页…": "Reading “{0}”, page {1}…",
   "浏览器搜索论文": "Search paper in browser", "其他参考文献": "Other references",
   "书架外文献 <b>{0}</b> 条": "<b>{0}</b> references outside the library",
   "排队中…": "Queued…",
