@@ -1,4 +1,4 @@
-# ⚠️ 绝对不要提交：data/ 里有你填的 API Key，papers/ 里是你的论文
+# 本地配置与论文
 data/
 papers/
 .env
@@ -16,8 +16,6 @@ node_modules/
 test/artifacts/
 test/.desktop-port
 test/dump/
-# test/left-rail.mjs 起的 Chrome 用户目录：每次运行新建一个时间戳目录、200+ 个文件。
-# 2026-10-06 审查发现曾有 623 个这样的文件被 `git add -A` 提交进仓库（约 61MB）。
 test/profile-*/
 
 # 编辑器 / 系统
@@ -27,16 +25,12 @@ test/profile-*/
 Thumbs.db
 .DS_Store
 
-# 与本项目无关的本地脚本（DSH 相关，不属于 prt）
+# 本地辅助脚本
 .dsh-probe/
 dsh-phone-bridge.mjs
 check_python_env.py
 
-# 本机内部资料 / 与本项目无关、**永远不进仓库**的东西（2026-10-22 仓库整理）
-#   docs/internal/      VPS、代理、SSH 等私人资料（曾误提交，已从全部历史抹掉）
-#   tools/internal/     DSH 等 AI 工具的内部脚本
-#   archive/            旧 Android 壳（7MB 重复的前端副本），只留本机
-#   brightness-*.md     与本项目无关的个人技术调研报告
+# 私人资料与本地归档
 docs/internal/
 tools/internal/
 /archive/
@@ -47,16 +41,29 @@ VPS使用说明.md
 给同学的说明.md
 vps-run.ps1
 
-# 本机专属 / 与本项目无关的文件（2026-10-31 仓库整理时补上）
-#   ClashMeta手机配置.yaml  代理配置（私人网络资料，绝不能进仓库）
-#   InstallationLog.txt     msys2 安装器的日志（装工具时顺手落在仓库根的，不是项目文件）
+# 本地工具配置与安装日志
 ClashMeta手机配置.yaml
 InstallationLog.txt
 
-# 本地快照与临时目录（体积大、且不是源码）——2026-10-04 推 GitHub 前补上
+# 本地快照与临时目录
 backup/
 .tmp-vps/
 test/node_modules/
 
-# 交付物（可由 build.bat / build-apk.bat 重新生成，不进仓库）
+# 交付物
 *.apk
+
+# 本地开发记录与历史原型
+/AGENTS.md
+/design/
+/docs/*
+!/docs/README.md
+!/docs/使用说明书.md
+!/docs/开发指南.md
+!/docs/多窗口阅读.md
+!/docs/第三方组件.md
+!/docs/internationalization.md
+!/docs/quick-start.en.md
+!/docs/prompts.md
+!/docs/assets/
+!/docs/licenses/

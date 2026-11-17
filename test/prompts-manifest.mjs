@@ -1,11 +1,11 @@
 /**
- * A 线 P4：提示词 manifest 与文档一致性检查（版本工具）。
+ * 提示词 manifest 与参考文档的一致性检查。
  *
  *   node test/prompts-manifest.mjs            # 校验
- *   node test/prompts-manifest.mjs --update   # 改完提示词并 bump 版本后，更新快照（必须同时改设计文档）
+ *   node test/prompts-manifest.mjs --update   # 改完提示词及版本后，更新快照和参考文档
  *
- * 规则（对应设计 §13.3 P4）：
- *  1) registry 里每个 PromptDef 的 id/version 必须出现在 `docs/提示词工程-设计.md` 的实装索引里；
+ * 规则：
+ *  1) registry 里每个 PromptDef 的 id/version 必须出现在 `docs/prompts.md` 的注册清单里；
  *  2) `test/fixtures/prompts-manifest.json` 是「已发布 manifest」快照：
  *     改提示词内容/版本却没更新快照 → 报错并提示 bump 流程（防漏 bump）；
  *  3) 死代码与兼容壳检查（regionMessages / matchGlossary / glossary 参数不得复活）；
@@ -19,7 +19,7 @@ import * as teaching from '../public/js/teaching.js';
 
 const ROOT = path.join(import.meta.dirname, '..');
 const SNAPSHOT = path.join(import.meta.dirname, 'fixtures', 'prompts-manifest.json');
-const DESIGN = path.join(ROOT, 'docs', '提示词工程-设计.md');
+const REFERENCE = path.join(ROOT, 'docs', 'prompts.md');
 const update = process.argv.includes('--update');
 
 const failures = [];
@@ -30,15 +30,15 @@ const check = (name, ok, detail = '') => {
 const fail = (name, detail) => check(name, false, detail);
 
 const manifest = prompts.getManifest();
-const design = fs.readFileSync(DESIGN, 'utf8');
+const reference = fs.readFileSync(REFERENCE, 'utf8');
 const ids = Object.keys(manifest);
 
-/* 1. 文档实装索引 */
-let missingInDoc = ids.filter((id) => !design.includes(`\`${id}\``));
-check('设计文档实装索引覆盖全部 PromptDef', missingInDoc.length === 0, missingInDoc.join(', '));
+/* 1. 文档注册清单 */
+const missingInDoc = ids.filter((id) => !reference.includes(`\`${id}\``));
+check('参考文档覆盖全部 PromptDef', missingInDoc.length === 0, missingInDoc.join(', '));
 for (const id of ids) {
   const row = new RegExp(`\\\`${id}\\\`[^\\n]*${manifest[id].replace(/\./g, '\\.')}`);
-  if (!row.test(design)) { fail(`文档版本与代码一致：${id}`, `文档里找不到 ${id} @ ${manifest[id]}（先更新设计文档 §20）`); }
+  if (!row.test(reference)) { fail(`文档版本与代码一致：${id}`, `文档里找不到 ${id} @ ${manifest[id]}（先更新 docs/prompts.md）`); }
 }
 check('文档里每个 PromptDef 版本与代码一致', !failures.some((f) => f.name.startsWith('文档版本')));
 
@@ -46,12 +46,12 @@ check('文档里每个 PromptDef 版本与代码一致', !failures.some((f) => f
 const current = { systemVersion: prompts.PROMPT_SYSTEM_VERSION, prompts: manifest };
 if (update) {
   fs.writeFileSync(SNAPSHOT, `${JSON.stringify(current, null, 2)}\n`, 'utf8');
-  console.log(`\n已更新快照：${path.relative(ROOT, SNAPSHOT)}（记得同步设计文档 §20 与 PROGRESS）`);
+  console.log(`\n已更新快照：${path.relative(ROOT, SNAPSHOT)}（记得同步 docs/prompts.md）`);
 } else {
   const saved = JSON.parse(fs.readFileSync(SNAPSHOT, 'utf8'));
   const same = JSON.stringify(saved) === JSON.stringify(current);
   check('manifest 与已发布快照一致（改提示词必须 bump 版本 + 更新快照 + 文档）', same,
-    same ? '' : '不一致：bump 相关 PromptDef 版本、更新设计文档 §20、再跑 --update');
+    same ? '' : '不一致：bump 相关 PromptDef 版本、更新 docs/prompts.md、再跑 --update');
   if (!same) {
     const saveIds = Object.keys(saved.prompts || {});
     const added = ids.filter((id) => !saveIds.includes(id));

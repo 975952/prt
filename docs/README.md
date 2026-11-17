@@ -2,7 +2,7 @@
 
 [返回项目首页](../README.md)
 
-[English home](../README.en.md) · [English quick start](quick-start.en.md) · [Language implementation](internationalization.md)
+[English home](../README.en.md) · [English quick start](quick-start.en.md)
 
 ## 使用 prt
 
@@ -19,26 +19,8 @@
 | [开发指南](开发指南.md) | 项目结构、Node 开发、Windows 构建与隔离测试 |
 | [贡献指南](../CONTRIBUTING.md) | 提交问题、修改代码、验证与 PR 约定 |
 | [桌面端说明](../desktop/README.md) | Rust 服务、运行参数与内嵌资源 |
+| [界面语言](internationalization.md) | 翻译资源与语言切换约定 |
+| [提示词参考](prompts.md) | 提示词模块、版本与校验方式 |
 | [安全说明](../SECURITY.md) | 漏洞报告渠道和数据边界 |
 | [第三方组件](第三方组件.md) | PDF、公式、字体与桌面依赖的来源和许可证 |
-| [截图说明](assets/README.md) | 首页预览来源与复现方式 |
-
-## 实现与设计参考
-
-这些文档面向实现细节，部分包含历史方案和阶段计划。当前功能以使用指南与源码为准。
-
-- **问答与翻译：** [整体设计](问答与翻译-整体设计.md) · [输出体验](问答与翻译-输出体验.md) · [提示词工程](提示词工程-设计.md)
-- **阅读与会话：** [多标签工作区](多标签工作区-设计.md) · [会话系统](会话系统-重新设计.md) · [读懂论文](读懂论文-设计.md)
-- **布局与文件：** [文件夹管理](左栏文件夹管理-设计.md) · [拖拽](左栏文件夹管理-拖拽设计.md) · [右栏交互](右栏交互增强-设计.md)
-- **渲染：** [触摸屏缩放](触摸屏缩放丝滑化.md) · [扫描件与 OCR](扫描件与OCR-调研.md)
-
-<details>
-<summary>调研与历史记录</summary>
-
-- [上下文策略](上下文策略-调研.md) · [模型能力](模型能力-调研.md) · [可嵌入 Agent](可嵌入Agent-调研.md)
-- [多标签调研](多标签工作区-调研.md) · [记忆系统调研](记忆系统调研-Codex.md) · [教学示例](读懂论文-示例回答.md)
-- [开发记录](PROGRESS.md)：实施过程与当时的验收证据。
-- [历史归档](archive/README.md)：旧说明、交接记录和早期审查，不再作为使用入口。
-- [交互原型](../design/README.md)：与当前正式前端独立的历史设计。
-
-</details>
+| [截图说明](assets/README.md) | 首页预览与论文来源 |

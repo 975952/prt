@@ -20,8 +20,6 @@ const INCLUDE = [
   'CONTRIBUTING.md',
   'SECURITY.md',
   '.github',
-  'design',
-  'AGENTS.md',
   '.gitignore',
   '.gitattributes',
   'public',
@@ -32,7 +30,16 @@ const INCLUDE = [
   'desktop/build.bat',
   'desktop/build.rs',
   'desktop/tools',
-  'docs',
+  'docs/README.md',
+  'docs/使用说明书.md',
+  'docs/开发指南.md',
+  'docs/多窗口阅读.md',
+  'docs/第三方组件.md',
+  'docs/internationalization.md',
+  'docs/quick-start.en.md',
+  'docs/prompts.md',
+  'docs/assets',
+  'docs/licenses',
   'test',
 ];
 
@@ -49,6 +56,7 @@ const DENY = [
   /webview2/,
   /\.desktop-port$/,
   /(^|[\\/])internal([\\/]|$)/,
+  /^(?:AGENTS\.md$|design[\\/]|docs[\\/]archive[\\/]|docs[\\/]PROGRESS\.md$)/,
   /^(?:archive|test[\\/]archive)([\\/]|$)/,
   /(^|[\\/])\.env(?:\.|$)/,
   /(^|[\\/])profile-[^\\/]*([\\/]|$)/,
@@ -104,8 +112,7 @@ if (leaked.length) {
   process.exit(1);
 }
 
-/* ── 2.5 前端新增目录会被 walk 带进来，但白名单要显式抽查一次 ──
-   （历史上源码 zip 漏过 security.js；提示词目录是 A 线 P1 新增的，必须确认进包） */
+/* ── 2.5 检查必需前端文件 ── */
 const REQUIRED_PUBLIC = [
   'public/js/prompts/index.js',
   'public/js/prompts/registry.js',
@@ -117,7 +124,6 @@ const REQUIRED_PUBLIC = [
   'public/js/locales/en.js',
   'public/js/ai.js',
   'public/js/teaching.js',
-  // B 线 P1：多标签工作区（tabs.css 是新增样式文件，同样必须进包）
   'public/js/tabs.js',
   'public/tabs.css',
 ];
@@ -160,6 +166,7 @@ try {
   fs.rmSync(VERIFY, { recursive: true, force: true });
   fs.mkdirSync(VERIFY, { recursive: true });
   execFileSync('tar', ['-x', '-f', ZIP, '-C', VERIFY], { stdio: 'ignore' });
+  execFileSync(process.execPath, [path.join(VERIFY, 'test', 'repository-check.mjs')], { stdio: 'inherit' });
   const dataDir = path.join(VERIFY, '__data__');
   const papersDir = path.join(VERIFY, 'test', 'fixtures');
   fs.mkdirSync(dataDir, { recursive: true });
