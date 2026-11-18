@@ -50,6 +50,9 @@ try {
     await page.$eval('#homeSearch', (n, value) => { n.value = value; n.dispatchEvent(new Event('input', { bubbles: true })); }, text);
   };
   check('empty library gives an actionable welcome', await page.$eval('#homeList', n => n.textContent.includes('还没有论文')));
+  check('Library is the single top-level name', await page.$eval('#homeHeading', n => n.textContent === 'Library')
+    && await page.$eval('#homeBtn', n => n.textContent.includes('Library'))
+    && await page.$eval('#docName', n => n.textContent === 'Library'));
   check('reading toolbar is hidden on home', !(await visible('.viewer-foot')) && !(await visible('#opsBtn')));
   await page.screenshot({ path: path.join(scratch, 'empty.png') });
   const fixtureNames = [
@@ -75,10 +78,24 @@ try {
     lastDoc: last.docId, lastName: last.name, lastUrl: last.url,
   }) });
   await page.reload({ waitUntil: 'networkidle0' });
-  check('all papers and folders appear', await count() === papers.length && await page.$$eval('.home-folder', n => n.length) === 4);
+  check('all papers and folders appear', await count() === papers.length && await page.$$eval('#homeFolders [data-home-folder]', n => n.length) === 5);
   const readCount = papers.filter(p => [last.docId, older.docId].includes(p.docId)).length;
   check('sidebar counts match visible entries, including same-name copies', await page.$eval('#homeReadCount', n => n.textContent) === String(readCount) && await page.$eval('#homeUnreadCount', n => n.textContent) === String(papers.length - readCount));
-  check('continue card shows saved page', await page.$eval('.home-continue', n => n.textContent.includes('第 5 页')));
+  check('paper cards replace repeated headings and text rows', await page.evaluate(() =>
+    !document.querySelector('.home-eyebrow') && !document.querySelector('.home-description')
+    && !document.querySelector('.home-list-head') && !document.querySelector('.home-drop').getClientRects().length
+    && !document.querySelector('.home-continue') && document.querySelector('#homeResultCount').hidden
+    && getComputedStyle(document.querySelector('#homeList')).display === 'grid'
+    && document.querySelector('#homeList .hi-name')?.getClientRects().length
+    && !document.querySelector('#homeList .hi-meta') && document.querySelector('#homeList .hi-status')?.getClientRects().length));
+  await page.waitForFunction(() => [...document.querySelectorAll('.hi-preview img')].some(img => img.naturalWidth > 0), { timeout: 20000 });
+  const loadedBeforeScroll = await page.$$eval('.hi-preview img', nodes => nodes.filter(img => img.naturalWidth > 0).length);
+  check('visible paper cards render real first-page PDF thumbnails', loadedBeforeScroll > 0 && loadedBeforeScroll <= papers.length);
+  await page.$eval('.home-content', node => node.scrollTo({ top: node.scrollHeight, behavior: 'instant' }));
+  await page.waitForFunction(() => [...document.querySelectorAll('.hi-preview img')].every(img => img.naturalWidth > 0), { timeout: 20000 });
+  check('scrolling through the grid loads the remaining thumbnails', await page.$$eval('.hi-preview img', nodes => nodes.length === nodes.filter(img => img.naturalWidth > 0).length));
+  await page.setViewport({ width: 1440, height: 960 });
+  await page.$eval('.home-content', node => node.scrollTo({ top: 0, behavior: 'instant' }));
   await page.screenshot({ path: path.join(scratch, 'home-desktop.png') });
   await filter('recent');
   assert.deepEqual(await ids(), [...papers.filter(p => p.docId === last.docId).map(p => p.docId), older.docId]); checks++; console.log('PASS recent papers are ordered by last read');
@@ -124,9 +141,11 @@ try {
   await page.setViewport({ width: 1440, height: 960 });
   await zoomKey('0');
   check('Ctrl+0 resets home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === initialZoom);
-  check('only home main content has rounded corners', await page.evaluate(() => getComputedStyle(document.querySelector('#home')).borderRadius === '0px'
-    && getComputedStyle(document.querySelector('.home-sidebar')).borderRadius === '0px'
-    && parseFloat(getComputedStyle(document.querySelector('.home-content')).borderRadius) >= 14));
+  check('library content shares the full work surface with a single folder divider', await page.evaluate(() =>
+    getComputedStyle(document.querySelector('#home')).borderRadius === '0px'
+    && parseFloat(getComputedStyle(document.querySelector('.home-content')).borderRadius) === 0
+    && getComputedStyle(document.querySelector('.home-content')).boxShadow === 'none'
+    && getComputedStyle(document.querySelector('.home-sidebar')).borderStyle !== 'none'));
   const chooser = await Promise.all([page.waitForFileChooser(), page.click('#homeOpen')]).then(r => r[0]);
   check('open PDF launches file picker', chooser.isMultiple());
   await chooser.cancel();
@@ -150,9 +169,10 @@ try {
   await page.setViewport({ width: 1440, height: 960 });
   await page.evaluate(() => { const s = document.querySelector('#uiTheme'); s.value = 'glass'; s.dispatchEvent(new Event('input', { bubbles: true })); });
   await filter('all');
-  await page.click('.home-continue');
+  await filter('recent');
+  await page.click(`#homeList [data-id="${last.docId}"] .home-item-go`);
   await page.waitForFunction(() => window.__viewer?.numPages > 0 && window.__state?.viewerDocId === window.__state.doc?.docId);
-  check('continue opens correct paper, path and page', await page.evaluate(p => window.__state.doc.docId === p.docId && window.__state.doc.path === p.path && window.__viewer.current === 5, last));
+  check('clicking a recent paper card resumes its saved path and page', await page.evaluate(p => window.__state.doc.docId === p.docId && window.__state.doc.path === p.path && window.__viewer.current === 5, last));
   check('reading toolbar returns in reader', await visible('.viewer-foot') && await visible('#opsBtn'));
   await page.screenshot({ path: path.join(scratch, 'reader-regression.png') });
   await page.click('.doc-tab.active .tab-close');

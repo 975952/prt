@@ -3,16 +3,18 @@ import { el } from './util.js';
 import { iconEl } from './icons.js';
 import { DEFAULT_AGENT_PROFILE, normalizeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { createAgentSettings } from './agent-settings.js';
+import { createAgentMotion } from './agent-motion.js';
 
 /** UI only: the caller owns conversation scope, persistence, and document navigation. */
 export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
-  onContinue, onRestore, onNew, onStartSearch, onResume, onHistory, onLanding,
+  onContinue, onRestore, onNew, onStartSearch, onResume, onHistory, onLanding, onSessionSelect, onSettings,
   getPapers = () => [], onNameChange, onProfileChange } = {}) {
   const byId = id => document.getElementById(id);
   const ui = Object.fromEntries(['agentBtn', 'homeAgent', 'agentIdentity', 'agentNameDisplay', 'agentExpand', 'agentPapersToggle', 'agentLandingBack',
     'agentLanding', 'agentLaunchActions', 'agentStartSearch', 'agentResume', 'agentHistory', 'agentRecentTitle', 'chatInput',
     'agentPaperPicker', 'agentPaperSearch', 'agentPaperList', 'agentPapersClose', 'agentHandoff', 'agentHandoffLayer',
-    'agentHandoffContext', 'agentContinue', 'agentRestore', 'agentNew', 'agentStatus', 'rightSide', 'aiArea', 'sessHistory']
+    'agentHandoffContext', 'agentContinue', 'agentRestore', 'agentNew', 'agentStatus', 'rightSide', 'aiArea', 'sessHistory',
+    'homeBtn', 'agentNavNew', 'agentNavSettings', 'agentNavRecent']
     .map(id => [id, byId(id)]));
   const defaultProfile = DEFAULT_AGENT_PROFILE;
   const limitText = (value, limit) => [...String(value ?? '').trim()].slice(0, limit).join('');
@@ -20,6 +22,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   let view = 'closed', name = profile.name, transitioning = false, busy = false, animation = null;
   let paperRevision = 0, handoffFrame = 0, handoffVersion = 0, handoffAnimation = null, handoffClosing = false;
   let landing = false, hasRecent = false, composerAnimation = null, composerFrame = 0, composerVersion = 0;
+  const motion = createAgentMotion();
   const settings = createAgentSettings({ onSave: async next => {
     if (onProfileChange) await onProfileChange(next);
     else await onNameChange?.(next.name);
@@ -36,11 +39,12 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   }
   function disabled() {
     for (const id of ['agentBtn', 'homeAgent', 'agentExpand', 'agentContinue', 'agentRestore', 'agentNew', 'agentLandingBack',
-      'agentStartSearch', 'agentResume', 'agentHistory']) {
+      'agentStartSearch', 'agentResume', 'agentHistory', 'homeBtn', 'agentNavNew', 'agentNavSettings']) {
       ui[id].disabled = busy || transitioning;
     }
     ui.agentResume.disabled ||= !hasRecent;
     for (const button of ui.agentPaperList.querySelectorAll('button')) button.disabled = busy || transitioning;
+    for (const button of ui.agentNavRecent.querySelectorAll('button')) button.disabled = busy || transitioning;
     ui.rightSide.setAttribute('aria-busy', String(busy || transitioning));
   }
   async function act(action, ...args) {
@@ -72,7 +76,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   }
   function setLanding(on, options = {}) {
     const revision = ++composerVersion;
-    const leaving = landing && !on && view === 'full';
+    const leaving = landing && !on && view === 'full' && !transitioning;
     const composer = byId('composer');
     const inputCard = composer.querySelector('.composer-row');
     const before = leaving && inputCard?.getClientRects().length ? inputCard.getBoundingClientRect() : null;
@@ -85,6 +89,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
       ui.agentRecentTitle.hidden = !title || !hasRecent;
     }
     document.body.classList.toggle('agent-landing', landing);
+    ui.agentNavNew.setAttribute('aria-current', landing ? 'page' : 'false');
     ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
     if (landing) { closePapers(); hideHandoff(); }
     disabled(); positionHandoff();
@@ -122,6 +127,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     ui.agentIdentity.hidden = next === 'closed';
     ui.agentBtn.setAttribute('aria-expanded', String(next === 'full'));
     ui.agentBtn.setAttribute('aria-current', next === 'full' ? 'page' : 'false');
+    ui.homeAgent.setAttribute('aria-current', next === 'full' ? 'page' : 'false');
     if (next !== 'full') setLanding(false);
     if (next !== 'full') closePapers();
     closeName();
@@ -133,6 +139,23 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     transitioning = !!on;
     document.body.classList.toggle('agent-transitioning', transitioning);
     disabled();
+  }
+  function setRecentConversations(rows = [], selectedSid = '') {
+    const list = rows.filter(row => !row.archived && row.count > 0)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 7);
+    ui.agentNavRecent.replaceChildren(...list.map(row => el('button', {
+      type: 'button', class: 'agent-nav-session', text: row.title || tr('新会话'),
+      title: row.title || tr('新会话'), dataset: { agentSession: row.sid },
+      'aria-current': !landing && row.sid === selectedSid ? 'page' : 'false',
+      onclick: () => act(onSessionSelect, row),
+    })));
+    ui.agentNavRecent.parentElement.hidden = !list.length;
+    disabled();
+  }
+  async function transitionLayout(update, options) {
+    setTransitioning(true);
+    try { await motion.layout(update, options); }
+    finally { setTransitioning(false); }
   }
   function showHandoff({ paperLabel = '', scopeLabel = '' } = {}) {
     handoffClosing = false;
@@ -226,7 +249,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
       const row = el('button', { type: 'button', class: 'agent-paper-row',
         dataset: { agentPaper: path || paper.docId || '' }, title: path,
         onclick: () => act(async () => {
-          await onOpenPaper?.(paper);
+          await onOpenPaper?.(paper, row);
           closePapers();
         }) },
       iconEl('book'), el('span', { class: 'agent-paper-row-text' },
@@ -272,6 +295,8 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   ui.agentStartSearch.addEventListener('click', () => act(async () => { await onStartSearch?.(); ui.chatInput.focus({ preventScroll: true }); }));
   ui.agentResume.addEventListener('click', () => act(onResume));
   ui.agentHistory.addEventListener('click', () => act(onHistory));
+  ui.agentNavNew.addEventListener('click', () => act(onLanding));
+  ui.agentNavSettings.addEventListener('click', () => act(onSettings));
   ui.agentPapersToggle.addEventListener('click', () => {
     const open = ui.agentPaperPicker.hidden;
     closeName(); ui.agentPaperPicker.hidden = !open;
@@ -286,5 +311,6 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   setProfile(profile); setView(view);
   return { setView, setName, setProfile, setLanding, setTransitioning, showHandoff, hideHandoff, showNameSetup,
     hasProfileDraft: settings.isDirty, resetProfileDraft: settings.reset,
-    closeNameSetup: () => closeName(), refreshPapers, captureRect, animateFrom };
+    closeNameSetup: () => closeName(), refreshPapers, captureRect, animateFrom, setRecentConversations,
+    beginPaperMotion: node => motion.begin(node), endPaperMotion: motion.end, transitionLayout };
 }

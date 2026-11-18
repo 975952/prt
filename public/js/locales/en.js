@@ -419,7 +419,7 @@ export const en = {
   "选择继续或新建": "Choose to resume or start new", "透光": "Glass", "透明与质感": "Transparency and texture", "配置名称（可选）": "Profile name (optional)",
   "重新解析本文的参考文献": "Read references again", "重置外观、布局和阅读偏好；保留模型配置与阅读记录": "Reset appearance, layout, and reading preferences. Keep models and reading history.",
   "重置效果": "Reset effects", "重置阅读偏好": "Reset reading preferences", "长期记忆": "Memory", "问题": "Question", "阅读与问答": "Reading and chat", "阅读外观": "Appearance",
-  "页码": "Page", "首页": "Home", "默认动作": "Default action", "默认排列": "Default order"
+  "页码": "Page", "首页": "Library", "默认动作": "Default action", "默认排列": "Default order"
   ,"请先保存正在编辑的设置或笔记，再切换语言。": "Save your settings or note edits before changing language.", "今天": "Today", "翻译": "Translate",
   "回答": "Answer", "解释": "Explanation", "精简": "Short version", "继续": "Continue", "来源": "Source",
   "实验够不够支撑结论": "Do the experiments support the claims?", "数据集/基线/指标/消融逐项对照（深入阅读时用）": "Review datasets, baselines, metrics, and ablations",
@@ -533,7 +533,12 @@ export const en = {
   "继续联网查找": "Continue searching online",
   "打开论文：{0}": "Open paper: {0}", "查看论文来源：{0}": "View paper source: {0}",
   "检索范围": "Search coverage", "{0} 篇含未能核实的内容": "{0} papers contain unverified content",
-  "找论文，读懂它，再一起往下想。": "Find a paper. Read it deeply. Think further together.",
+  "今天想读什么？": "What would you like to read?",
+  "回答依据": "Sources used",
+  "工作区切换": "Switch workspace", "全局会话导航": "Global conversations", "会话导航": "Conversations",
+  "最近会话": "Recent conversations", "对话会出现在这里": "Your conversations will appear here",
+  "工作区选项": "Workspace options", "个性与偏好": "Personality & preferences",
+  "题目、作者，或你记得的内容": "A title, an author, or anything you remember",
   "智能体快捷入口": "Assistant shortcuts", "找论文": "Find a paper", "继续上次": "Resume last chat",
   "历史会话": "Chat history", "新对话": "New chat", "智能体": "Assistant",
   "名字与交流方式，在所有对话中共用。": "Your assistant's name and communication style apply to every conversation.",

@@ -445,8 +445,14 @@ try {
     && await visible('#agentLanding') && await visible('#chatInput') && !await visible('#aiArea'));
   check('landing gives find, resume and history one visible entrance each', await page.evaluate(() =>
     ['agentStartSearch', 'agentResume', 'agentHistory'].every(id => document.getElementById(id).getClientRects().length)
-    && ['agentBtn', 'agentIdentity', 'sessBar', 'agentPapersToggle'].every(id => !document.getElementById(id).getClientRects().length)
+    && ['agentIdentity', 'sessBar', 'agentPapersToggle'].every(id => !document.getElementById(id).getClientRects().length)
+    && document.querySelector('#workspaceNav #agentBtn')?.getClientRects().length
+    && !document.querySelector('#agentLanding [data-agent-icon]')
     && !document.getElementById('agentNameEdit') && !document.getElementById('agentNameForm')));
+  check('Library return stays in the top bar while Alina keeps Settings in her sidebar', await page.evaluate(() =>
+    !document.getElementById('agentNavLibrary')
+    && document.getElementById('agentNavSettings')?.getClientRects().length
+    && document.querySelector('#workspaceNav #homeBtn')?.textContent.includes('Library')));
   await page.click('#agentStartSearch');
   check('find papers focuses the shared composer without an extra dialog', await page.evaluate(() =>
     document.activeElement.id === 'chatInput' && document.body.classList.contains('agent-landing')));
@@ -495,8 +501,8 @@ try {
     && document.querySelector('#agentHabitsInput').value === 'Start with intuition'));
   await page.click('#closeSettings');
   await chooseGlobal();
-  await page.click('#agentLandingBack'); await settled();
-  check('conversation returns to its landing through the dedicated Start entrance', await visible('#agentLanding')
+  await page.click('#agentNavNew'); await settled();
+  check('conversation returns to its landing through the sidebar new-chat entrance', await visible('#agentLanding')
     && !await visible('#agentLandingBack') && await scope() === 'default');
   await chooseGlobal();
   await typeDraft('A question without an open PDF');

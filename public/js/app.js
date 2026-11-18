@@ -1241,9 +1241,9 @@ function syncHomeBtnVisibility() {
   const home = $('#homeBtn');
   if (!home) return;
   home.classList.remove('hidden');
-  const label = agentWorkspaceView === 'closed' ? tr('首页') : tr('书架');
+  const label = 'Library';
   home.querySelector('span').textContent = label;
-  home.title = agentWorkspaceView === 'closed' ? tr('回到首页（书架）') : tr('书架');
+  home.title = label;
   home.setAttribute('aria-label', home.title);
   if (document.body.classList.contains('reading')) home.removeAttribute('aria-current');
   else home.setAttribute('aria-current', 'page');
@@ -2434,6 +2434,11 @@ function setAgentWorkspaceView(view) {
   renderSessionBar();
   updateComposerHint();
 }
+function updateAgentRecentSessions() {
+  if (!agentWorkspace) return;
+  const global = agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global';
+  agentWorkspace.setRecentConversations(global ? sessionsGetList() : [], global ? activeSidFor(state.doc?.docId) : '');
+}
 function latestAgentConversation() {
   return sessionsGetList().filter(row => !row.archived && row.count > 0)
     .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null;
@@ -2496,6 +2501,17 @@ function initAgentWorkspace() {
       $('#chatInput').focus({ preventScroll: true });
     },
     onHistory: () => { $('#sessHist').click(); },
+    onSessionSelect: async row => {
+      if (!row?.sid) return;
+      if (agentSessionOverride !== 'global') await changeAgentScope('global');
+      await openSessionFromHistory(row, { force: true });
+      setAgentLanding(false);
+      updateAgentRecentSessions();
+    },
+    onSettings: async () => {
+      await openSettings(); showSettingsPane('agent');
+      setTimeout(() => document.querySelector('.settings-nav-item[data-pane="agent"]')?.focus(), 60);
+    },
     onBack: async () => { await parkAgentConversation(); showHome(); },
     onOpenPaper: openAgentPaper,
     onContinue: dismissAgentHandoff,
@@ -2529,23 +2545,30 @@ async function openAgentWorkspace({ landing = true } = {}) {
     // its current owner, conversation and unsent draft.
     if (landing || agentWorkspaceView === 'closed') await changeAgentScope('global');
     dismissAgentHandoff();
-    setPanelVisible('chat', true);
-    setAgentWorkspaceView('full');
-    setAgentLanding(landing);
-    setView('reading');
-    const continuing = chatViews.has(currentChatKey()) || sessionHasChatContent();
-    await sessionsOpenWorkspace({ choose: landing || !continuing });
-    setAgentLanding(landing);
-    activateComposerDraft('chat');
-    if (from) await agentWorkspace.animateFrom(from);
+    const update = () => {
+      setPanelVisible('chat', true);
+      setAgentWorkspaceView('full');
+      setAgentLanding(landing);
+      setView('reading');
+    };
+    const prepare = async () => {
+      const continuing = chatViews.has(currentChatKey()) || sessionHasChatContent();
+      await sessionsOpenWorkspace({ choose: landing || !continuing });
+      setAgentLanding(landing);
+      activateComposerDraft('chat');
+      updateAgentRecentSessions();
+    };
+    if (from) await agentWorkspace.transitionLayout(update, { direction: 'expand', prepare });
+    else { update(); await prepare(); }
   } finally { agentNavigationBusy = false; }
 }
-async function openAgentPaper(paper) {
+async function openAgentPaper(paper, sourceElement = null) {
   if (agentNavigationBusy || !paper?.docId) return;
   agentNavigationBusy = true;
-  const from = agentWorkspace.captureRect();
+  agentWorkspace.beginPaperMotion(sourceElement);
   const originalDoc = state.doc;
   const originalView = agentWorkspaceView;
+  const originalLanding = agentLandingActive;
   agentWorkspace.setTransitioning(true);
   try {
     await parkAgentConversation();
@@ -2567,19 +2590,25 @@ async function openAgentPaper(paper) {
       activateComposerDraft('chat');
       setAgentWorkspaceView(originalView);
       if (originalView === 'full') setView('reading');
+      setAgentLanding(originalLanding);
       throw new Error(tr('论文未能打开，对话已保留，请重试。'));
     }
-    setPanelVisible('chat', true);
-    setAgentWorkspaceView('docked');
-    setView('reading');
-    await nextFrame();
-    await agentWorkspace.animateFrom(from);
+    await agentWorkspace.transitionLayout(() => {
+      setPanelVisible('chat', true);
+      setAgentWorkspaceView('docked');
+      setView('reading');
+    }, { direction: 'dock', prepare: async () => {
+      if (viewer._fitMode) viewer.fitWidth();
+      else viewer.layout();
+      await viewer.refreshPage?.(viewer.current);
+    } });
     agentHandoff = { docId: paper.docId };
     agentWorkspace.showHandoff({ paperLabel: paperTitles.label(paper),
       scopeLabel: readSessionScopeMode() === 'folder' ? tr('此文件夹的对话') : tr('此论文的对话') });
   } finally {
     pendingSessionOpen = false;
     agentNavigationBusy = false;
+    agentWorkspace.endPaperMotion();
     agentWorkspace.setTransitioning(false);
   }
 }
@@ -2667,7 +2696,7 @@ function setView(view) {
     return;
   }
   // 首页由样式临时隐藏阅读侧栏，不把首页布局保存成用户的阅读偏好。
-  $('#docName').textContent = tr("书架");
+  $('#docName').textContent = 'Library';
   $('#docName').title = '';
   document.title = 'prt';
   state.homeReady = true;
@@ -2745,6 +2774,82 @@ const homeView = { filter: 'all', folder: null, query: '' };
 const paperTitles = createPaperTitleIndex({ storage: localStorage, readTitle: readPdfTitle,
   onChange: debounce(() => { if (!document.body.classList.contains('reading')) renderHome({ navigation: false }); }, 120),
 });
+let homeThumbnailObserver = null;
+let homeThumbnailGeneration = 0;
+let homeThumbnailQueue = [];
+let homeThumbnailActive = 0;
+const homeThumbnailControllers = new Set();
+const homeThumbnailCache = new Map();
+
+function stopHomeThumbnailWork() {
+  homeThumbnailGeneration++;
+  homeThumbnailObserver?.disconnect();
+  homeThumbnailObserver = null;
+  homeThumbnailQueue = [];
+  for (const controller of homeThumbnailControllers) controller.abort();
+  homeThumbnailControllers.clear();
+  return homeThumbnailGeneration;
+}
+
+function pumpHomeThumbnailQueue(generation) {
+  while (generation === homeThumbnailGeneration && homeThumbnailActive < 2 && homeThumbnailQueue.length) {
+    const target = homeThumbnailQueue.shift();
+    if (!target.isConnected) continue;
+    const cached = homeThumbnailCache.get(target.dataset.cacheKey);
+    const img = target.querySelector('img');
+    if (cached && img) {
+      homeThumbnailCache.delete(target.dataset.cacheKey);
+      homeThumbnailCache.set(target.dataset.cacheKey, cached);
+      img.src = cached;
+      target.classList.add('has-preview');
+      continue;
+    }
+    const controller = new AbortController();
+    homeThumbnailControllers.add(controller);
+    homeThumbnailActive++;
+    renderPdfPageImage(target.dataset.url, 1, { signal: controller.signal, maxDim: 560, quality: .68 })
+      .then(({ dataUrl }) => {
+        if (generation !== homeThumbnailGeneration || !target.isConnected || !img) return;
+        homeThumbnailCache.set(target.dataset.cacheKey, dataUrl);
+        while (homeThumbnailCache.size > 24) homeThumbnailCache.delete(homeThumbnailCache.keys().next().value);
+        img.src = dataUrl;
+        target.classList.add('has-preview');
+      })
+      .catch(() => {
+        if (generation === homeThumbnailGeneration && target.isConnected && !controller.signal.aborted) target.classList.add('preview-fallback');
+      })
+      .finally(() => {
+        homeThumbnailControllers.delete(controller);
+        homeThumbnailActive--;
+        pumpHomeThumbnailQueue(homeThumbnailGeneration);
+      });
+  }
+}
+
+function observeHomeThumbnails(list) {
+  const generation = homeThumbnailGeneration;
+  const targets = [...list.querySelectorAll('.hi-preview[data-url]')];
+  if (!targets.length) return;
+  if (!('IntersectionObserver' in window)) {
+    homeThumbnailQueue.push(...targets.slice(0, 6));
+    pumpHomeThumbnailQueue(generation);
+    return;
+  }
+  homeThumbnailObserver = new IntersectionObserver((entries, observer) => {
+    for (const entry of entries) {
+      if (!entry.isIntersecting) continue;
+      observer.unobserve(entry.target);
+      homeThumbnailQueue.push(entry.target);
+    }
+    pumpHomeThumbnailQueue(generation);
+  }, { root: $('#home .home-content'), rootMargin: '180px 0px' });
+  for (const target of targets) {
+    if (homeThumbnailCache.has(target.dataset.cacheKey)) homeThumbnailQueue.push(target);
+    else homeThumbnailObserver.observe(target);
+  }
+  pumpHomeThumbnailQueue(generation);
+}
+
 function chooseHomeView(filter, folder = null) {
   homeView.filter = filter;
   homeView.folder = folder;
@@ -2757,12 +2862,12 @@ function chooseHomeView(filter, folder = null) {
 /** 书架来自磁盘文件，阅读状态来自 serverState；所有入口共用 openDoc。 */
 function renderHome({ navigation = true } = {}) {
   const list = $('#homeList');
-  const contWrap = $('#homeContinueWrap');
-  if (!list || !contWrap) return;
+  if (!list) return;
+  stopHomeThumbnailWork();
   const rows = recentDocs();
   const recById = new Map(rows.map((r) => [r.docId, r]));
   const allPapers = state.papers || [];
-  const title = $('#homeRecentTitle');
+  const recent = $('#homeRecent');
   const folders = [...(state.folders || [])];
   // 根目录与缺少文件夹条目的服务端结果也有明确的导航入口。
   if (allPapers.some(p => !p.folder)) folders.unshift({ path: '', name: tr("未分组") });
@@ -2772,10 +2877,11 @@ function renderHome({ navigation = true } = {}) {
   const inFolder = (p, folder) => (p.folder || '') === folder || (!!folder && (p.folder || '').startsWith(`${folder}/`));
   if (homeView.folder !== null && !folders.some(f => f.path === homeView.folder)) homeView.folder = null;
   const heading = homeView.folder !== null ? folders.find(f => f.path === homeView.folder)?.name
-    : homeView.filter === 'recent' ? tr("最近阅读") : homeView.filter === 'unread' ? tr("未读论文") : tr("书架");
-  if ($('#homeHeading')) $('#homeHeading').textContent = heading;
-  if (title) title.textContent = homeView.folder !== null ? tr("文件夹中的论文")
-    : homeView.filter === 'recent' ? tr("按最近阅读排序") : homeView.filter === 'unread' ? tr("尚未开始阅读") : tr("全部论文");
+    : homeView.filter === 'recent' ? tr("最近阅读") : homeView.filter === 'unread' ? tr("未读论文") : tr("全部论文");
+  if ($('#homeHeading')) $('#homeHeading').textContent = 'Library';
+  if (!document.body.classList.contains('reading') && $('#docName')) $('#docName').textContent = 'Library';
+  if (recent) recent.setAttribute('aria-label', heading || 'Library');
+  if ($('#docName') && !document.body.classList.contains('reading')) $('#docName').title = '';
   const readCount = allPapers.filter(p => recById.has(p.docId)).length;
   for (const [id, count] of [['homeAllCount', allPapers.length], ['homeReadCount', readCount], ['homeUnreadCount', allPapers.length - readCount]]) {
     if ($(`#${id}`)) $(`#${id}`).textContent = String(count);
@@ -2797,23 +2903,9 @@ function renderHome({ navigation = true } = {}) {
   for (const button of $$('#home [data-home-filter]')) button.setAttribute('aria-pressed', String(homeView.folder === null && button.dataset.homeFilter === homeView.filter));
   for (const button of $$('#home [data-home-folder]')) button.setAttribute('aria-pressed', String(button.dataset.homeFolder === homeView.folder));
 
-  // ── 继续阅读卡片：只在「确实有一篇可以接着读」时出现 ──
-  contWrap.replaceChildren();
-  const last = rows.find((r) => r.docId === serverState.lastDoc) || rows[0];
-  if (last && homeView.folder === null && homeView.filter !== 'unread' && !homeView.query.trim()) {
-    const go = el('button', { type: 'button', class: 'home-continue', 'aria-label': tr("继续阅读「{0}」，从第 {1} 页开始", last.label, last.page) },
-      el('span', { class: 'hc-cover', 'aria-hidden': 'true' }, iconEl('book', { size: 26 })),
-      el('span', { class: 'hc-main' },
-        el('span', { class: 'hc-label', text: tr("继续阅读") }),
-        el('span', { class: 'hc-name', text: last.label, title: last.label }),
-        el('span', { class: 'hc-meta', text: tr("第 {0} 页 · {1}", last.page, relTime(last.ts)) })),
-      el('span', { class: 'hc-go' }, tr("继续 →")));
-    go.onclick = () => openDoc({ name: last.name, url: last.url, docId: last.docId, path: last.path });
-    contWrap.append(go);
-  }
-
-  // ── 书架：**按文件夹分组**列出 papers 里全部论文（用户口径：不要全部散着铺开） ──
+  // Folder selection is the sole hierarchy control; keep one continuous paper grid.
   list.replaceChildren();
+  list.classList.remove('home-card-list');
   const query = homeView.query.trim().toLocaleLowerCase();
   let visible = allPapers.filter(p => {
     if (homeView.folder !== null && !inFolder(p, homeView.folder)) return false;
@@ -2821,7 +2913,12 @@ function renderHome({ navigation = true } = {}) {
     if (homeView.filter === 'unread' && recById.has(p.docId)) return false;
     return !query || `${paperTitles.label(p)} ${p.name} ${p.folder || ''}`.toLocaleLowerCase().includes(query);
   });
-  if ($('#homeResultCount')) $('#homeResultCount').textContent = query ? tr("找到 {0} 篇论文", visible.length) : tr("{0} 篇论文", visible.length);
+  const resultCount = $('#homeResultCount');
+  if (resultCount) {
+    const showCount = !!query || homeView.filter !== 'all' || homeView.folder !== null;
+    resultCount.hidden = !showCount;
+    resultCount.textContent = showCount ? query ? tr("找到 {0} 篇论文", visible.length) : tr("{0} 篇论文", visible.length) : '';
+  }
   if (!visible.length) {
     const emptyTitle = !allPapers.length ? tr("还没有论文") : query ? tr("没有找到匹配的论文")
       : homeView.filter === 'recent' ? tr("还没有阅读记录") : homeView.filter === 'unread' ? tr("所有论文都已开始阅读") : tr("这个文件夹还没有论文");
@@ -2834,45 +2931,33 @@ function renderHome({ navigation = true } = {}) {
       allPapers.length ? el('button', { type: 'button', class: 'home-reset', text: tr("查看全部论文"), onclick: () => chooseHomeView('all') }) : null));
     return;
   }
-  const groups = [];
   if (homeView.filter === 'recent') {
     visible.sort((a, b) => recById.get(b.docId).ts - recById.get(a.docId).ts);
-    groups.push({ path: '', name: '', files: visible });
-  } else {
-    for (const f of folders) {
-      const files = visible.filter(p => (p.folder || '') === f.path);
-      if (files.length) groups.push({ path: f.path, name: f.path || f.name, files });
-    }
   }
-  for (const group of groups) {
-    const depth = group.path ? Math.min(3, group.path.split('/').length - 1) : 0;
-    if (group.name) list.append(el('li', {
-      class: 'home-folder',
-      style: `--depth:${depth}`,
-      title: group.path === '?' ? tr("其它") : tr("papers/{0}（{1} 篇）", group.path ? `${group.path}/` : '', group.files.length),
-    },
-    el('span', { class: 'hf-ico', 'aria-hidden': 'true', html: FOLDER_ICON_SVG }),
-    el('span', { class: 'hf-name', text: group.name }),
-    el('span', { class: 'hf-count', text: String(group.files.length) })));
-    for (const paper of group.files) {
+  for (const paper of visible) {
       const rec = recById.get(paper.docId);
       const page = rec ? Math.max(1, Number(rec.page) || 1) : 0;
-      const meta = rec ? tr("第 {0} 页 · {1}", page, relTime(rec.ts)) : tr("未读");
-      const item = el('li', { class: 'home-item', dataset: { id: paper.docId }, style: `--depth:${depth}` },
-        el('button', { type: 'button', class: 'home-item-go', title: paperTitles.label(paper) },
-          el('span', { class: 'hi-icon', 'aria-hidden': 'true' }, iconEl('book', { size: 15 })),
-          el('span', { class: 'hi-name', text: paperTitles.label(paper) }),
-          el('span', { class: 'hi-meta', text: meta })),
+      const title = paperTitles.label(paper);
+      const cacheKey = `${paper.docId || paper.path || paper.name}:${paper.mtime || ''}:${paper.size || ''}`;
+      const item = el('li', { class: 'home-item', dataset: { id: paper.docId } },
+        el('button', { type: 'button', class: 'home-item-go', title: `${paper.path || paper.name}${rec ? tr(" · 第 {0} 页", page) : ''}`, 'aria-label': title },
+          el('span', { class: 'hi-preview', dataset: { url: paper.url, cacheKey }, 'aria-hidden': 'true' },
+            el('span', { class: 'hi-placeholder' }, iconEl('book', { size: 20 })),
+            el('img', { class: 'hi-page', alt: '', decoding: 'async' })),
+          el('span', { class: 'hi-main' },
+            el('span', { class: 'hi-name', text: title }),
+            el('span', { class: `hi-status${rec ? '' : ' is-unread'}`, title: rec ? tr("第 {0} 页", page) : tr("未读"), 'aria-label': rec ? tr("第 {0} 页", page) : tr("未读") }))),
         rec ? el('button', {
-          type: 'button', class: 'home-item-x', text: '×',
+          type: 'button', class: 'home-item-x', 'aria-hidden': 'false',
           title: tr("移除「{0}」的最近记录（不删除文件）", paper.name),
           'aria-label': tr("移除「{0}」的最近记录", paper.name),
           onclick: (e) => { e.stopPropagation(); removeRecent(paper.docId); },
-        }) : null);
+        }, iconEl('close', { size: 14 })) : null);
       item.querySelector('.home-item-go').onclick = () => openDoc({ name: paper.name, url: paper.url, docId: paper.docId, path: paper.path });
       list.append(item);
-    }
   }
+  list.classList.add('home-card-list');
+  observeHomeThumbnails(list);
 }
 
 const FOLDER_OPEN_KEY = 'prt.folderOpen.v1';
@@ -4235,7 +4320,7 @@ async function goWelcome({ skipSave = false } = {}) {
   state.folderClosed = true;   // 这个文件夹已完全关闭：下次打开默认新会话
   cleanStaleLastDoc();
   setView('home');
-  $('#docName').textContent = tr("书架");
+  $('#docName').textContent = 'Library';
   $('#docName').title = '';
   document.title = 'prt';
   refreshReturnButton();
@@ -4514,7 +4599,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
     state.doc = null;
     state.viewerDocId = null;
     document.title = 'prt';
-    $('#docName').textContent = tr("书架");
+    $('#docName').textContent = 'Library';
     $('#docName').title = '';
     // 打开失败退回首页（不再是一个既不像欢迎页、又不像错误页的模糊容器）
     setView('home');
@@ -6330,11 +6415,6 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
   // P1.5：回答上方的「本次依据」只读小字（不可点、不参与交互）。
   entry.root.querySelectorAll('.entry-basis').forEach((node) => node.remove());
   const basisText = String(basis || rec?.basis || '').trim();
-  if (basisText) {
-    const textNode = entry.root.querySelector('.text');
-    const basisEl = el('div', { class: 'entry-basis', text: basisText.slice(0, 240) });
-    if (textNode) entry.root.insertBefore(basisEl, textNode); else entry.root.append(basisEl);
-  }
   entry.acts.replaceChildren();
   entry.acts.classList.remove('hidden');
   const bare = entry.root.dataset.operation === 'translation';
@@ -6358,6 +6438,10 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
       title: retryLabel || tr("重试"), 'aria-label': retryLabel || tr("重试"), onclick: onRetry },
     bare && status === 'complete' ? iconEl('refresh') : null) : null,
   );
+  if (basisText && !/^(?:本次依据：(?:现有材料与对话|仅问题本身)|Sources:\s*(?:available material and conversation|Question only))$/i.test(basisText)) {
+    entry.acts.append(el('details', { class: 'entry-basis-details' },
+      el('summary', { text: tr('回答依据') }), el('span', { class: 'entry-basis', text: basisText.slice(0, 240) })));
+  }
   const extra = [];
   if (sources?.length) extra.push(renderSources(sources));
   // 精简层级：正文写完本身就是「完成」信号，不再单独占一行播报「回答完成」。
@@ -7869,6 +7953,7 @@ async function loadSessionList() {
     if (!sessionOwnerCurrent(owner)) return [];
     sessionStore.list = rows;
   } catch { if (sessionOwnerCurrent(owner)) sessionStore.list = []; }
+  if (agentWorkspaceView === 'full') updateAgentRecentSessions();
   return sessionStore.list;
 }
 
@@ -8267,6 +8352,7 @@ function renderSessionBar() {
   const chatActive = hasChatScope() && rightPanelInCol(1) === 'chat';
   bar.classList.toggle('hidden', !chatActive);
   if (chatActive) sessionsRefreshHeader();
+  updateAgentRecentSessions();
 }
 
 /** 回答下面的来源列表：编号 + 标题（只提供外链） */

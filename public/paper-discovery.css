@@ -1,4 +1,12 @@
 /* Paper results are direct destinations within the existing conversation. */
+.entry-basis-details { display: inline-flex; flex-direction: column; max-width: min(100%, 440px); min-width: 0; margin-left: auto; color: var(--fg-faint); font-size: var(--ui-fs-2xs); line-height: 1.55; }
+.entry-basis-details > summary { align-self: flex-start; padding: 3px 5px; border-radius: 5px; cursor: pointer; list-style: none; }
+.entry-basis-details > summary::-webkit-details-marker { display: none; }
+.entry-basis-details > summary::before { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 6px 1px 1px; border-right: 1px solid currentColor; border-bottom: 1px solid currentColor; transform: rotate(-45deg); transition: transform .15s; }
+.entry-basis-details[open] > summary::before { transform: rotate(45deg); }
+.entry-basis-details[open] > span { max-width: min(100%, 440px); padding: 2px 7px 4px 12px; overflow-wrap: anywhere; }
+.entry-basis-details > summary:hover, .entry-basis-details > summary:focus-visible { color: var(--fg-dim); background: var(--bg-sunken); }
+.entry-basis-details > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 .paper-discovery { min-width: 0; margin-top: 12px; color: var(--fg); font-size: var(--ui-fs-xs); line-height: 1.6; container-type: inline-size; }
 .paper-discovery[hidden] { display: none; }
 .paper-discovery-section + .paper-discovery-section { margin-top: 10px; }

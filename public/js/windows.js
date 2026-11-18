@@ -214,7 +214,7 @@ export function startWindows(callbacks) {
   const button = document.createElement('button');
   button.id = 'windowsBtn'; button.type = 'button'; button.className = 'tbtn';
   button.textContent = tr("窗口"); button.title = tr("多文档窗口"); button.setAttribute('aria-haspopup', 'menu');
-  document.getElementById('homeBtn')?.before(button);
+  document.getElementById('settingsBtn')?.before(button);
   menu = document.createElement('div'); menu.id = 'windowsMenu'; menu.className = 'ctx-menu'; menu.hidden = true;
   menu.setAttribute('role', 'menu'); document.body.append(menu);
   button.onclick = () => {

@@ -78,7 +78,7 @@ try {
       if (geometry.scrollHeight > geometry.clientHeight + 1) {
         const lastCard = await page.evaluate(() => {
           const panel = document.getElementById('rightSide'); panel.scrollTop = panel.scrollHeight;
-          const card = document.getElementById('agentHistory').getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+          const card = document.getElementById('agentResume').getBoundingClientRect(), bounds = panel.getBoundingClientRect();
           return { top: card.top, bottom: card.bottom, panelTop: bounds.top, panelBottom: bounds.bottom };
         });
         assert.ok(lastCard.top >= lastCard.panelTop && lastCard.bottom <= lastCard.panelBottom + 1,

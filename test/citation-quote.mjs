@@ -118,14 +118,29 @@ try {
     quote: window.__ctx.quoteState,
   }));
   const ask = async (question) => {
+    const before = await page.$$eval('#aiArea .msg.assistant', nodes => Math.max(0,
+      ...nodes.map(node => Number(node.dataset.seq) || 0)));
     await page.evaluate(() => {
       const input = document.querySelector('#chatInput');
       input.value = '引用测试';
       input.dispatchEvent(new Event('input', { bubbles: true }));
     });
     await page.click('#sendBtn');
-    await page.waitForFunction(() => !window.__state.busy, { timeout: 30000 });
-    await wait(200);
+    await page.waitForFunction(previous => [...document.querySelectorAll('#aiArea .msg.assistant')]
+      .some(node => (Number(node.dataset.seq) || 0) > previous), { timeout: 30000 }, before);
+    await page.waitForFunction(previous => {
+      const row = [...document.querySelectorAll('#aiArea .msg.assistant')]
+        .find(node => (Number(node.dataset.seq) || 0) > previous);
+      return row?.__sessionRecord?.status && row.__sessionRecord.status !== 'pending';
+    }, { timeout: 30000 }, before);
+    const result = await page.evaluate(previous => {
+      const row = [...document.querySelectorAll('#aiArea .msg.assistant')]
+        .find(node => (Number(node.dataset.seq) || 0) > previous);
+      return { status: row?.__sessionRecord?.status || '', text: row?.querySelector('.text')?.textContent || '' };
+    }, before);
+    if (result.status !== 'complete') {
+      throw new Error(`answer did not complete (${result.status || 'missing status'}): ${result.text.slice(0, 120)}`);
+    }
   };
   const clickQuoteRef = async (pageNum = null) => {
     await page.evaluate((p) => {
@@ -137,7 +152,11 @@ try {
   };
 
   await openDoc('citation-paper.pdf');
-  await page.evaluate(() => { window.__ctx.setPanelVisible('chat', true); window.__ctx.setScopeRange('paper'); });
+  await page.evaluate(() => {
+    window.__ctx.setPanelVisible('chat', true);
+    window.__ctx.setScopeRange('paper');
+    window.__ctx.setAgentRead(false);
+  });
   await wait(400);
 
   /* ── 准备：取第 5 页真实原文片段 ── */
@@ -173,24 +192,30 @@ try {
   const basisInfo = await page.evaluate(() => {
     const row = [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1);
     const basis = row?.querySelector('.entry-basis');
-    return { text: basis?.textContent || '', tag: basis?.tagName || '', after: basis?.nextElementSibling?.classList?.contains('text') };
+    const disclosure = row?.querySelector('.entry-basis-details');
+    return { text: basis?.textContent || '', title: disclosure?.querySelector('summary')?.textContent || '',
+      closed: disclosure ? !disclosure.open : false, inActions: !!disclosure?.closest('.acts') };
   });
-  check('回答上方有只读「本次依据」小字', /^本次依据：/.test(basisInfo.text), basisInfo.text);
-  check('本次依据不可点（是 div 且紧贴正文上方）', basisInfo.tag === 'DIV' && basisInfo.after, JSON.stringify(basisInfo));
+  check('实际论文依据收到压缩显示', basisInfo.text.length > 0 && /(?:本次依据|Sources)/.test(basisInfo.text), basisInfo.text);
+  check('依据默认收在消息操作区，展开后可读', basisInfo.closed && basisInfo.inActions
+    && /(?:回答依据|Sources used)/.test(basisInfo.title), JSON.stringify(basisInfo));
 
   answerOverride = '编出来的页：〔p.99〕；白名单外的页：〔p.12‖这一页这次没提供〕。';
   await page.evaluate(() => window.__ctx.setScopeRange('current'));
   await wait(300);
   await ask();
-  const droppedInfo = await page.evaluate(() => ({
-    html: [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1)?.querySelector('.text')?.textContent || '',
-    refs: [...document.querySelectorAll('#aiArea .page-ref')].map((b) => b.dataset.page),
-    stats: window.__ctx.citationStats,
-  }));
+  const droppedInfo = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1);
+    return {
+      html: row?.querySelector('.text')?.textContent || '',
+      refs: [...(row?.querySelectorAll('.page-ref') || [])].map((b) => b.dataset.page),
+      plan: [...(row?.__chatJob?.citationPlan?.values?.() || [])],
+    };
+  });
   check('超出总页数的引用不渲染按钮（保持原文文字）',
-    !droppedInfo.refs.includes('99') && droppedInfo.html.includes('p.99'), JSON.stringify({ refs: droppedInfo.refs, stats: droppedInfo.stats }));
+    !droppedInfo.refs.includes('99') && droppedInfo.html.includes('p.99'), JSON.stringify({ refs: droppedInfo.refs, plan: droppedInfo.plan }));
   check('白名单外的页码不渲染按钮', !droppedInfo.refs.includes('12'), JSON.stringify(droppedInfo.refs));
-  check('citationStats 记录了被拦截的引用', droppedInfo.stats?.dropped >= 2, JSON.stringify(droppedInfo.stats));
+  check('本条回答的引用计划记录了拦截原因', droppedInfo.plan.filter(item => item.level === 'drop').length >= 2, JSON.stringify(droppedInfo.plan));
 
   await page.evaluate(() => window.__ctx.setScopeRange('paper'));
   await wait(300);
@@ -254,24 +279,26 @@ try {
   await page.evaluate(() => {
     window.__ctx.setPanelVisible('chat', true);
     window.__ctx.setScopeRange('paper');
+    window.__ctx.setAgentRead(false);
   });
   await wait(400);
   answerOverride = '找不到的引用：〔p.7‖这段原文根本不在这一页 XYZ_NOT_FOUND〕';
   await ask();
   const unverified = await page.evaluate(() => {
-    const btn = document.querySelector('#aiArea .page-ref[data-page="7"]');
+    const row = [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1);
+    const btn = row?.querySelector('.page-ref[data-page="7"]');
     return {
-      count: document.querySelectorAll('#aiArea .page-ref[data-page="7"]').length,
+      count: row?.querySelectorAll('.page-ref[data-page="7"]').length || 0,
       unverified: !!btn?.classList.contains('page-ref-unverified'),
       hasFragment: !!btn?.dataset.fragment,
-      hasQuoteRef: !!document.querySelector('#aiArea .page-ref.quote-ref[data-page="7"]'),
-      stats: window.__ctx.citationStats,
+      hasQuoteRef: !!row?.querySelector('.page-ref.quote-ref[data-page="7"]'),
+      plan: [...(row?.__chatJob?.citationPlan?.values?.() || [])],
     };
   });
   check('片段核不上 → 降级为纯页码按钮（不是高亮引用）',
     unverified.count === 1 && unverified.unverified && !unverified.hasFragment && !unverified.hasQuoteRef,
     JSON.stringify(unverified));
-  check('降级原因记进 citationStats.degraded', unverified.stats?.degraded >= 1, JSON.stringify(unverified.stats));
+  check('引用计划记录了片段核对失败并降级', unverified.plan.some(item => item.level === 'page-only' && item.reason === 'fragment-not-found'), JSON.stringify(unverified.plan));
   await page.evaluate(() => {
     const btn = document.querySelector('#aiArea .page-ref[data-page="7"]');
     btn?.click();

@@ -184,7 +184,7 @@ try {
   assert.match(visualParts.at(-1).text, /【读者此刻的问题】所以到底是第一种还是第二种/);
   assert.ok(logs[0].messages.some((m) => m.role === 'assistant' && String(m.content).includes('重新组合通道')));
   assert.match(await lastText(), /截图内容的模型回答/);
-  assert.match(await page.evaluate(() => [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1)?.querySelector('.entry-basis')?.textContent || ''), /本轮 2 张截图/);
+  assert.match(await page.evaluate(() => [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1)?.querySelector('.entry-basis')?.textContent || ''), /(?:本轮 2 张截图|2 screenshots)/);
   console.log('PASS: two fresh screenshots and the question take precedence while prior conversation stays available');
 
   mode = 'tools';

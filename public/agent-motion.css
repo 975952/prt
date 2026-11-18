@@ -1,0 +1,36 @@
+/* One shared surface travels; the document and controls arrive around it. */
+html[data-agent-motion]::view-transition { pointer-events: none; }
+html[data-agent-motion]::view-transition-group(*) { animation-duration: 620ms; animation-timing-function: cubic-bezier(.22, .76, .18, 1); }
+html[data-agent-motion]::view-transition-old(root),
+html[data-agent-motion]::view-transition-new(root) { animation-duration: 320ms; }
+html[data-agent-motion]::view-transition-group(alina-surface) { z-index: 4; }
+html[data-agent-motion]::view-transition-group(alina-composer) { z-index: 7; }
+html[data-agent-motion]::view-transition-group(alina-messages) { z-index: 5; }
+html[data-agent-motion]::view-transition-group(alina-identity) { z-index: 6; }
+html[data-agent-motion]::view-transition-old(alina-surface),
+html[data-agent-motion]::view-transition-old(alina-messages) { animation: alina-fade-out 180ms ease-out both; }
+html[data-agent-motion]::view-transition-new(alina-surface),
+html[data-agent-motion]::view-transition-new(alina-messages) { animation: alina-fade-in 420ms 90ms ease-out both; }
+html[data-agent-motion]::view-transition-old(alina-composer) { animation: alina-fade-out 240ms ease-out both; }
+html[data-agent-motion]::view-transition-new(alina-composer) { animation: alina-fade-in 360ms 80ms ease-out both; }
+html[data-agent-motion="dock"]::view-transition-old(alina-navigation) { animation: alina-nav-out 260ms ease-in both; }
+html[data-agent-motion="dock"]::view-transition-new(alina-paper) { animation: alina-paper-in 540ms 100ms cubic-bezier(.22,.76,.18,1) both; }
+html[data-agent-motion="dock"]::view-transition-new(alina-outline) { animation: alina-outline-in 480ms 120ms cubic-bezier(.22,.76,.18,1) both; }
+html[data-agent-motion="dock"]::view-transition-new(alina-tabs) { animation: alina-tabs-in 420ms 100ms ease-out both; }
+html[data-agent-motion="dock"]::view-transition-new(alina-tools) { animation: alina-tools-in 440ms 160ms ease-out both; }
+html[data-agent-motion="expand"]::view-transition-old(alina-paper),
+html[data-agent-motion="expand"]::view-transition-old(alina-outline),
+html[data-agent-motion="expand"]::view-transition-old(alina-tools),
+html[data-agent-motion="expand"]::view-transition-old(alina-tabs) { animation: alina-fade-out 200ms ease-out both; }
+html[data-agent-motion="expand"]::view-transition-new(alina-navigation) { animation: alina-outline-in 440ms 140ms ease-out both; }
+[data-agent-opening="true"] { border-color: var(--accent) !important; box-shadow: 0 0 0 3px var(--accent-soft); }
+@keyframes alina-fade-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes alina-fade-out { from { opacity: 1; } to { opacity: 0; } }
+@keyframes alina-nav-out { to { opacity: 0; transform: translateX(-22px); } }
+@keyframes alina-paper-in { from { opacity: 0; transform: translateX(-20px) scale(.975); } to { opacity: 1; transform: none; } }
+@keyframes alina-outline-in { from { opacity: 0; transform: translateX(-22px); } to { opacity: 1; transform: none; } }
+@keyframes alina-tabs-in { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+@keyframes alina-tools-in { from { opacity: 0; transform: translateY(12px); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) {
+  html[data-agent-motion]::view-transition-group(*), html[data-agent-motion]::view-transition-old(*), html[data-agent-motion]::view-transition-new(*) { animation-duration: 0s !important; animation-delay: 0s !important; }
+}

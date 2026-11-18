@@ -92,6 +92,70 @@ const KEEP_BACK = 8;
 /** 双页显示：两页之间的水平间距（必须和 CSS `.pages.two-up` 的 column-gap 一致；算适应宽度时要用） */
 const TWO_UP_GAP = 18;
 
+/** Paper depth belongs to the workspace, outside the content's scroll clip.
+ * Only empty shadow rectangles are mirrored; PDF pixels, selection and hit
+ * targets remain in the original scroller. Updates happen at most once per
+ * animation frame and only measure pages near the visible range. */
+function createPaperShadows(viewer) {
+  const container = viewer.container, host = container.parentElement;
+  if (!host?.classList.contains('viewer-wrap')) return { schedule() {}, clear() {}, destroy() {} };
+  const layer = document.createElement('div');
+  layer.className = 'paper-shadow-layer'; layer.setAttribute('aria-hidden', 'true');
+  host.insertBefore(layer, container);
+  const shadows = new Map();
+  let frame = 0, active = true;
+  const clear = () => {
+    if (frame) cancelAnimationFrame(frame);
+    frame = 0; shadows.clear(); layer.replaceChildren();
+  };
+  const update = () => {
+    frame = 0;
+    if (!viewer.pdf || !container.clientWidth || !container.clientHeight || viewer._destroyed) { clear(); return; }
+    const rect = container.getBoundingClientRect();
+    const scaleX = rect.width / container.offsetWidth || 1;
+    const scaleY = rect.height / container.offsetHeight || 1;
+    const bounds = { left: container.offsetLeft + container.clientLeft, top: container.offsetTop + container.clientTop,
+      width: container.clientWidth, height: container.clientHeight };
+    const [first, last] = viewer._visibleRange();
+    const visible = new Set();
+    const candidates = new Set();
+    for (let n = Math.max(1, first - 2); n <= Math.min(viewer.numPages, last + 2); n++) candidates.add(n);
+    for (const page of viewer._zoomPreview?.touched || []) candidates.add(Number(page.dataset.page));
+    const boxes = [];
+    for (const n of candidates) {
+      const page = viewer.pageEls[n];
+      if (!page || page.dataset.imageOnly === 'true') continue;
+      const paper = page.getBoundingClientRect();
+      const x = (paper.left - rect.left) / scaleX - container.clientLeft;
+      const y = (paper.top - rect.top) / scaleY - container.clientTop;
+      const width = paper.width / scaleX, height = paper.height / scaleY;
+      if (!width || !height || y + height < -80 || y > container.clientHeight + 80) continue;
+      boxes.push({ n, x, y, width, height });
+    }
+    // Batch reads before writes, including during pinch previews and panel resize.
+    layer.style.left = `${bounds.left}px`; layer.style.top = `${bounds.top}px`;
+    layer.style.width = `${bounds.width}px`; layer.style.height = `${bounds.height}px`;
+    for (const { n, x, y, width, height } of boxes) {
+      visible.add(n);
+      let shadow = shadows.get(n);
+      if (!shadow) {
+        shadow = document.createElement('div'); shadow.className = 'paper-shadow';
+        shadow.dataset.page = String(n); shadows.set(n, shadow); layer.append(shadow);
+      }
+      shadow.style.transform = `translate(${x}px, ${y}px)`;
+      shadow.style.width = `${width}px`; shadow.style.height = `${height}px`;
+    }
+    for (const [n, shadow] of shadows) if (!visible.has(n)) { shadow.remove(); shadows.delete(n); }
+  };
+  const schedule = () => { if (active && !frame) frame = requestAnimationFrame(update); };
+  container.addEventListener('scroll', schedule, { passive: true });
+  const observer = new ResizeObserver(schedule);
+  observer.observe(container);
+  return { schedule, clear, destroy() {
+    active = false; clear(); observer.disconnect(); container.removeEventListener('scroll', schedule); layer.remove();
+  } };
+}
+
 function layerScale(el) {
   const m = /^scale\(([\d.]+)\)$/.exec(el?.style?.transform || '');
   const k = m ? Number(m[1]) : NaN;
@@ -327,6 +391,7 @@ export class PdfViewer {
     this._prefetchRunning = false;
     // 双页显示（两页并排）：排版交给 `.pages.two-up` 的 flex 换行，布局仍按 offsets/heights 走
     this._twoUp = !!opts.twoUp;
+    this._paperShadows = createPaperShadows(this);
 
     this._onScroll = throttle(() => this._handleScroll(), 60);
     this.container.addEventListener('scroll', this._onScroll, { passive: true });
@@ -505,6 +570,7 @@ export class PdfViewer {
 
   destroy() {
     this._destroyed = true;
+    this._paperShadows?.destroy();
     this.container.removeEventListener('scroll', this._onScroll);
     this.container.removeEventListener('mousemove', this._onHoverMove);
     const tz = this._touchZoomHandlers;
@@ -532,6 +598,7 @@ export class PdfViewer {
   }
 
   close() {
+    this._paperShadows?.clear();
     this._cancelPrefetch();
     this._cancelZoomPreview();
     this._gen++;            // 作废上一份文档的所有在途任务
@@ -565,6 +632,7 @@ export class PdfViewer {
    * @returns {null|{pdf:object,url:string,name:string,numPages:number,baseSizes:Array,page:number,scale:number,fitMode:boolean,scrollTop:number}}
    */
   detach() {
+    this._paperShadows?.clear();
     if (!this.pdf) return null;
     this._cancelPrefetch();
     const handle = {
@@ -915,7 +983,7 @@ export class PdfViewer {
     // Initial loads still need page dimensions while the bookshelf is shown.
     // Hidden DOM measurements are zero; retain the last valid geometry until
     // the reader is visible and can measure the pages again.
-    if (!visible) return;
+    if (!visible) { this._paperShadows?.schedule(); return; }
     // 位置直接从 DOM 读，自动把 gap / padding 算进去，不会和 CSS 打架
     this.offsets = new Array(this.numPages + 1);
     this.heights = new Array(this.numPages + 1);
@@ -926,6 +994,7 @@ export class PdfViewer {
       this.heights[i] = page.offsetHeight;
     }
     if (anchor) this._restoreAnchor(anchor);
+    this._paperShadows?.schedule();
   }
 
   _captureAnchor() {
@@ -1140,6 +1209,7 @@ export class PdfViewer {
       el.style.transform = `translate(${px.toFixed(2)}px, ${py.toFixed(2)}px) scale(${k.toFixed(5)})`;
       preview.touched.add(el);
     }
+    this._paperShadows?.schedule();
   }
 
   /** 把预览期间写过 transform 的页面全部还原（提交/取消时各调一次） */
@@ -1150,6 +1220,7 @@ export class PdfViewer {
       el.style.transformOrigin = '';
     }
     preview.touched.clear();
+    this._paperShadows?.schedule();
   }
 
   previewScale(scale, { clientX = null, clientY = null } = {}) {
@@ -1732,6 +1803,7 @@ export class PdfViewer {
         }
         if (stale()) return;
         pageEl.dataset.imageOnly = String(imageOnly);
+        this._paperShadows?.schedule();
       }
 
       const viewport = page.getViewport({ scale: this.scale });

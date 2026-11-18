@@ -142,12 +142,18 @@ try {
   await wait(400);
   const chat = await page.evaluate(() => {
     const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; };
+    const answerNode = document.querySelector('[data-block="chat"] .msg.assistant .text');
     return { user: rect('[data-block="chat"] .msg.user'), answer: rect('[data-block="chat"] .msg.assistant'),
       math: document.querySelectorAll('[data-block="chat"] .katex').length,
+      answerFontSize: getComputedStyle(answerNode).fontSize, answerFontFamily: getComputedStyle(answerNode).fontFamily,
+      newChatVisible: !!document.querySelector('#agentNavNew')?.getClientRects().length,
+      duplicateSessionActionsHidden: ['sessNew', 'sessHist'].every(id => !document.getElementById(id).getClientRects().length),
       overflow: document.documentElement.scrollWidth > innerWidth + 1, landing: document.body.classList.contains('agent-landing') };
   });
   assert.ok(chat.user.left > chat.answer.left + 30 && chat.user.width < chat.answer.width);
-  assert.ok(chat.math && !chat.overflow && !chat.landing);
+  assert.ok(chat.math && !chat.overflow && !chat.landing && chat.answerFontSize === '16px'
+    && chat.answerFontFamily.includes('Segoe UI') && chat.newChatVisible && chat.duplicateSessionActionsHidden,
+  `full-agent conversation should use the readable independent type scale and one action entry: ${JSON.stringify(chat)}`);
   await page.screenshot({ path: path.join(scratch, 'chat-layout.png') });
   pass('chat uses a right-aligned question and open answer layout with working math');
   await page.evaluate(() => window.__ctx.deleteSession(window.__ctx.activeSession, { confirm: false }));

@@ -7,13 +7,16 @@ import path from 'node:path';
 import http from 'node:http';
 import { spawn } from 'node:child_process';
 import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
-import { stageExe, spawnReader, stopChild, waitForBase, READER_PORTS } from './_exe.mjs';
+import { stageExe, stopChild, waitForBase, READER_PORTS } from './_exe.mjs';
 
 const desktop = process.argv.includes('--desktop');
 fs.mkdirSync(SANDBOX, { recursive: true });
 const scratch = fs.mkdtempSync(path.join(SANDBOX, `session-move-${desktop ? 'desktop' : 'node'}-`));
 const dataDir = assertIsolatedDataDir(path.join(scratch, 'data')), papersDir = path.join(scratch, 'papers');
 fs.mkdirSync(dataDir); fs.mkdirSync(papersDir);
+const serverLog = path.join(scratch, 'server.log');
+const serverLogFd = fs.openSync(serverLog, 'w');
+console.log(`Session move service log: ${serverLog}`);
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1sAAAAASUVORK5CYII=', 'base64');
 let child, base, checks = 0;
 const pass = name => { checks++; console.log(`PASS ${name}`); };
@@ -42,12 +45,16 @@ try {
   const env = { ...process.env, PRT_DATA_DIR: dataDir, PRT_PAPERS_DIR: papersDir,
     PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1', NO_OPEN: '1', PRT_QUIET_TOKEN: '1' };
   if (desktop) {
-    child = spawnReader(stageExe('session-move').exe, { env });
+    child = spawn(stageExe('session-move').exe, ['--background'], {
+      env: { ...env, PRT_BACKGROUND: '1' }, windowsHide: true, stdio: ['ignore', serverLogFd, serverLogFd],
+    });
     base = await waitForBase({ ports: READER_PORTS, papersDir });
   } else {
     const probe = http.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
     const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
-    child = spawn(process.execPath, [path.join(ROOT, 'server.js')], { cwd: ROOT, env: { ...env, PORT: String(port) }, windowsHide: true, stdio: 'ignore' });
+    child = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+      cwd: ROOT, env: { ...env, PORT: String(port) }, windowsHide: true, stdio: ['ignore', serverLogFd, serverLogFd],
+    });
     base = await waitForBase({ ports: [port], papersDir });
   }
   assert(base, 'isolated service starts');
@@ -200,4 +207,4 @@ try {
   pass('simultaneous saves and competing moves preserve all acknowledged writes and never overwrite an occupied target');
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ backend: desktop ? 'Rust' : 'Node', passed: checks }, null, 2), 'utf8');
   console.log(`Session move: ${checks}/${checks} passed; ${scratch}`);
-} finally { await stopChild(child); }
+} finally { await stopChild(child); fs.closeSync(serverLogFd); }
