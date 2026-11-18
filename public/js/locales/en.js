@@ -1,6 +1,7 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "本次依据：书架检索与来源结果": "Sources: library search and retrieved results",
   "这段会话已被删除，已停止旧任务并打开新会话。": "This conversation was deleted. Its task has stopped and a new conversation is open.",
   "找到多份匹配文件，请使用完整文件名或路径：{0}": "Several files match. Use a full filename or path: {0}",
   "书架中未找到「{0}」，请确认文件名或导入该文件。": "The library has no match for “{0}”. Check the filename or import the file.",
@@ -486,7 +487,46 @@ export const en = {
   "目标会话已存在，请重新转换": "A conversation already exists at the destination. Please try moving again.",
   "原会话的截图附件不完整，暂时无法转换": "The original conversation has missing screenshot attachments and cannot be moved yet.",
   "转换会话失败，原会话已保留，请重试": "Could not move the conversation. The original is saved; please try again.",
-  "会话仍有未完成的回答，请等待完成；若上次已中断，请先恢复并重试，再完成或停止后移动。": "This conversation has an unfinished answer. Wait for it to finish. If the previous attempt was interrupted, reopen and retry it, then finish or stop it before moving."
+  "会话仍有未完成的回答，请等待完成；若上次已中断，请先恢复并重试，再完成或停止后移动。": "This conversation has an unfinished answer. Wait for it to finish. If the previous attempt was interrupted, reopen and retry it, then finish or stop it before moving.",
+  "描述想找的论文，或直接聊聊…": "Describe a paper you want to find, or just start a conversation…",
+  "书架暂时无法读取，请重试。": "The library is temporarily unavailable. Please try again.",
+  "暂未提取出可靠的检索关键词，可以补充标题或关键术语后再试。": "Could not identify reliable search terms. Add a title or key terms and try again.",
+  "请等待当前操作完成。": "Please wait for the current action to finish.",
+  "这篇论文已移动或移出书架，请重新查找。": "This paper was moved or removed from the library. Please search again.",
+  "正在完成这次查找，请稍候再试。": "This search is still finishing. Please try again shortly.",
+  "此来源没有可用的 PDF 链接。": "This source has no available PDF link.",
+  "导入失败，请打开来源链接查看。": "Could not import the paper. Open the source link to check it.",
+  "已导入书架，可以打开阅读。": "Imported into your library. You can open it to read.",
+  "论文已导入书架。": "Paper imported into your library.",
+  "正在寻找相关论文…": "Finding related papers…",
+  "已完成本轮论文查找": "Paper search complete",
+  "保存耗时过长，请稍后重试关闭窗口。": "Saving is taking too long. Please try closing the window again shortly.",
+  "窗口连接暂时不可用，请重试关闭窗口。": "The window connection is temporarily unavailable. Please try closing it again.",
+  "论文查找结果": "Paper search results",
+  "另外 {0} 篇": "{0} more papers",
+  "打开第 {0} 页": "Open page {0}",
+  "查看来源": "View source",
+  "打开 PDF 链接": "Open PDF link",
+  "导入书架": "Import to library",
+  "本地书架": "Local library",
+  "已检查书架中的 {0} 篇论文": "Checked all {0} papers in the library",
+  "已检查 {0} / {1} 篇论文": "Checked {0} of {1} papers",
+  "{0} 篇暂时无法读取": "{0} papers could not be read",
+  "{0} 篇尚未检查": "{0} papers not yet checked",
+  "仍有内容未能核实，书架中可能还有其他相关论文。": "Some content could not be verified. There may be other related papers in your library.",
+  "正在查找书架中的论文…": "Searching your library…",
+  "本次书架检索没有找到匹配论文。": "No matching papers were found in this library search.",
+  "目前没有找到匹配论文，仍有内容未能核实。": "No matching papers found so far. Some content could not be verified.",
+  "网络论文": "Papers online",
+  "正在查找网络论文…": "Searching for papers online…",
+  "网络检索暂时不可用，可以稍后重试。": "Online search is temporarily unavailable. Please try again shortly.",
+  "部分来源暂时不可用，已找到的论文仍可查看。": "Some sources are temporarily unavailable. You can still view the papers already found.",
+  "暂未找到可核实的网络论文，可以补充标题、作者或关键词。": "No verifiable papers found online yet. Try adding a title, author, or keywords.",
+  "重试联网查找": "Retry online search",
+  "正在查找…": "Searching…",
+  "本轮未开启联网；点击后仅为这次查找联网。": "Online access is off for this turn. Clicking enables it for this search only.",
+  "也可以继续联网查找；这不代表本地书架中没有。": "You can also search online. This does not mean the paper is absent from your library.",
+  "继续联网查找": "Continue searching online"
 };
 
 // English singular forms are chosen only for known count labels.
@@ -496,4 +536,6 @@ export const enSingular = {
   '{0} 篇': '{0} paper', '已选 {0} 个文件': '{0} file selected', '移动 {0} 个文件到': 'Move {0} file to',
   '{0} 张截图': '{0} screenshot', '选区 {0} 段': '{0} passage', '图片 {0} 张': '{0} image', '页图 {0} 张': '{0} page image',
   '共 {0} 页': '{0} page', '{0} 段合并翻译': '{0} passage translated',
+  '另外 {0} 篇': '{0} more paper', '已检查书架中的 {0} 篇论文': 'Checked the {0} paper in the library',
+  '{0} 篇暂时无法读取': '{0} paper could not be read', '{0} 篇尚未检查': '{0} paper not yet checked',
 };

@@ -25,10 +25,10 @@ const check = (name, cond, detail = '') => {
 
 /* ── 1. 工具声明 ── */
 console.log('▶ 工具声明');
-check('10 个只读工具', AGENT_TOOL_SPECS.length === 10, String(AGENT_TOOL_SPECS.length));
+check('12 个只读工具', AGENT_TOOL_SPECS.length === 12, String(AGENT_TOOL_SPECS.length));
 check('全部是 function 形状', AGENT_TOOL_SPECS.every((t) => t.type === 'function' && t.function.name && t.function.parameters));
 check('工具名符合契约', AGENT_TOOL_SPECS.map((t) => t.function.name).join(',')
-  === 'get_reading_state,read_page,search_paper,read_scan_page,read_page_image,read_memory,list_papers,search_papers,read_other_paper,read_other_paper_image');
+  === 'discover_papers,search_web,get_reading_state,read_page,search_paper,read_scan_page,read_page_image,read_memory,list_papers,search_papers,read_other_paper,read_other_paper_image');
 check('system 说明里的轮次上限与常量一致',
   new RegExp(`最多 ${AGENT_MAX_ROUNDS} 轮、每轮最多 ${AGENT_MAX_CALLS_PER_ROUND} 个`).test(AGENT_SYSTEM_NOTE));
 
@@ -47,6 +47,17 @@ check('search_papers 默认 scope=folder', v('search_papers', { query: '注意�
 check('search_papers scope=all 通过', v('search_papers', { query: '注意力', scope: 'all' }).args.scope === 'all');
 check('read_memory 空 topic 被拒', !!v('read_memory', { topic: '  ' }).error);
 check('get_reading_state 无参数', !v('get_reading_state', {}).error);
+for (const name of ['discover_papers', 'search_web']) {
+  check(`${name} 拒绝空白/单字查询`, [' ', 'a'].every(query => !!v(name, { query }).error));
+  const bounded = v(name, { query: 'q'.repeat(250), keywords: ['attention'], url: 'https://invented.invalid', scope: 'all' }).args;
+  check(`${name} 查询限长且不能接受任意网址/范围注入`, bounded.query.length === 200 && !('url' in bounded) && !('scope' in bounded));
+}
+const discoverArgs = v('discover_papers', { query: '  attention model  ', keywords: [null, {}, 3, 'x', '', '  注意力  ', '注意力',
+  'a'.repeat(130), 'two', 'three', 'four', 'five', 'six', 'seven'] }).args;
+check('论文发现关键词去重、裁剪、去空并保留最多六项', discoverArgs.query === 'attention model'
+  && JSON.stringify(discoverArgs.keywords) === JSON.stringify(['注意力', 'a'.repeat(100), 'two', 'three', 'four', 'five']));
+check('论文发现忽略非数组关键词', v('discover_papers', { query: '论文发现', keywords: '注意力' }).args.keywords.length === 0);
+check('普通联网搜索不透传论文关键词字段', !('keywords' in v('search_web', { query: '资料查询', keywords: ['keyword'] }).args));
 
 /* ── 3. 响应解析 ── */
 console.log('\n▶ 模型响应解析');
@@ -78,6 +89,8 @@ const runtime = {
   async readPageImage(page) { return { page, note: 'ok' }; },
   async readMemory(topic) { return { items: [{ topic, kind: 'knowledge' }] }; },
   async searchPapers() { return { query: '注意力', scope: 'folder', count: 1, hits: [{ name: 'a.pdf', page: 3 }] }; },
+  async discoverPapers(args) { return { query: args.query, local: { status: 'complete', results: [{ path: 'vision/a.pdf', page: 40 }] } }; },
+  async searchWeb(args) { return { query: args.query, results: [{ title: 'Source', url: 'https://example.test/source' }] }; },
 };
 {
   for (const name of ['get_reading_state', 'read_page', 'search_paper', 'read_scan_page', 'read_page_image', 'read_memory', 'search_papers']) {
@@ -91,11 +104,87 @@ const runtime = {
   check('越界工具调用返回错误而不是抛异常', bad.ok === false && /总页数/.test(bad.error));
   const thrown = await executeToolCall({ name: 'read_page', args: { page: 2 } }, { ...runtime, readPage: async () => { throw new Error('boom'); } });
   check('工具内部异常被收敛成错误文本', thrown.ok === false && /boom/.test(thrown.error));
+  for (const [name, method] of [['discover_papers', 'discoverPapers'], ['search_web', 'searchWeb']]) {
+    const signal = new AbortController().signal;
+    let captured;
+    const result = await executeToolCall({ name, args: { query: '  bounded source  ', extra: true } }, {
+      ...runtime, [method]: async (args, options) => { captured = { args, signal: options.signal }; return { results: [] }; },
+    }, { signal });
+    check(`${name} 向运行时传规范参数和当前任务signal`, result.ok && captured.args.query === 'bounded source'
+      && !('extra' in captured.args) && captured.signal === signal);
+    const rejected = await executeToolCall({ name, args: { query: 'source query' } }, {
+      ...runtime, [method]: async () => { throw new Error('Synthetic provider failure'); },
+    });
+    check(`${name} 异常不会伪装成没有结果`, !rejected.ok && rejected.error.includes('Synthetic provider failure'));
+    const declared = await executeToolCall({ name, args: { query: 'source query' } }, {
+      ...runtime, [method]: async () => ({ error: 'Network not permitted' }),
+    });
+    check(`${name} 明确拒绝会传回错误`, !declared.ok && declared.error === 'Network not permitted');
+  }
 }
 
 /* ── 5. 有界循环 ── */
 console.log('\n▶ 有界 Agent 循环');
 const baseMessages = [{ role: 'system', content: 'sys' }, { role: 'user', content: '问题' }];
+{
+  const found = { query: 'attention model', local: { status: 'complete', results: [{ path: 'vision/a.pdf', docId: 'a-12345678', page: 40, snippet: 'Original evidence' }] },
+    online: { status: 'partial', results: [{ title: 'Academic source', url: 'https://example.test/source', pdfUrl: 'https://example.test/source.pdf' }], error: 'One provider unavailable' } };
+  let turns = 0, received;
+  const run = await runAgentLoop({ messages: baseMessages, runtime: { ...runtime, discoverPapers: async () => found },
+    callModel: async ({ messages }) => {
+      if (++turns === 1) return { choices: [{ message: { tool_calls: [{ id: 'find-paper', function: { name: 'discover_papers', arguments: '{"query":"attention model","keywords":["self attention"]}' } }] } }] };
+      received = messages.find(message => message.role === 'tool' && message.tool_call_id === 'find-paper');
+      return { choices: [{ message: { content: 'Based on the actual discovery results.' } }] };
+    } });
+  check('发现结果及部分渠道失败信息完整传给下一轮模型', run.ok && JSON.stringify(JSON.parse(received.content)) === JSON.stringify(found));
+  check('其它论文的发现页码不会变成当前PDF的来源页', run.pages.length === 0 && run.imagePages.length === 0);
+}
+{
+  let turns = 0, received;
+  const run = await runAgentLoop({ messages: baseMessages, runtime: { ...runtime, searchWeb: async () => { throw new Error('Synthetic network unavailable'); } },
+    callModel: async ({ messages }) => {
+      if (++turns === 1) return { choices: [{ message: { tool_calls: [{ id: 'web-error', function: { name: 'search_web', arguments: '{"query":"source query"}' } }] } }] };
+      received = JSON.parse(messages.find(message => message.role === 'tool' && message.tool_call_id === 'web-error').content);
+      return { choices: [{ message: { content: 'The search was unavailable.' } }] };
+    } });
+  check('联网工具失败以错误回传模型而非成功空列表', run.ok && received.error.includes('Synthetic network unavailable') && !('results' in received));
+}
+{
+  const ctl = new AbortController(); let entered, finishLate, signal, modelCalls = 0;
+  const started = new Promise(resolve => { entered = resolve; });
+  const events = [];
+  const task = runAgentLoop({ messages: baseMessages, signal: ctl.signal,
+    runtime: { ...runtime, discoverPapers: (_args, options) => { signal = options.signal; entered(); return new Promise(resolve => { finishLate = resolve; }); } },
+    callModel: async () => { modelCalls++; return { choices: [{ message: { tool_calls: [{ id: 'cancel-discovery', function: { name: 'discover_papers', arguments: '{"query":"paper query"}' } }] } }] }; },
+    onStep: event => events.push(event.type) });
+  await started; ctl.abort(); const run = await task;
+  finishLate({ local: { status: 'complete', results: [{ path: 'late.pdf', page: 9 }] } }); await new Promise(resolve => setImmediate(resolve));
+  check('停止论文发现取消底层signal且忽略晚结果和后续模型请求', run.reason === 'aborted' && signal.aborted && modelCalls === 1
+    && !events.includes('tool_done') && !run.pages.length);
+}
+{
+  let turns = 0;
+  const run = await runAgentLoop({ messages: baseMessages, callTimeoutMs: 10, totalTimeoutMs: 2000,
+    runtime: { ...runtime, discoverPapers: async () => {
+      await new Promise(resolve => setTimeout(resolve, 35));
+      return { local: { status: 'not_found', coverage: { complete: true } }, online: { status: 'complete', results: [] } };
+    } },
+    callModel: async () => ++turns === 1
+      ? { choices: [{ message: { tool_calls: [{ id: 'long-discovery', function: { name: 'discover_papers', arguments: '{"query":"paper query"}' } }] } }] }
+      : { choices: [{ message: { content: 'Discovery completed within its own budget.' } }] } });
+  check('论文发现可超过普通单次调用时限并在独立预算内完成', run.ok && run.calls[0]?.ok === true && turns === 2);
+}
+{
+  let toolSignal, modelCalls = 0, finishLate;
+  const started = Date.now();
+  const run = await runAgentLoop({ messages: baseMessages, callTimeoutMs: 10, totalTimeoutMs: 600,
+    runtime: { ...runtime, discoverPapers: (_args, options) => { toolSignal = options.signal; return new Promise(resolve => { finishLate = resolve; }); } },
+    callModel: async () => { modelCalls++; return { choices: [{ message: { tool_calls: [{ id: 'bounded-discovery', function: { name: 'discover_papers', arguments: '{"query":"paper query"}' } }] } }] }; } });
+  check('论文发现独立预算仍由整轮总deadline封顶并取消底层任务', run.reason === 'timeout' && toolSignal?.aborted && modelCalls === 1 && Date.now() - started < 2000);
+  finishLate({ local: { status: 'matched', matches: [{ path: 'late.pdf' }] } });
+  await new Promise(resolve => setImmediate(resolve));
+  check('论文发现总deadline之后的结果不重开模型轮次', modelCalls === 1 && run.calls[0]?.ok === false);
+}
 {
   // 第 1 轮：2 个工具；第 2 轮：直接回答 → done
   const script = [

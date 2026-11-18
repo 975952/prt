@@ -1,0 +1,40 @@
+/* Compact conversation cards share the reader's palette and stay in the same message flow. */
+.paper-discovery { min-width: 0; margin-top: 14px; color: var(--fg); font-size: var(--ui-fs-xs); line-height: 1.6; container-type: inline-size; }
+.paper-discovery[hidden] { display: none; }
+.paper-discovery-query { margin-bottom: 11px; max-width: 100%; color: var(--fg); font-size: var(--ui-fs-xs); font-weight: 500; line-height: 1.6; overflow: hidden; overflow-wrap: anywhere; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.paper-discovery + .paper-discovery { padding-top: 16px; border-top: 1px solid var(--border); }
+.paper-discovery-unverified { margin-top: 8px; }
+.paper-discovery-section + .paper-discovery-section { margin-top: 19px; }
+.paper-discovery-heading { display: flex; align-items: center; gap: 7px; margin-bottom: 7px; color: var(--fg-dim); font-weight: 500; }
+.paper-discovery-heading > svg { width: 14px; height: 14px; flex: 0 0 auto; color: var(--fg-faint); }
+.paper-discovery-count { color: var(--fg-faint); font-size: var(--ui-fs-2xs); font-weight: 400; font-variant-numeric: tabular-nums; }
+.paper-discovery-coverage, .paper-discovery-note { margin: 0 0 9px; color: var(--fg-faint); font-size: var(--ui-fs-2xs); line-height: 1.7; overflow-wrap: anywhere; }
+.paper-discovery-list { display: flex; flex-direction: column; gap: 8px; min-width: 0; }
+.paper-discovery-card { min-width: 0; padding: 12px 13px; border: 1px solid var(--border); border-radius: 12px; background: color-mix(in srgb, var(--bg-elev) 56%, transparent); }
+.paper-discovery-title { color: var(--fg); font-size: var(--ui-fs); font-weight: 500; line-height: 1.6; overflow-wrap: anywhere; }
+.paper-discovery-meta { margin-top: 4px; color: var(--fg-faint); font-size: var(--ui-fs-2xs); line-height: 1.6; overflow-wrap: anywhere; }
+.paper-discovery-snippet { margin: 9px 0 0; color: var(--fg-dim); font-size: var(--ui-fs-xs); line-height: 1.7; white-space: pre-wrap; overflow-wrap: anywhere; }
+.paper-discovery-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 9px; margin-top: 9px; }
+.paper-discovery-action { display: inline-flex; align-items: center; justify-content: center; gap: 5px; max-width: 100%; min-height: 30px; margin: 0; padding: 4px 7px; border: 1px solid transparent; border-radius: 7px; background: transparent; color: var(--fg-dim); font: inherit; font-size: var(--ui-fs-xs); line-height: 1.5; text-align: center; text-decoration: none; overflow-wrap: anywhere; cursor: pointer; transition: color .14s ease, background .14s ease; }
+.paper-discovery-action:hover { color: var(--accent); background: var(--bg-sunken); text-decoration: none; }
+.paper-discovery-primary { color: var(--accent); background: color-mix(in srgb, var(--accent-soft) 55%, transparent); }
+.paper-discovery-primary:hover { color: var(--accent); background: var(--accent-soft); }
+.paper-discovery-action > svg { width: 12px; height: 12px; flex: 0 0 auto; }
+.paper-discovery-action:focus-visible, .paper-discovery-more > summary:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.paper-discovery-action:disabled { opacity: .55; cursor: default; }
+.paper-discovery-action[aria-busy="true"] { cursor: progress; }
+.paper-discovery-empty { margin: 0; padding: 3px 0; color: var(--fg-dim); font-size: var(--ui-fs-xs); line-height: 1.7; overflow-wrap: anywhere; }
+.paper-discovery-error { margin: 9px 0 0; color: var(--err-text); font-size: var(--ui-fs-xs); line-height: 1.7; overflow-wrap: anywhere; }
+.paper-discovery-more { min-width: 0; }
+.paper-discovery-more > summary { width: fit-content; max-width: 100%; padding: 5px 2px; color: var(--fg-dim); font-size: var(--ui-fs-xs); border-radius: 4px; cursor: pointer; }
+.paper-discovery-more > summary:hover { color: var(--accent); }
+.paper-discovery-more[open] > summary { margin-bottom: 5px; }
+.paper-discovery-footer { margin-top: 10px; }
+.paper-discovery-footer > .paper-discovery-action { margin-left: -7px; }
+.paper-discovery-footer > .paper-discovery-note { margin-bottom: 3px; }
+@container (max-width: 300px) {
+  .paper-discovery-card { padding: 10px; }
+  .paper-discovery-actions { gap: 5px; }
+  .paper-discovery-action { padding-inline: 5px; }
+}
+@media (prefers-reduced-motion: reduce) { .paper-discovery-action { transition: none; } }

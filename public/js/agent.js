@@ -29,6 +29,25 @@ export const AGENT_TOOL_SPECS = [
   {
     type: 'function',
     function: {
+      name: 'discover_papers',
+      description: '根据论文名称或内容描述寻找可打开的论文。先核对整个本地书架的标题与全文，只有完整查找无匹配且本轮允许联网时才自动查询学术来源。结果会显示可点击的论文卡片。不要用文件名未匹配就推断本地没有。',
+      parameters: { type: 'object', properties: {
+        query: { type: 'string', description: '要寻找的论文名称或主题，2–200字' },
+        keywords: { type: 'array', maxItems: 6, items: { type: 'string' }, description: '2–6个有辨识度的标题、术语或同义表达；中文描述英文论文时包括英文术语。每项是独立检索短语，避免只给paper、模型等泛词。' },
+      }, required: ['query'], additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'search_web',
+      description: '本轮允许联网时查找一般网络资料。找论文必须使用 discover_papers，它会先查本地，再决定是否联网。',
+      parameters: { type: 'object', properties: { query: { type: 'string', description: '搜索词，2–200字' } }, required: ['query'], additionalProperties: false },
+    },
+  },
+  {
+    type: 'function',
+    function: {
       name: 'get_reading_state',
       description: '获取读者当前阅读状态：文档标题、总页数、当前页、是否有文本层、当前选区/话题。不需要参数。',
       parameters: { type: 'object', properties: {}, additionalProperties: false },
@@ -160,6 +179,9 @@ export const AGENT_TOOL_SPECS = [
 
 /** 放进 system 末尾的「工具模式」说明（简短，不改变原有规则） */
 export const AGENT_SYSTEM_NOTE = [
+  '【寻找论文】读者用标题、主题、方法或模糊内容描述找论文时，使用 discover_papers，并把描述转为有辨识度的中英文术语和同义关键词。它会先查完整本地书架，再按联网权限查学术来源；不要用 list_papers 的文件名列表或一次关键词未命中声称本地不存在。',
+  '发现结果是候选，依据标题和实际命中片段解释关联，不要把关键词相关等同于确认是读者要找的论文。扫描件、读取失败和未完成的查找都不能当作不存在。结果卡片由程序显示，可以直接点击；不要编造本地路径、来源网址或PDF下载链接，不自动打开或下载。查到本地候选后让读者选择，若需要更多证据可以自行继续读候选。',
+  '没有当前论文时仍可聊天、查本地书架、发现论文和读取其它论文；当前页工具只在明确指定了文件时使用。一般联网资料可用 search_web；是否允许联网以工具结果为准。',
   `【工具模式】你可以使用只读工具自己决定读哪些材料，最多 ${AGENT_MAX_ROUNDS} 轮、每轮最多 ${AGENT_MAX_CALLS_PER_ROUND} 个工具。`,
   '你自己判断本次应当直接回答、接着上文解释、澄清问题，还是查阅材料。已有选区、所在页和对话记录足够时就直接回答；工具是可选能力，不是每次回答前的必经流程。不要为了检查流程重复读页或获取阅读状态。',
   '需要补充论文证据时可用 search_paper 找页、read_page 读正文；阅读状态已在材料中给出，不清楚时再用 get_reading_state。',
@@ -258,6 +280,13 @@ export function validateToolCall(call, { numPages = 0 } = {}) {
   const args = call?.args && typeof call.args === 'object' ? call.args : {};
   const spec = AGENT_TOOL_SPECS.find((s) => s.function.name === name);
   if (!spec) return { error: `未知工具：${name || '(空)'}` };
+  if (name === 'discover_papers' || name === 'search_web') {
+    const query = clip(args.query, 200).trim();
+    if (query.length < 2) return { error: 'query 至少 2 个字' };
+    const keywords = [...new Set((Array.isArray(args.keywords) ? args.keywords : [])
+      .filter(value => typeof value === 'string').map(value => value.trim().slice(0, 100)).filter(value => value.length >= 2))].slice(0, 6);
+    return { name, args: { query, ...(name === 'discover_papers' ? { keywords } : {}) } };
+  }
   if (name === 'get_reading_state') return { name, args: {} };
   const page = toInt(args.page);
   if (name === 'read_page' || name === 'read_scan_page' || name === 'read_page_image') {
@@ -345,7 +374,9 @@ export async function executeToolCall(call, runtime, options = {}) {
   try {
     const { name, args } = check;
     let value;
-    if (name === 'get_reading_state') value = await runtime.getReadingState(options);
+    if (name === 'discover_papers') value = await runtime.discoverPapers(args, options);
+    else if (name === 'search_web') value = await runtime.searchWeb(args, options);
+    else if (name === 'get_reading_state') value = await runtime.getReadingState(options);
     else if (name === 'read_page') value = await runtime.readPage(args.page, options);
     else if (name === 'search_paper') value = await runtime.searchPaper(args.query, options);
     else if (name === 'read_scan_page') value = await runtime.readScanPage(args.page, options);
@@ -372,6 +403,8 @@ export function toolStepLabel(call) {
   const name = String(call?.name || '');
   const args = call?.args || {};
   const q = clip(args.query, 40);
+  if (name === 'discover_papers') return tr("正在寻找相关论文…");
+  if (name === 'search_web') return tr("正在联网搜索…");
   if (name === 'get_reading_state') return tr("查看当前阅读状态");
   if (name === 'search_paper') return tr("检索「{0}」", q);
   if (name === 'read_page') return tr("读取第 {0} 页", toInt(args.page) || '?');
@@ -398,6 +431,8 @@ export function summarizeToolResult(call, result) {
   const args = call?.args || {};
   if (!result?.ok) return tr("{0}失败：{1}", toolStepLabel(call), clip(result?.error || tr("未知错误"), 120));
   const v = result.value || {};
+  if (name === 'discover_papers') return tr("已完成本轮论文查找");
+  if (name === 'search_web') return tr("搜到 {0} 条来源", v.results?.length || 0);
   if (name === 'get_reading_state') {
     const scans = v.scanned ? tr("（扫描件）") : '';
     const pages = Number.isFinite(Number(v.numPages)) ? tr("共 {0} 页", v.numPages) : tr("页数未知");
@@ -470,6 +505,7 @@ export async function runAgentLoop({
   maxCallsPerRound = AGENT_MAX_CALLS_PER_ROUND,
   totalTimeoutMs = AGENT_TOTAL_TIMEOUT_MS,
   callTimeoutMs = AGENT_CALL_TIMEOUT_MS,
+  tools = AGENT_TOOL_SPECS,
 } = {}) {
   const emit = (ev) => { try { onStep?.(ev); } catch { /* 界面异常不影响 Agent */ } };
   const work = messages.map((m) => ({ ...m }));
@@ -489,7 +525,7 @@ export async function runAgentLoop({
     try {
       json = await runWithDeadline(callSignal => callModel({
         messages: work,
-        tools: AGENT_TOOL_SPECS,
+        tools,
         timeoutMs: Math.max(1, Math.min(callTimeoutMs, left)),
         signal: callSignal,
       }), { signal, timeoutMs: Math.max(1, Math.min(callTimeoutMs, left)) });
@@ -521,8 +557,9 @@ export async function runAgentLoop({
       emit({ type: 'tool_start', round: rounds, call: { name: call.name, args: call.args } });
       let result;
       try {
+        const toolTimeoutMs = call.name === 'discover_papers' ? Math.max(callTimeoutMs, 60000) : callTimeoutMs;
         result = await runWithDeadline(toolSignal => executeToolCall(call, runtime, { signal: toolSignal }),
-          { signal, timeoutMs: Math.max(1, Math.min(callTimeoutMs, deadline - Date.now())) });
+          { signal, timeoutMs: Math.max(1, Math.min(toolTimeoutMs, deadline - Date.now())) });
       } catch (error) { result = { ok: false, error: String(error?.message || error), interrupted: true }; }
       if (!signal?.aborted) emit({
         type: 'tool_done', round: rounds,

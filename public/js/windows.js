@@ -12,7 +12,8 @@ const requests = new Map();
 let hooks = {};
 let windowRows = [];
 let menu = null;
-let closeInFlight = false;
+const CLOSE_SAVE_TIMEOUT_MS = 30000;
+let closeAttempt = null;
 let closed = false;
 let ready = false;
 let layoutPage = null;
@@ -53,7 +54,7 @@ window.fetch = async (input, init = {}) => {
       rawStorage.setItem(stateKey(), JSON.stringify(own));
       // Merge under a cross-window lock, so an old snapshot cannot erase another paper's progress.
       const save = async () => {
-        const r = await serviceFetch('/api/state');
+        const r = await serviceFetch('/api/state', { signal: init.signal });
         if (!r.ok) return r;
         const latest = await r.json();
         const docs = { ...latest.docs };
@@ -62,7 +63,7 @@ window.fetch = async (input, init = {}) => {
         }
         return serviceFetch(input, { ...init, body: JSON.stringify({ ...latest, ...own, docs }) });
       };
-      return navigator.locks ? navigator.locks.request('prt.save.progress', save) : save();
+      return navigator.locks ? navigator.locks.request('prt.save.progress', { signal: init.signal }, save) : save();
     }
     if (method === 'DELETE') {
       const remove = async () => {
@@ -79,7 +80,7 @@ window.fetch = async (input, init = {}) => {
         }
         return localizeErrorResponse(response);
       };
-      return navigator.locks ? navigator.locks.request('prt.save.progress', remove) : remove();
+      return navigator.locks ? navigator.locks.request('prt.save.progress', { signal: init.signal }, remove) : remove();
     }
   }
   return localizeErrorResponse(await serviceFetch(input, init));
@@ -148,24 +149,47 @@ function completeRequest(message) {
   requests.delete(message.request); clearTimeout(request.timeout);
   if (message.ok) request.resolve(); else request.reject(new Error(message.error || tr("新窗口打开失败")));
 }
-async function closeWindow() {
-  if (closeInFlight) return;
-  closeInFlight = true;
+async function closeWindow(message) {
+  const request = Number.isSafeInteger(message?.request) && message.request > 0 ? message.request : null;
+  if (closeAttempt?.request === request) return;
+  // The shell can retry when a prior event or acknowledgement was lost. An old
+  // save may still settle later, but only the current attempt may close us.
+  closeAttempt?.controller.abort();
+  const attempt = { request, controller: new AbortController(), timer: null };
+  closeAttempt = attempt;
+  closed = false;
+  const acknowledgement = request === null ? {} : { request };
   try {
-    await hooks.close?.();
+    await Promise.race([
+      Promise.resolve().then(() => hooks.close?.({ signal: attempt.controller.signal })),
+      new Promise((_, reject) => {
+        attempt.timer = setTimeout(() => {
+          reject(new Error(tr("保存耗时过长，请稍后重试关闭窗口。")));
+          attempt.controller.abort();
+        }, CLOSE_SAVE_TIMEOUT_MS);
+        attempt.controller.signal.addEventListener('abort', () => reject(new Error('Close request superseded')), { once: true });
+      }),
+    ]);
+    if (closeAttempt !== attempt || attempt.controller.signal.aborted) return;
+    if (typeof window.ipc?.postMessage !== 'function') throw new Error(tr("窗口连接暂时不可用，请重试关闭窗口。"));
     closed = true;
-    nativePost('close-commit');
+    nativePost('close-commit', acknowledgement);
   } catch (e) {
-    nativePost('close-cancel');
-    hooks.notify?.(tr("保存失败，窗口已保留：{0}", e.message || e));
-  } finally { closeInFlight = false; }
+    if (closeAttempt !== attempt) return;
+    closed = false;
+    try { nativePost('close-cancel', acknowledgement); } catch { /* The shell also expires unacknowledged requests. */ }
+    try { hooks.notify?.(tr("保存失败，窗口已保留：{0}", e.message || e)); } catch { /* A notification must not lock closing. */ }
+  } finally {
+    clearTimeout(attempt.timer);
+    if (closeAttempt === attempt) closeAttempt = null;
+  }
 }
 window.addEventListener('prt-desktop', ({ detail }) => {
   if (detail.type === 'place') { layoutPage = hooks.page?.(); nativePost('window-place', detail); }
   if (detail.type === 'placed') setTimeout(() => { if (layoutPage) hooks.restorePage?.(layoutPage); layoutPage = null; }, 450);
   if (detail.type === 'open-result') completeRequest(detail);
   if (detail.type === 'windows') { windowRows = detail.windows; renderWindowMenu(); }
-  if (detail.type === 'close-request') closeWindow();
+  if (detail.type === 'close-request') void closeWindow(detail);
 });
 bus?.addEventListener('message', ({ data }) => {
   if (data.type === 'open-result') completeRequest(data);

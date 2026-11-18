@@ -7,6 +7,9 @@ import { createComposerDraftStore } from './composer-drafts.js';
 import { createDraftPersistence } from './draft-persistence.js';
 import { createSessionWriteQueue } from './session-lifecycle.js';
 import { createAgentWorkspace } from './agent-workspace.js';
+import { discoverLocalPapers } from './paper-discovery.js';
+import { findOnlinePapers, paperDiscoveryIntent, safePaperLink } from './paper-discovery-online.js';
+import { renderPaperDiscovery, normalizePaperDiscovery } from './paper-discovery-ui.js';
 import { AGENT_PROFILE_KEY, readAgentProfile, writeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle, paperAccess } from './pdfview.js';
@@ -860,14 +863,14 @@ let serverState = {};
       await saveProgressNow({ silent: true });
       tabsPersist();
     },
-    close: async () => {
+    close: async ({ signal } = {}) => {
       abortStream('window-close');
       persistSession.cancel?.(); saveProgress.cancel?.();
-      if (sessionSaveInFlight) await sessionSaveInFlight;
-      await saveSessionNow();
-      await saveProgressNow({ silent: true });
+      if (sessionSaveInFlight) await runWithDeadline(() => sessionSaveInFlight, { signal, timeoutMs: 0 });
+      await runWithDeadline(() => saveSessionNow(), { signal, timeoutMs: 0 });
+      await runWithDeadline(() => saveProgressNow({ silent: true }), { signal, timeoutMs: 0 });
       tabsPersist();
-      try { await flushComposerDrafts(); }
+      try { await runWithDeadline(() => flushComposerDrafts(), { signal, timeoutMs: 0 }); }
       catch { throw new Error(tr("草稿尚未保存，请稍后重试关闭窗口。")); }
     },
   });
@@ -951,7 +954,7 @@ let chatVersion = 0;
 /** 全局会话「内容指纹」：冷恢复读到全局文件后用它判断内容是否变过（并发回答可能更新列表中间的条目）。 */
 let globalChatSig = '';
 function chatSigOf(sid, entries) {
-  return JSON.stringify([sid || '', entries.map((e) => [e?.id || '', e?.kind || '', e?.status || '', e?.text || ''])]);
+  return JSON.stringify([sid || '', entries.map((e) => [e?.id || '', e?.kind || '', e?.status || '', e?.text || '', e?.discoveries || e?.discovery || null])]);
 }
 /* B 线 P3.1：问答块是**全局共用**的，切换论文时不重绘它。
    chatDomSig = 当前聊天 DOM 里已经渲染的全局会话指纹；冷切换文档时只有指纹变了才重放整块（其余情况 DOM 原样保留）。 */
@@ -1072,7 +1075,7 @@ function refreshChatJobState() {
 }
 function chatJobPayload(job) {
   const view = job.view;
-  const payload = { entries: view.entries.map(row => ({ ...row, retry: serialiseRetryPayload(row.retry) })), history: snapshotHistory(view.history),
+  const payload = { entries: view.entries.map(row => ({ ...row, discovery: normalizePaperDiscovery(row.discovery), discoveries: paperDiscoveryGroups(row), retry: serialiseRetryPayload(row.retry) })), history: snapshotHistory(view.history),
     ops: view.ops || [], teaching: view.teaching || null,
     summary: view.summary || '', summaryCovered: view.summaryCovered || 0, summaryPrompt: PROMPT_SYSTEM_VERSION,
     folderPath: job.folder, docIds: [...new Set(view.entries.map(row => row.docId).filter(Boolean))],
@@ -2165,6 +2168,7 @@ function initViewer() {
     openDoc, closeTab, activateTab, moveTab, reopenClosedTab, goWelcome, openReaderWindow, windowId,
     get activeSession() { return activeSidFor(state.doc?.docId); },
     openAgentWorkspace, openAgentPaper,
+    discoverPapers: (query, keywords = [], options = {}) => discoverPapersForQuery(query, keywords, options),
     agentWorkspaceState: () => ({ view: agentWorkspaceView, scope: sessionScopeKey(),
       sid: activeSidFor(state.doc?.docId), name: agentName, handoff: !!agentHandoff }),
     newSession, switchSession, deleteSession, clearCurrentSession, loadSessionList, switchFolder,
@@ -2404,6 +2408,9 @@ let homeReadingState = null;
 function setAgentWorkspaceView(view) {
   agentWorkspaceView = view;
   agentWorkspace?.setView(view);
+  if ($('#chatInput') && rightPanelInCol(1) !== 'translate') {
+    $('#chatInput').placeholder = view === 'full' ? tr('描述想找的论文，或直接聊聊…') : tr('问点什么…');
+  }
   renderSessionBar();
   updateComposerHint();
 }
@@ -5928,7 +5935,7 @@ function syncComposerMode(id = rightPanelInCol(1)) {
   const clip = $('#clipBtn');
   const sendBtn = $('#sendBtn');
   if (input) {
-    input.placeholder = translating ? tr("粘贴原文…") : tr("问点什么…");
+    input.placeholder = translating ? tr("粘贴原文…") : agentWorkspaceView === 'full' ? tr('描述想找的论文，或直接聊聊…') : tr("问点什么…");
     input.setAttribute('aria-label', translating ? tr("翻译原文") : tr("问题"));
     if (translating) input.maxLength = 20000;
     else input.removeAttribute('maxlength');
@@ -6295,6 +6302,7 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
   if (status === 'stopped') stateParts.push(bare ? tr("已停止 · 已保留当前译文") : tr("已停止 · 已保留当前回答"));
   if (stateParts.length) extra.push(el('div', { class: `entry-meta${status === 'stopped' ? ' stopped' : ''}`, text: stateParts.join(' · ') }));
   if (extra.length) entry.root.append(...extra);
+  renderEntryPaperDiscovery(entry);
   if (!restore) { if (entry.root.__chatJob) scheduleChatJobSave(entry.root.__chatJob); else scheduleSessionSave(); }
   scrollBody(entry.root.closest('.ai-body'));
 }
@@ -6800,6 +6808,8 @@ function buildSessionPayload() {
     generation: Number.isSafeInteger(x.generation) && x.generation >= 0 ? x.generation : 0,
     generationId: typeof x.generationId === 'string' ? x.generationId.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80) : '',
     sources: (Array.isArray(x.sources) ? x.sources : []).slice(0, 8).map((s) => ({ title: String(s.title || '').slice(0, 500), url: String(s.url || '').slice(0, 2000), number: s.number || null })),
+    discovery: normalizePaperDiscovery(x.discovery),
+    discoveries: paperDiscoveryGroups(x),
     meta: String(x.meta || '').slice(0, 500),
     basis: String(x.basis || '').slice(0, 240),
     retry: serialiseRetryPayload(x.retry),
@@ -7569,6 +7579,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
       const text = `${String(row.text || '').slice(0, 48000)}${shotsLost ? tr("\n\n【截图附件未保存，请重新添加截图】") : ''}`;
       const entry = addEntry({ ...row, text, thumbs, restore: true });
       entry.root.__sessionRecord = row;
+      renderEntryPaperDiscovery(entry);
       if (row.block === 'chat' && row.kind !== 'user' && row.docPath) {
         setChatEntrySource(entry, { docId: row.docId, path: row.docPath, name: row.docPath.split('/').at(-1) }, row.page);
       }
@@ -9943,6 +9954,23 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
   const paperBrief = (p) => ({ name: p.name, folder: p.folder, path: p.path, index: p.index });
   return {
     numPages,
+    async discoverPapers(args, options = {}) {
+      const operationSignal = options.signal || signal;
+      return discoverPapersForQuery(args.query, args.keywords, {
+        useWeb: pending.useWeb, signal: operationSignal,
+        timeBudgetMs: Number(window.__agentTestLimits?.discoveryBudgetMs) || 25000,
+        onResult: result => {
+          if (!operationSignal?.aborted && readingRequestCurrent(pending)) publishPaperDiscovery(pending.entry, result);
+        },
+      });
+    },
+    async searchWeb(args, options = {}) {
+      if (!pending.useWeb) return { error: '本轮没有开启联网，不能检索网络。用户可在发送范围开启联网。' };
+      if (pending.discoveryIntent) return { error: '本次是在寻找论文，必须使用 discover_papers 先核对本地书架。' };
+      const results = await webSearch(args.query, options.signal || signal);
+      pending.agentWebSources = results;
+      return { query: args.query, results };
+    },
     /** 跨论文：已加入页图材料（send() 会把它们附到最终回答） */
     extraImages: other.images,
     get hasPageReadings() { return pageReadings.size > 0; },
@@ -9959,7 +9987,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
       const query = String(args.query || '').trim();
       if (query.length < 2) return { error: 'query 至少 2 个字' };
       await loadPapers();
-      const scope = args.scope === 'all' ? 'all' : 'folder';
+      const scope = args.scope === 'all' || (!pending.docId && !pending.chatJob?.folder) ? 'all' : 'folder';
       try {
         const result = await searchLibraryPages(query, scope, {
           papers: other.papers, maxHits: 60, timeBudgetMs: 18000,
@@ -10021,7 +10049,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
       return {
         docTitle: pending.sourcePaper?.path || pending.docTitle || '',
         numPages,
-        currentPage: pending.firstPage || taskReader?.current || null,
+        currentPage: pending.sourcePaper || pending.docId ? pending.firstPage || taskReader?.current || null : null,
         scanned: !!scannedDoc,
         hasTextLayer: !scannedDoc,
         selection: reading?.selection ? { page: reading?.focus?.page || null, text: String(reading.selection).slice(0, 600) } : null,
@@ -10029,6 +10057,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
       };
     },
     async readPage(page, options = {}) {
+      if (!pending.sourcePaper && !pending.docId) return { error: '没有指定当前论文，请使用 read_other_paper 并提供完整路径。' };
       /* 扫描件没有文本层：不先报错再让模型重试 —— 直接自动改取页图（少一轮往返、过程列表也少一条失败）。 */
       const text = await taskReader.getPageText(page, options);
       if (String(text || "").trim().length < 40) return attachCurrentPageImage(page, options);
@@ -10046,9 +10075,11 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
         note: result.truncated ? '仅检索了部分页面；不能据此认定整篇没有相关内容' : result.hits.length ? '' : '没有命中，可以换个词或直接 read_page' };
     },
     async readScanPage(page, options = {}) {
+      if (!pending.sourcePaper && !pending.docId) return { error: '没有指定当前论文，请使用 read_other_paper_image。' };
       return attachCurrentPageImage(page, options);
     },
     async readPageImage(page, options = {}) {
+      if (!pending.sourcePaper && !pending.docId) return { error: '没有指定当前论文，请使用 read_other_paper_image。' };
       if (!Number.isInteger(page)) return { error: 'page 必须是整数' };
       return attachCurrentPageImage(page, options);
     },
@@ -10125,7 +10156,10 @@ async function runAgentReadPath({ pending, reading, context, references, sources
     base[0].content += `\n【本次目标文件】${pending.sourcePaper?.path || pending.docTitle || '未指定'}。工具 read_page/search_paper 绑定此文件，不随屏幕切换。所有页号默认指 PDF 页面序号，尚未核对印刷页码。`;
     base[0].content += `\n【已导入文件】${(pending.chatJob?.papers || []).slice(0, 80).map(p => p.path || p.name).join('；')}。需要其他文件时按唯一完整路径调用工具。`;
     if (pending.sourcePapers?.length > 1) base[0].content += `\n【本次明确指定多个文件】${pending.sourcePapers.map(p => p.path || p.name).join('；')}。必须分别读取这些文件再比较，首段材料仅来自第一份文件。后续文件用 read_other_paper/read_other_paper_image，不得假定它们内容相同。`;
-    base[0].content += `\n【当前阅读】PDF 共 ${pending.chatReader?.numPages || viewer?.numPages || '?'} 页，所在 PDF 页码 ${pending.firstPage || '?'}；所在页材料为空时可自行决定是否读取页图。`;
+    base[0].content += pending.sourcePaper || pending.docId
+      ? `\n【当前阅读】PDF 共 ${pending.chatReader?.numPages || '?'} 页，所在 PDF 页码 ${pending.firstPage || '?'}；所在页材料为空时可自行决定是否读取页图。`
+      : '\n【当前阅读】本轮没有指定论文，不使用屏幕后方的旧论文。你可以正常聊天、查找和读取书架中的论文。';
+    base[0].content += `\n【联网权限】${pending.useWeb ? '本轮允许联网。找论文先调用 discover_papers。' : '本轮未开启联网，只查本地；不得声称已经查过网络。'}`;
     if (followUpDirectEnabled()) base[0].content += '\n连贯追问优先沿用上文，是否需要重新查证仍由你判断，不要因为输入只有问号就自动检查论文。';
     if (pending.forceFull) base[0].content += '\n读者要求重新生成，请重新审视前一回答；需要核实时自行调用工具。';
     attachAnswerImages(base, images, pending.chatJob?.initialPageImages || [], pending.question);
@@ -10143,6 +10177,9 @@ async function runAgentReadPath({ pending, reading, context, references, sources
       onStep,
       totalTimeoutMs,
       callTimeoutMs,
+      tools: AGENT_TOOL_SPECS.filter(spec => (pending.sourcePaper || pending.docId
+        || !['read_page', 'search_paper', 'read_scan_page', 'read_page_image'].includes(spec.function.name))
+        && (pending.useWeb || spec.function.name !== 'search_web')),
     });
     const stats = agentStats(run);
     window.__lastAgent = { ok: run.ok, stats, at: Date.now() };
@@ -10172,7 +10209,8 @@ async function runAgentReadPath({ pending, reading, context, references, sources
       extraImages: runtime.extraImages || [],
       hasPageReadings: runtime.hasPageReadings,
       imagesProvided: true,
-      basis: stats.calls ? tr("本次依据：AI 自行读取 {0}（{1} 轮 / {2} 次工具）", basisPages.length ? `p.${basisPages.join('、')}` : tr("（未读页）"), run.rounds, stats.calls)
+      basis: pending.entry.root.__sessionRecord.discovery ? tr('本次依据：书架检索与来源结果')
+        : stats.calls ? tr("本次依据：AI 自行读取 {0}（{1} 轮 / {2} 次工具）", basisPages.length ? `p.${basisPages.join('、')}` : tr("（未读页）"), run.rounds, stats.calls)
         : images.length ? tr("本次依据：本轮 {0} 张截图与对话", images.length) : tr("本次依据：现有材料与对话"),
       stats,
     };
@@ -12210,6 +12248,128 @@ function pickRelevantPages(text, query, k = PICK_K, per = 1600) {
     .join('\n\n');
 }
 
+async function discoverPapersForQuery(query, keywords = [], { useWeb = true, signal, timeBudgetMs = 25000, onResult, onProgress, reliableQuery = true } = {}) {
+  let papers;
+  try {
+    papers = await runWithDeadline(async requestSignal => {
+      const response = await fetch('/api/papers', { signal: requestSignal });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const data = await response.json();
+      if (!Array.isArray(data.papers)) throw new Error('Invalid library response');
+      return data.papers.map(paper => ({ ...paper, displayTitle: paperTitles.label(paper) }));
+    }, { signal, timeoutMs: 10000 });
+  } catch (error) {
+    if (signal?.aborted || isAbort(error)) throw error;
+    const result = normalizePaperDiscovery({ query, local: { status: 'incomplete', matches: [],
+      error: tr('书架暂时无法读取，请重试。'), coverage: { total: state.papers?.length || 0, complete: false } }, online: { status: 'idle' } });
+    onResult?.(result); return result;
+  }
+  const local = await discoverLocalPapers({ query, keywords, papers, paperAccess, signal, timeBudgetMs, onProgress });
+  if (!reliableQuery && !local.matches.length) {
+    local.status = 'incomplete';
+    local.error = tr('暂未提取出可靠的检索关键词，可以补充标题或关键术语后再试。');
+  }
+  let result = normalizePaperDiscovery({ query, local, online: { status: useWeb ? 'idle' : 'blocked', results: [] } });
+  if (signal?.aborted) throw signal.reason || new DOMException(tr('已停止'), 'AbortError');
+  onResult?.(result);
+  if (reliableQuery && local.status === 'not_found' && local.coverage.complete && useWeb) {
+    result.online.status = 'loading'; onResult?.(result);
+    result = normalizePaperDiscovery({ ...result, online: await findOnlinePapers({ query, signal }) });
+    if (signal?.aborted) throw signal.reason || new DOMException(tr('已停止'), 'AbortError');
+    onResult?.(result);
+  }
+  return result;
+}
+
+function paperDiscoveryGroups(record) {
+  return (Array.isArray(record?.discoveries) && record.discoveries.length ? record.discoveries : [record?.discovery])
+    .map(normalizePaperDiscovery).filter(Boolean).slice(-4);
+}
+
+function publishPaperDiscovery(entry, result) {
+  if (entry?.root.__deleted || !entry?.root.__sessionRecord) return;
+  const record = entry.root.__sessionRecord, next = normalizePaperDiscovery(result), previous = paperDiscoveryGroups(record);
+  record.discovery = next;
+  record.discoveries = [...previous.filter(row => row.query !== next?.query), next].filter(Boolean).slice(-4);
+  renderEntryPaperDiscovery(entry);
+  if (entry.root.__chatJob) scheduleChatJobSave(entry.root.__chatJob); else scheduleSessionSave();
+}
+
+function renderEntryPaperDiscovery(entry) {
+  entry?.root?.querySelectorAll('.paper-discovery').forEach(node => node.remove());
+  const record = entry?.root?.__sessionRecord;
+  if (!record || entry.root.__deleted) return;
+  for (const result of paperDiscoveryGroups(record)) renderEntryPaperDiscoveryCard(entry, record, result);
+}
+
+function renderEntryPaperDiscoveryCard(entry, record, result) {
+  const current = () => !entry.root.__deleted && entry.root.__sessionRecord === record && entry.root.isConnected;
+  const card = renderPaperDiscovery(result, {
+    async onOpenPaper(match) {
+      if (conversationMoveBusy || agentNavigationBusy) throw new Error(tr('请等待当前操作完成。'));
+      const owner = captureSessionOwner(), generation = record.generationId, originalView = agentWorkspaceView;
+      await refreshPaperList();
+      if (!current() || !sessionOwnerCurrent(owner) || record.generationId !== generation || agentWorkspaceView !== originalView) return;
+      const paper = (state.papers || []).find(row => match.path ? (row.path || row.name) === match.path : row.docId === match.docId);
+      if (!paper) throw new Error(tr('这篇论文已移动或移出书架，请重新查找。'));
+      if (agentWorkspaceView !== 'closed') await openAgentPaper(paper); else await openDoc(paper);
+      if (state.viewerDocId !== paper.docId) throw new Error(tr('论文未能打开，对话已保留，请重试。'));
+      if (match.page) await viewer.goToPage(Math.min(match.page, viewer.numPages));
+    },
+    async onFindOnline() {
+      if (record.status === 'pending') throw new Error(tr('正在完成这次查找，请稍候再试。'));
+      const owner = captureSessionOwner(), generation = record.generationId;
+      const active = () => current() && sessionOwnerCurrent(owner) && record.generationId === generation;
+      try {
+        const online = await findOnlinePapers({ query: result.query });
+        if (active()) publishPaperDiscovery(entry, { ...result, online });
+      } catch (error) {
+        if (active()) publishPaperDiscovery(entry, { ...result, online: { status: 'failed', results: result.online.results, error: String(error.message || error) } });
+      }
+    },
+    async onImport(candidate) {
+      if (conversationMoveBusy) throw new Error(tr('请等待当前操作完成。'));
+      if (record.status === 'pending') throw new Error(tr('正在完成这次查找，请稍候再试。'));
+      const pdfUrl = safePaperLink(candidate.pdfUrl);
+      if (!pdfUrl) throw new Error(tr('此来源没有可用的 PDF 链接。'));
+      const owner = captureSessionOwner(), generation = record.generationId;
+      const folder = sessionFolderPath() || '';
+      const params = new URLSearchParams({ url: pdfUrl, name: candidate.title.slice(0, 160) + '.pdf', folder });
+      const imported = await runWithDeadline(async signal => {
+        const response = await fetch(`/api/import-pdf?${params}`, { signal });
+        const data = await response.json();
+        if (!response.ok || !data.ok) throw new Error(data.error?.message || tr('导入失败，请打开来源链接查看。'));
+        return data;
+      }, { timeoutMs: 90000 });
+      await refreshPaperList();
+      if (current() && sessionOwnerCurrent(owner) && record.generationId === generation) {
+        const match = { ...imported, title: candidate.title, page: 1, matchKind: 'imported', snippet: tr('已导入书架，可以打开阅读。') };
+        publishPaperDiscovery(entry, { ...result,
+          local: { ...result.local, status: 'matched', matches: [match, ...result.local.matches.filter(row => row.path !== imported.path)] },
+          online: { ...result.online, results: result.online.results.filter(row => row.url !== candidate.url || row.pdfUrl !== candidate.pdfUrl) } });
+      }
+      toast(tr('论文已导入书架。'));
+    },
+  });
+  entry.root.insertBefore(card, entry.acts || null);
+}
+
+async function fallbackPaperDiscovery(pending, signal) {
+  let query = String(pending.question || '').slice(0, 200), keywords = [], reliableQuery = false;
+  try {
+    const raw = await runWithDeadline(planSignal => streamChat({ signal: planSignal, stream: false, temperature: 0,
+      messages: [{ role: 'system', content: 'PAPER_DISCOVERY_QUERY_PLAN: Convert this paper-finding request into JSON only: {"query":"specific title or topic for scholarly search","keywords":["distinctive English technical phrase","Chinese synonym"]}. Use 2–6 precise phrases, not generic words. Do not invent a paper title, URL, author, or an answer.' },
+        { role: 'user', content: pending.question }] }), { signal, timeoutMs: 15000 });
+    const parsed = JSON.parse(String(raw).replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, ''));
+    if (typeof parsed.query === 'string' && parsed.query.trim().length >= 2) {
+      query = parsed.query.trim().slice(0, 200); reliableQuery = true;
+    }
+    keywords = Array.isArray(parsed.keywords) ? parsed.keywords.filter(word => typeof word === 'string').slice(0, 6) : [];
+  } catch (error) { if (signal?.aborted || isAbort(error)) throw error; }
+  return discoverPapersForQuery(query, keywords, { useWeb: pending.useWeb, signal, reliableQuery,
+    onResult: result => { if (readingRequestCurrent(pending) && !signal?.aborted) publishPaperDiscovery(pending.entry, result); } });
+}
+
 /** 联网搜索（服务端带 5 分钟缓存，多引擎兜底） */
 async function webSearch(query, signal) {
   if (!String(query || '').trim()) return [];
@@ -12492,12 +12652,15 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     pending.entry.acts.classList.add('hidden');
     pending.entry.root.classList.remove('err', 'error');
     pending.entry.root.querySelectorAll('.entry-meta, .source-details, .src-list, .agent-steps').forEach((node) => node.remove());
+    pending.entry.root.querySelectorAll('.paper-discovery').forEach(node => node.remove());
     const record = pending.entry.root.__sessionRecord;
     if (record) {
       const previousGeneration = Number.isSafeInteger(record.generation) && record.generation >= 0 ? record.generation : 0;
       record.generation = Math.min(Number.MAX_SAFE_INTEGER, Math.max(Date.now(), previousGeneration + 1));
       record.generationId = globalThis.crypto?.randomUUID?.() || `${windowId}-${uid()}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80);
       record.text = ''; record.meta = ''; record.status = 'pending';
+      delete record.discovery;
+      delete record.discoveries;
       record.retry = chatRetryPayload(pending);
     }
   }
@@ -12586,6 +12749,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // 重试时也复用第一次发送时定下的「所在页」与话题页，不受之后滚动影响
     if (pending.firstPage) reading.page = pending.firstPage;
     pending.reading = reading;
+    pending.discoveryIntent = paperDiscoveryIntent(pending.question);
     // Source selection happens before page validation or any model/web request.
     // The conversation owner remains immutable even when the material is another file.
     const previousTarget = [...pending.history].reverse().find(message => message.role === 'user' && message.focus?.document)?.focus?.document;
@@ -12599,6 +12763,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         explicit: true, crossFile: candidates[0].path !== pending.docPath }
         : candidates.length ? { status: 'ambiguous', candidates } : { status: 'missing', query: retrySource.path || retrySource.name };
     }
+    if (pending.discoveryIntent || (!pending.docId && ['ambiguous', 'missing'].includes(source.status))) source = { status: 'none', page: null };
     if (source.status === 'ambiguous') throw new Error(tr("找到多份匹配文件，请使用完整文件名或路径：{0}", source.candidates.map(paper => paper.path || paper.name).join('；')));
     if (source.status === 'missing') throw new Error(tr("书架中未找到「{0}」，请确认文件名或导入该文件。", source.query));
     if (source.invalidPage) throw new RangeError(tr("页码必须是大于 0 的整数。"));
@@ -12687,7 +12852,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
 
     // 联网是允许查找材料；短追问先确定对象，纠正消息和纯问号不会拿去检索。
     // 追问直答这类短问题也不联网（省一次搜索往返；需要查资料的问题一般会点名要查/最新/出处）。
-    if (pending.useWeb && !crossFile && (!images.length || pending.inputValue.trim() || reading.selection)
+    if (pending.useWeb && !pending.discoveryIntent && pending.docId && !crossFile && (!images.length || pending.inputValue.trim() || reading.selection)
       && webQueryFor(pending.question, reading.selection, { reading })) {
       setJobHint(tr("正在联网搜索…"));
       try {
@@ -12706,7 +12871,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // 只有「只发截图没写问题」（shotOnly）才不启用，避免模型把截图当成唯一依据乱翻。
     const batch = splitNumberedQuestions(pending.inputValue);
     const agentAllowed = agentReadEnabled() && !shotOnly
-      && !!(pending.sourcePaper || pending.docId) && !!reader?.pdf;
+      && ((!pending.docId && !pending.sourcePaper) || !!reader?.pdf);
     let agentRun = null;
     let agentProgress = null;
     if (agentAllowed) {
@@ -12752,6 +12917,17 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       }
       if (!readingRequestCurrent(pending)) return;
     }
+    if (pending.discoveryIntent && !pending.entry.root.__sessionRecord.discovery) {
+      setJobHint(tr('正在寻找相关论文…'));
+      const discovery = await fallbackPaperDiscovery(pending, ctl.signal);
+      assertTaskActive();
+      const evidence = `【实际论文查找结果】${JSON.stringify(discovery)}\n结果卡片由程序显示。根据实际命中片段简短解释候选，不夸大匹配；coverage不完整时不能声称本地没有，网络失败不能说没有结果，不编造链接。`;
+      if (agentRun) { agentRun.directContent = ''; agentRun.messages.push({ role: 'user', content: evidence }); }
+      else context = [context, evidence].filter(Boolean).join('\n\n');
+    }
+    const discovery = pending.entry.root.__sessionRecord.discovery;
+    if (discovery?.online?.results?.length) sources = discovery.online.results;
+    else if (pending.agentWebSources?.length) sources = pending.agentWebSources;
     // ② 上下文。扫描件：页面图片（+ 整篇类问题的采样页）；普通论文：整篇全文 / 索引 + 相关段落。
     // 只发截图（没写问题）时不吃「整篇」范围：截图本身就是材料，塞整篇只会让模型顺势扩写整个讲义。
     // 成功时直接采用模型选择；仅在工具不支持/失败时准备兼容材料。
@@ -12809,6 +12985,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         .filter(Number.isInteger).sort((a, b) => a - b);
       citationMat.basis = agentRun.basis;
     }
+    if (pending.entry.root.__sessionRecord.discovery) citationMat.basis = tr('本次依据：书架检索与来源结果');
     const messages = agentRun ? agentRun.messages : askMessages({
       question: pending.question,
       selection: reading.selection,
@@ -12942,6 +13119,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     }
   } finally {
     setJobHint('');
+    for (const unfinishedDiscovery of paperDiscoveryGroups(pending.entry?.root.__sessionRecord)) {
+      if (unfinishedDiscovery.online.status !== 'loading') continue;
+      publishPaperDiscovery(pending.entry, { ...unfinishedDiscovery,
+        online: { ...unfinishedDiscovery.online, status: 'failed', error: '' } });
+    }
     job.finished = true;
     clearTimeout(job.saveTimer);
     if (chatJobs.get(job.key) === job) chatJobs.delete(job.key);

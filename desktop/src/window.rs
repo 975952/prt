@@ -29,6 +29,9 @@ const DEFAULT_W: f64 = 1400.0;
 const DEFAULT_H: f64 = 900.0;
 const MIN_W: f64 = 560.0;
 const MIN_H: f64 = 400.0;
+// Longer than the page's 30s save deadline. This only permits another request;
+// expiration never destroys a window or discards unsaved data.
+const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(35);
 
 /* ------------------------------------------------------------ 窗口动作（页面 → 壳） */
 
@@ -43,8 +46,8 @@ enum WindowAction {
     Maximize,
     Fullscreen(Option<bool>),
     Close,
-    CommitClose,
-    CancelClose,
+    CommitClose(u64),
+    CancelClose(u64),
     Open { key: String, doc: String, request: String },
     CancelOpen(String),
     Ready { doc: String, title: String },
@@ -70,8 +73,8 @@ fn parse_action(msg: &str) -> Option<WindowAction> {
         "maximize" => Some(WindowAction::Maximize),
         "fullscreen" => Some(WindowAction::Fullscreen(v.get("on").and_then(|x| x.as_bool()))),
         "close" => Some(WindowAction::Close),
-        "close-commit" => Some(WindowAction::CommitClose),
-        "close-cancel" => Some(WindowAction::CancelClose),
+        "close-commit" => v.get("request")?.as_u64().filter(|id| *id > 0).map(WindowAction::CommitClose),
+        "close-cancel" => v.get("request")?.as_u64().filter(|id| *id > 0).map(WindowAction::CancelClose),
         "windows-list" => Some(WindowAction::List),
         "windows-tile" => Some(WindowAction::Tile),
         "window-place" => Some(WindowAction::Place {
@@ -250,6 +253,29 @@ fn app_icon(size: u32) -> Option<tao::window::Icon> {
     tao::window::Icon::from_rgba(icon_geometry::render_icon_rgba(size), size, size).ok()
 }
 
+#[derive(Default)]
+struct CloseRequestState {
+    sequence: u64,
+    pending: Option<(u64, Instant)>,
+}
+
+impl CloseRequestState {
+    fn begin(&mut self, now: Instant) -> Option<u64> {
+        if self.pending.map(|(_, started)| now.duration_since(started) < CLOSE_ACK_TIMEOUT).unwrap_or(false) { return None; }
+        self.sequence += 1;
+        self.pending = Some((self.sequence, now));
+        Some(self.sequence)
+    }
+    fn accepts(&self, request: u64, now: Instant) -> bool {
+        self.pending.map(|(id, started)| id == request && now.duration_since(started) < CLOSE_ACK_TIMEOUT).unwrap_or(false)
+    }
+    fn cancel(&mut self, request: u64) -> bool {
+        if !self.pending.map(|(id, _)| id == request).unwrap_or(false) { return false; }
+        self.pending = None;
+        true
+    }
+}
+
 // Each webview owns its JS state; the service and authentication stay in one process.
 struct ReaderWindow {
     webview: wry::WebView,
@@ -257,15 +283,21 @@ struct ReaderWindow {
     key: String,
     doc: String,
     title: String,
-    closing: bool,
+    closing: CloseRequestState,
     restore_max: bool,
     pending: Option<(WindowId, String, String)>,
 }
 
 fn emit(reader: &ReaderWindow, value: serde_json::Value) {
-    let _ = reader.webview.evaluate_script(&format!(
+    try_emit(reader, value);
+}
+fn try_emit(reader: &ReaderWindow, value: serde_json::Value) -> bool {
+    match reader.webview.evaluate_script(&format!(
         "window.dispatchEvent(new CustomEvent('prt-desktop', {{detail:{value}}}));"
-    ));
+    )) {
+        Ok(()) => true,
+        Err(error) => { crate::log_line(&format!("[window] 发送窗口事件失败: {error}")); false },
+    }
 }
 
 fn create_reader(
@@ -304,7 +336,7 @@ fn create_reader(
     ).build(&window).map_err(|e| e.to_string())?;
     if geometry["maximized"].as_bool() == Some(true) { window.set_maximized(true); }
     Ok(ReaderWindow { webview, window, key: key.into(), doc: doc.into(), title: "prt".into(),
-        closing: false, restore_max: false, pending: None })
+        closing: CloseRequestState::default(), restore_max: false, pending: None })
 }
 
 fn save_windows(windows: &HashMap<WindowId, ReaderWindow>) {
@@ -322,9 +354,10 @@ fn save_windows(windows: &HashMap<WindowId, ReaderWindow>) {
 }
 
 fn request_close(reader: &mut ReaderWindow) {
-    if reader.closing { return; }
-    reader.closing = true;
-    emit(reader, json!({"type":"close-request"}));
+    let Some(request) = reader.closing.begin(Instant::now()) else { return; };
+    if !try_emit(reader, json!({"type":"close-request", "request":request})) {
+        reader.closing.cancel(request);
+    }
 }
 
 pub fn run(url: String, background: bool) -> ! {
@@ -431,15 +464,15 @@ pub fn run(url: String, background: bool) -> ! {
                         save_windows(&windows); quitting = true;
                         for r in windows.values_mut() { request_close(r); }
                     },
-                    WindowAction::CommitClose => {
-                        if !windows[&source].closing { return; }
+                    WindowAction::CommitClose(request) => {
+                        if !windows[&source].closing.accepts(request, Instant::now()) { return; }
                         if windows.len() == 1 && !quitting { save_windows(&windows); }
                         windows.remove(&source);
                         if windows.is_empty() { *control_flow = ControlFlow::Exit; }
                         else if !quitting { save_windows(&windows); }
                     },
-                    WindowAction::CancelClose => {
-                        windows.get_mut(&source).unwrap().closing = false; quitting = false;
+                    WindowAction::CancelClose(request) => {
+                        if windows.get_mut(&source).unwrap().closing.cancel(request) { quitting = false; }
                     },
                     other => {
                         let r = windows.get_mut(&source).unwrap();
@@ -530,6 +563,8 @@ mod tests {
         assert!(matches!(parse_action(r#"{"type":"minimize"}"#), Some(WindowAction::Minimize)));
         assert!(matches!(parse_action(r#"{"type":"maximize"}"#), Some(WindowAction::Maximize)));
         assert!(matches!(parse_action(r#"{"type":"close"}"#), Some(WindowAction::Close)));
+        assert!(matches!(parse_action(r#"{"type":"close-commit","request":7}"#), Some(WindowAction::CommitClose(7))));
+        assert!(matches!(parse_action(r#"{"type":"close-cancel","request":7}"#), Some(WindowAction::CancelClose(7))));
         assert!(matches!(parse_action(r#"{"type":"drag"}"#), Some(WindowAction::Drag)));
         assert!(matches!(
             parse_action(r#"{"type":"fullscreen"}"#),
@@ -552,10 +587,34 @@ mod tests {
             r#"{"type":"resize"}"#,                     // 缺 dir
             r#"{"type":"resize","dir":"center"}"#,      // 非法方向
             r#"{"type":"CLOSE"}"#,                      // 大小写敏感：只认小写
+            r#"{"type":"close-commit"}"#,
+            r#"{"type":"close-cancel","request":0}"#,
+            r#"{"type":"close-commit","request":-1}"#,
+            r#"{"type":"close-commit","request":"7"}"#,
             r#"not json"#,
             "",
         ] {
             assert!(parse_action(bad).is_none(), "不该解析: {bad}");
         }
+    }
+
+    #[test]
+    fn close_request_cancellation_and_expiration_allow_safe_retry() {
+        let mut state = CloseRequestState::default();
+        let now = Instant::now();
+        let first = state.begin(now).unwrap();
+        assert_eq!(state.begin(now + Duration::from_secs(1)), None);
+        assert!(state.cancel(first)); // Delivery failure or the page rejected saving.
+        let second = state.begin(now + Duration::from_secs(2)).unwrap();
+        assert_ne!(first, second);
+        assert!(!state.accepts(first, now + Duration::from_secs(3)));
+        assert!(!state.cancel(first));
+        assert!(state.accepts(second, now + Duration::from_secs(3)));
+        let expired = now + Duration::from_secs(2) + CLOSE_ACK_TIMEOUT;
+        assert!(!state.accepts(second, expired));
+        let third = state.begin(expired).unwrap();
+        assert_ne!(second, third);
+        assert!(!state.cancel(second));
+        assert!(state.accepts(third, expired));
     }
 }
