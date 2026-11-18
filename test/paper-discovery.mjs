@@ -70,11 +70,12 @@ const filler = 'This document describes unrelated chemistry and laboratory measu
   const f = fixture({ [blank.url]: ['', '1'], [mixed.url]: [filler, ''], [broken.url]: new Error('Damaged PDF') });
   const result = await discoverLocalPapers({ query: 'optimization', papers: [blank, mixed, broken], paperAccess: f.access });
   assert.equal(result.status, 'incomplete'); assert.equal(result.coverage.complete, false);
-  assert.equal(result.coverage.checked, 2); assert.equal(result.coverage.unreadable, 3);
+  assert.equal(result.coverage.checked, 2); assert.equal(result.coverage.unreadable, 2);
+  assert.equal(result.coverage.readable, 1); assert.equal(result.coverage.textIncomplete, 1);
   assert.equal(result.coverage.remaining, 1); assert.equal(result.coverage.textlessPages, 3);
-  assert.deepEqual(result.coverage.issues.map(i => i.reason).sort(), ['missing_text', 'missing_text', 'read_error']);
+  assert.deepEqual(result.coverage.issues.map(i => i.reason).sort(), ['missing_text', 'partial_text', 'read_error']);
   assert.match(result.coverage.issues.find(i => i.reason === 'read_error').message, /Damaged/);
-  await f.access.clear(); pass('scans, mixed text/image PDFs, and corrupt PDFs cannot claim local absence');
+  await f.access.clear(); pass('scans and corrupt PDFs are unreadable; a partial text layer stays readable but coverage remains incomplete');
 }
 
 {
@@ -166,6 +167,143 @@ const filler = 'This document describes unrelated chemistry and laboratory measu
   await assert.rejects(discoverLocalPapers({ query: ' ', papers: [], paperAccess: { search() {} } }), TypeError);
   await assert.rejects(discoverLocalPapers({ query: 'attention', paperAccess: { search() {} } }), TypeError);
   await wait(0); pass('zero budget, empty library, and invalid input have explicit safe outcomes');
+}
+
+{
+  const target = paper('2101.11986.pdf', { displayTitle: '2101.11986 · Tokens-to-Token ViT: Training Vision Transformers from Scratch on ImageNet' });
+  const swin = paper('2103.14030.pdf', { displayTitle: 'Swin Transformer: Hierarchical Vision Transformer using Shifted Windows' });
+  const twins = paper('2104.13840.pdf', { displayTitle: 'Twins: Revisiting the Design of Spatial Attention in Vision Transformers' });
+  const v2 = paper('t2t-v2.pdf', { displayTitle: 'T2T-ViT V2: Improved Tokenization for Vision Transformers' });
+  const f = fixture({
+    [target.url]: ['Tokens-to-Token ViT: Training Vision Transformers from Scratch on ImageNet\nLi Yuan and collaborators\nAbstract\nWe introduce a new tokens-to-token transformation.', filler],
+    [swin.url]: ['Swin Transformer: Hierarchical Vision Transformer using Shifted Windows\nAbstract\nWe study hierarchical window attention.', 'References\n[1] Yuan et al. Tokens-to-Token ViT: Training Vision Transformers from Scratch on ImageNet. 2021.'],
+    [twins.url]: ['Twins: Revisiting the Design of Spatial Attention in Vision Transformers\nAbstract\nOur architecture uses two attention mechanisms.', 'References\n[2] Yuan et al. T2T-ViT: Training Vision Transformers from Scratch. 2021.'],
+    [v2.url]: ['T2T-ViT V2: Improved Tokenization for Vision Transformers\nAbstract\nWe improve the earlier T2T-ViT model.'],
+  });
+  const result = await discoverLocalPapers({ query: '我想看T2T-ViT', mode: 'known',
+    titles: ['Tokens-to-Token ViT: Training Vision Transformers from Scratch on ImageNet'], aliases: ['T2T-ViT', 'Tokens-to-Token ViT'],
+    keywords: ['vision transformer', 'tokenization'], papers: [swin, twins, v2, target], paperAccess: f.access });
+  assert.equal(result.mode, 'known'); assert.equal(result.status, 'matched');
+  assert.deepEqual(result.matches.map(row => row.path), [target.path]);
+  assert.equal(result.matches[0].relation, 'identity'); assert.equal(result.matches[0].page, 1);
+  assert.ok(!result.matches[0].title.startsWith('2101.11986'));
+  assert.deepEqual(result.referenceMatches.map(row => row.path).sort(), [swin.path, twins.path].sort());
+  assert.ok(result.relatedMatches.some(row => row.path === v2.path));
+  assert.ok(result.referenceMatches.every(row => row.relation === 'mention'));
+  await f.access.clear(); pass('a specific T2T-ViT request returns its own paper, not Swin/Twins references or the V2 follow-up');
+}
+
+{
+  const p = paper('reference-only.pdf', { displayTitle: 'Unrelated Architecture Study' });
+  const f = fixture({ [p.url]: [filler, 'References\n[9] He, Zhang, Ren, Sun. Deep Residual Learning for Image Recognition. ResNet. 2016.'] });
+  const result = await discoverLocalPapers({ query: '打开ResNet论文', mode: 'known', aliases: ['ResNet'],
+    titles: ['Deep Residual Learning for Image Recognition'], papers: [p], paperAccess: f.access });
+  assert.equal(result.status, 'not_found'); assert.equal(result.matches.length, 0);
+  assert.equal(result.referenceMatches[0].path, p.path); assert.equal(result.referenceMatches[0].page, 2);
+  assert.equal(result.coverage.complete, true);
+  await f.access.clear(); pass('references alone never establish that the requested paper is in the library');
+}
+
+{
+  const original = paper('resnet.pdf', { title: 'Deep Residual Learning for Image Recognition' });
+  const followup = paper('resnet-v2.pdf', { title: 'ResNet V2: Improved Residual Representations' });
+  const analysis = paper('analysis.pdf', { title: 'An Analysis of ResNet Architectures' });
+  const f = fixture({ [original.url]: ['Deep Residual Learning for Image Recognition\nAbstract\nWe present residual learning for deep networks.'],
+    [followup.url]: ['ResNet V2: Improved Residual Representations\nAbstract\nThis follow-up develops improved representations.'],
+    [analysis.url]: ['An Analysis of ResNet Architectures\nAbstract\nResNet models are compared in this evaluation.'] });
+  const base = await discoverLocalPapers({ query: 'ResNet', mode: 'known', aliases: ['ResNet'],
+    titles: ['Deep Residual Learning for Image Recognition'], papers: [analysis, followup, original], paperAccess: f.access });
+  assert.deepEqual(base.matches.map(row => row.path), [original.path]);
+  assert.equal(base.relatedMatches.length, 2);
+  const v2 = await discoverLocalPapers({ query: 'ResNet V2', mode: 'known', aliases: ['ResNet', 'ResNet V2'],
+    papers: [original, followup, analysis], paperAccess: f.access });
+  assert.deepEqual(v2.matches.map(row => row.path), [followup.path]);
+  await f.access.clear(); pass('identity rules generalize to ResNet and keep requested V2 separate from original and analysis papers');
+}
+
+{
+  const numeric = paper('98765.pdf'), discussion = paper('discussion.pdf');
+  const f = fixture({ [numeric.url]: ['DenseNet: Densely Connected Convolutional Networks\nSynthetic authors\nAbstract\nWe connect layers for efficient feature reuse.'],
+    [discussion.url]: ['DenseNet is widely used in modern image classification experiments.'] });
+  const result = await discoverLocalPapers({ query: '我想看DenseNet', papers: [discussion, numeric], paperAccess: f.access });
+  assert.equal(result.mode, 'known'); assert.deepEqual(result.matches.map(row => row.path), [numeric.path]);
+  assert.equal(result.matches[0].matchKind, 'first-page-title');
+  assert.ok(result.relatedMatches.some(row => row.path === discussion.path));
+  await f.access.clear(); pass('auto mode recognizes a named paper and distinguishes a first-page heading from a sentence mentioning it');
+}
+
+{
+  const primary = paper('topics.pdf'), bibliography = paper('bibliography.pdf');
+  const f = fixture({ [primary.url]: ['This work develops efficient sparse attention for sequence learning.'],
+    [bibliography.url]: [filler, 'References\n[1] Smith et al. Efficient sparse attention. 2022.\n[2] Jones et al. Long sequence learning. 2023.'] });
+  const result = await discoverLocalPapers({ query: '想找稀疏注意力相关论文', mode: 'topic', keywords: ['sparse attention'],
+    papers: [bibliography, primary], paperAccess: f.access });
+  assert.deepEqual(result.matches.map(row => row.path), [primary.path]);
+  assert.equal(result.matches[0].relation, 'topic'); assert.equal(result.referenceMatches[0].path, bibliography.path);
+  await f.access.clear(); pass('topical discovery still uses body evidence but excludes bibliography-only matches');
+}
+
+{
+  const p = paper('blank-last-page.pdf', { title: 'Deep Residual Learning for Image Recognition' });
+  const f = fixture({ [p.url]: ['Deep Residual Learning for Image Recognition\nAbstract\nWe present residual learning.', ''] });
+  const result = await discoverLocalPapers({ query: 'ResNet', mode: 'known', titles: ['Deep Residual Learning for Image Recognition'],
+    papers: [p], paperAccess: f.access });
+  assert.equal(result.status, 'matched'); assert.equal(result.coverage.unreadable, 0);
+  assert.equal(result.coverage.readable, 1); assert.equal(result.coverage.textIncomplete, 1);
+  assert.equal(result.coverage.complete, false); assert.equal(result.coverage.issues[0].reason, 'partial_text');
+  await f.access.clear(); pass('one blank page does not label an otherwise readable matching paper as unreadable');
+}
+
+{
+  const v1 = paper('1706.03762v1.pdf', { title: 'Attention Is All You Need' });
+  const v2 = paper('1706.03762v2.pdf', { title: 'Attention Is All You Need' });
+  const f = fixture({ [v1.url]: ['Attention Is All You Need Abstract This is the original archived paper version.'],
+    [v2.url]: ['Attention Is All You Need Abstract This is the revised archived paper version.'] });
+  const requested = await discoverLocalPapers({ query: 'Attention Is All You Need v2', mode: 'known',
+    titles: ['Attention Is All You Need'], papers: [v1, v2], paperAccess: f.access });
+  assert.deepEqual(requested.matches.map(row => row.path), [v2.path]);
+  assert.equal(requested.matches[0].page, 1);
+  const unspecified = await discoverLocalPapers({ query: 'Attention Is All You Need', mode: 'known',
+    titles: ['Attention Is All You Need'], papers: [v1, v2], paperAccess: f.access });
+  assert.equal(unspecified.matches.length, 2, 'both archived revisions retain stable paths when no revision was requested');
+  await f.access.clear(); pass('same-title arXiv revisions respect an explicit version while flat first-page text remains usable');
+}
+
+{
+  const derivative = paper('medical.pdf', { title: 'T2T-ViT for Medical Image Segmentation' });
+  const misleading = paper('T2T-ViT.pdf', { title: 'An Analysis of Vision Transformers' });
+  const alternate = paper('original.pdf', { title: 'T2T-ViT: Training Vision Transformers from Scratch on ImageNet' });
+  const f = fixture({ [derivative.url]: ['T2T-ViT for Medical Image Segmentation\nAbstract\nWe adapt a known method to medical imaging.'],
+    [misleading.url]: ['An Analysis of Vision Transformers\nAbstract\nOur study compares several architectures.'],
+    [alternate.url]: ['T2T-ViT: Training Vision Transformers from Scratch on ImageNet\nAbstract\nWe train vision transformers from scratch.'] });
+  const result = await discoverLocalPapers({ query: '我想看T2T-ViT', mode: 'known',
+    titles: ['Tokens-to-Token ViT: Training Vision Transformers from Scratch on ImageNet'], aliases: ['T2T-ViT'],
+    papers: [derivative, misleading, alternate], paperAccess: f.access });
+  assert.deepEqual(result.matches.map(row => row.path), [alternate.path]);
+  assert.ok(result.relatedMatches.some(row => row.path === derivative.path));
+  assert.ok(result.relatedMatches.some(row => row.path === misleading.path));
+  await f.access.clear(); pass('a canonical title defeats derivative alias prefixes and misleading filenames while accepting equivalent subtitles');
+}
+
+{
+  const title = 'Tokens-to-Token ViT: Training Vision Transformers from Scratch on ImageNet';
+  const wrong = paper('wrong/T2T-ViT.pdf'), bodyOnly = paper('body-only/T2T-ViT.pdf'), good = paper('good/T2T-ViT.pdf');
+  const f = fixture({
+    [wrong.url]: ['Swin Transformer: Hierarchical Vision Transformer using Shifted Windows\nSynthetic authors\nAbstract\nWe propose shifted windows.',
+      'Our baseline comparison includes T2T-ViT.'],
+    [bodyOnly.url]: ['This work uses T2T-ViT for image classification.'],
+    [good.url]: [`${title}\nSynthetic authors\nAbstract\nOur method uses progressive tokenization.`,
+      'A related paper is Swin Transformer: Hierarchical Vision Transformer using Shifted Windows.'],
+  });
+  const result = await discoverLocalPapers({ query: 'T2T-ViT', mode: 'known', titles: [title], aliases: ['T2T-ViT'],
+    papers: [wrong, bodyOnly, good], paperAccess: f.access });
+  assert.deepEqual(result.matches.map(row => row.path).sort(), [bodyOnly.path, good.path].sort());
+  assert.ok(result.relatedMatches.some(row => row.path === wrong.path));
+  assert.ok(!result.matches.some(row => row.path === wrong.path), 'a contradictory first-page title defeats a misleading filename');
+  const aliasOnly = await discoverLocalPapers({ query: 'T2T-ViT', mode: 'known', aliases: ['T2T-ViT'],
+    papers: [good], paperAccess: f.access });
+  assert.equal(aliasOnly.matches.length, 1, 'an unknown canonical title is not disproved just because its expanded form differs from the acronym');
+  await f.access.clear(); pass('confident first-page titles override filename-only identities without mistaking ordinary body text for a title');
 }
 
 console.log(`\n${checks.length}/${checks.length} paper discovery checks passed.`);

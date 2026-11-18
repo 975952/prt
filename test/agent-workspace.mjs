@@ -160,13 +160,20 @@ async function typeDraft(value) {
   }, value);
   await page.evaluate(() => window.__ctx.flushComposerDrafts());
 }
-async function full() {
-  await page.click('#agentBtn');
+async function full({ landing = false } = {}) {
+  if (await page.evaluate(() => document.body.classList.contains('agent-full'))) {
+    await page.click('#homeBtn');
+    await page.waitForSelector('#home', { visible: true });
+    await page.click('#homeAgent');
+  } else await page.click(await visible('#homeAgent') ? '#homeAgent' : '#agentBtn');
   await page.waitForSelector('body.agent-full #rightSide', { visible: true });
   await settled();
+  if (!landing && !await page.$eval('#agentResume', button => button.disabled)) {
+    await page.click('#agentResume'); await settled();
+  }
 }
 async function history() {
-  if (!await visible('#sessHistory')) await page.click('#sessHist');
+  if (!await visible('#sessHistory')) await page.click(await visible('#agentHistory') ? '#agentHistory' : '#sessHist');
   await page.waitForSelector('#sessHistory .sess-hrow', { visible: true });
 }
 async function chooseGlobal() {
@@ -394,7 +401,7 @@ try {
   }
   check('isolated reader starts', ready);
   for (const asset of ['index.html', 'style.css', 'agent-workspace.css', 'js/app.js', 'js/agent-workspace.js',
-    'js/agent-profile.js', 'js/ai.js', 'js/sessions.js', 'js/session-move.js']) {
+    'js/agent-profile.js', 'js/agent-settings.js', 'js/ai.js', 'js/sessions.js', 'js/session-move.js']) {
     let served = await fetch(`${base}/${asset}`).then(response => response.text());
     if (asset === 'index.html') served = served.replace(/\n<!-- prt-auth:[\s\S]*?<\/script>\n/, '');
     assert.equal(served, fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8'), `${asset} is the current source/build`);
@@ -419,48 +426,68 @@ try {
   else {
   page = await newPage('paper');
   check('home assistant entry is available before opening any PDF', await visible('#homeAgent')
-    && await page.evaluate(() => !window.__state.doc && !window.__viewer.pdf));
+    && !await visible('#agentBtn') && await page.evaluate(() => !window.__state.doc && !window.__viewer.pdf));
   await page.click('#homeAgent');
   await page.waitForSelector('body.agent-full #rightSide', { visible: true });
   await settled();
-  check('first English visit offers the default name without blocking conversation controls',
-    await page.$eval('#agentNameInput', input => input.value) === 'Alina' && await visible('#agentNameForm') && await visible('#chatInput'));
-  await page.waitForSelector('#sessEntryCard .entry-primary', { visible: true });
-  const entryText = await page.$eval('#sessEntryCard', node => node.textContent);
-  check('no-PDF global entry lists global sessions without paper or folder history',
-    entryText.includes('Global research primary') && entryText.includes('Global research secondary')
-    && !entryText.includes('private discussion'));
+  check('first English visit has a dedicated landing with a usable composer',
+    await page.$eval('#agentLandingName', node => node.textContent) === 'Alina'
+    && await visible('#agentLanding') && await visible('#chatInput') && !await visible('#aiArea'));
+  check('landing gives find, resume and history one visible entrance each', await page.evaluate(() =>
+    ['agentStartSearch', 'agentResume', 'agentHistory'].every(id => document.getElementById(id).getClientRects().length)
+    && ['agentBtn', 'agentIdentity', 'sessBar', 'agentPapersToggle'].every(id => !document.getElementById(id).getClientRects().length)
+    && !document.getElementById('agentNameEdit') && !document.getElementById('agentNameForm')));
+  await page.click('#agentStartSearch');
+  check('find papers focuses the shared composer without an extra dialog', await page.evaluate(() =>
+    document.activeElement.id === 'chatInput' && document.body.classList.contains('agent-landing')));
+  for (const width of [1920, 900, 320]) {
+    await page.setViewport({ width, height: 940 }); await wait(150);
+    await layout(`dedicated landing fits ${width}px`);
+    assert.ok(await page.evaluate(() => [...document.querySelectorAll('.agent-launch-copy')].every(node => {
+      const box = node.getBoundingClientRect(), card = node.closest('.agent-launch').getBoundingClientRect();
+      return box.left >= card.left && box.right <= card.right && node.clientWidth >= node.scrollWidth;
+    })), `landing action labels fit their cards at ${width}px`);
+    await page.screenshot({ path: path.join(scratch, `landing-${width}.png`) });
+  }
+  await page.setViewport({ width: 1400, height: 940 });
   check('no-PDF assistant owns the canonical global scope', await scope() === 'default');
   await history();
   const globalRows = await page.$$eval('#sessHistory .sess-hrow', nodes => nodes.map(node => node.dataset.sid));
   assert.deepEqual([...new Set(globalRows)].sort(), ['global-primary', 'global-secondary']);
   pass('full global history excludes paper and folder sessions');
   await page.keyboard.press('Escape');
-  if (!await visible('#agentNameForm')) await page.click('#agentNameEdit');
+  await page.click('#settingsBtn'); await page.waitForSelector('#settingsModal', { visible: true });
+  await page.click('#settingsNavAgent');
+  check('the name and persona editor is available only in Settings', await visible('#agentNameInput')
+    && await page.$eval('#agentNameDisplay', node => node.tagName) === 'SPAN' && !await visible('#saveSettings'));
   await page.$eval('#agentNameInput', input => { input.value = 'Research companion'; input.dispatchEvent(new Event('input', { bubbles: true })); });
-  await page.click('#agentNameSave');
+  await page.click('#agentProfileSave');
   await page.waitForFunction(() => document.querySelector('#agentIdentity').textContent.includes('Research companion'));
   await settled();
-  check('assistant name changes through its UI', await page.$eval('#agentIdentity', node => node.textContent.includes('Research companion')));
-  await page.click('#agentNameEdit');
-  await page.click('#agentProfileDetails summary');
+  check('assistant name changes through Settings', await page.$eval('#agentLandingName', node => node.textContent.includes('Research companion')));
   await page.$eval('#agentPersonalityInput', input => { input.value = 'Clear, patient, concise'; input.dispatchEvent(new Event('input', { bubbles: true })); });
   await page.select('#agentGenderSelect', '女');
   await page.$eval('#agentHabitsInput', input => { input.value = 'Start with intuition'; input.dispatchEvent(new Event('input', { bubbles: true })); });
-  await page.click('#agentNameSave');
-  await page.waitForFunction(() => document.querySelector('#agentNameForm').hidden);
+  await page.click('#agentProfileSave');
+  await page.waitForFunction(() => document.querySelector('#agentProfileSave').disabled);
+  await page.click('#closeSettings');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.__ctx && window.__state?.papers.length === 4);
   await page.evaluate(() => window.__ctx.setScopeRange('current'));
-  await full();
+  await full({ landing: true });
   check('assistant name survives a reload', await page.$eval('#agentIdentity', node => node.textContent.includes('Research companion')));
-  check('saved naming prompt does not reopen after reload', !await visible('#agentNameForm'));
-  await page.click('#agentNameEdit');
+  check('returning to Alina shows the landing without a naming overlay', await visible('#agentLanding')
+    && await page.$('#agentNameForm') === null);
+  await page.click('#settingsBtn'); await page.waitForSelector('#settingsModal', { visible: true }); await page.click('#settingsNavAgent');
   check('optional personality fields survive a reload', await page.evaluate(() =>
     document.querySelector('#agentPersonalityInput').value === 'Clear, patient, concise'
     && document.querySelector('#agentGenderSelect').value === '女'
     && document.querySelector('#agentHabitsInput').value === 'Start with intuition'));
-  await page.click('#agentNameCancel');
+  await page.click('#closeSettings');
+  await chooseGlobal();
+  await page.click('#agentLandingBack'); await settled();
+  check('conversation returns to its landing through the dedicated Start entrance', await visible('#agentLanding')
+    && !await visible('#agentLandingBack') && await scope() === 'default');
   await chooseGlobal();
   await typeDraft('A question without an open PDF');
   await page.click('#sendBtn');
@@ -541,6 +568,30 @@ try {
   check('restore selects the paper conversation without importing global text or draft', !(await chatText()).includes('GLOBAL_PRIMARY_ONLY')
     && await draft() !== globalDraft && await scope() === paperB.docId);
   await typeDraft('LOCAL_B_DRAFT');
+  await page.click('#agentExpand'); await settled();
+  check('expanding a local conversation preserves its owner, session and draft', await scope() === paperB.docId
+    && await sid() === 'paper-b-old' && await draft() === 'LOCAL_B_DRAFT' && await visible('#aiArea'));
+  holdGeneric = true;
+  await typeDraft('FULL_GENERIC_QUESTION LOCAL_EXPANDED_SOURCE: Explain this paper.'); await page.click('#sendBtn');
+  for (let attempt = 0; attempt < 200 && !heldGeneric; attempt++) await wait(25);
+  assert.ok(heldGeneric, 'expanded local paper question reaches the synthetic model');
+  const localExpandedContext = await page.evaluate(() => {
+    const job = [...window.__ctx.chatJobs.values()].find(job => job.pending?.question.includes('LOCAL_EXPANDED_SOURCE'));
+    return { docId: job?.pending.docId, sourceDocId: job?.pending.sourcePaper?.docId, pages: job?.reader?.numPages };
+  });
+  assert.equal(localExpandedContext.docId, paperB.docId);
+  assert.equal(localExpandedContext.sourceDocId, paperB.docId);
+  assert.equal(localExpandedContext.pages, 1);
+  heldGeneric.writeHead(200, { 'Content-Type': 'text/event-stream' });
+  heldGeneric.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'SYNTHETIC_LOCAL_EXPANDED_REPLY' } }] })}\n\ndata: [DONE]\n\n`);
+  heldGeneric = null;
+  await page.waitForFunction(() => !window.__state.busy && document.querySelector('#aiArea').textContent.includes('SYNTHETIC_LOCAL_EXPANDED_REPLY'));
+  pass('expanded local questions retain their visible PDF context');
+  await typeDraft('LOCAL_B_DRAFT');
+  await handoff(paperA); await page.click('#agentContinue'); await settled();
+  check('opening another paper from an expanded local chat keeps the original conversation owner',
+    await scope() === paperB.docId && await sid() === 'paper-b-old' && await draft() === 'LOCAL_B_DRAFT'
+    && (await chatText()).includes('PAPER_B_PRIVATE_ONLY'));
   await full();
   check('returning to global restores its own draft', await draft() === globalDraft && await sid() === 'global-primary');
   await handoff(paperA);
@@ -653,7 +704,7 @@ try {
   await chooseLocal('paper-b-old', 'PAPER_B_PRIVATE_ONLY');
   check('local draft also survives global and paper handoffs', await draft() === 'LOCAL_B_DRAFT');
   await full();
-  await page.click('#agentBack');
+  await page.click('#homeBtn');
   await page.waitForSelector('#home', { visible: true });
   await page.click(`#homeList .home-item[data-id=${JSON.stringify(paperB.docId)}] .home-item-go`);
   await page.waitForFunction(id => window.__state.viewerDocId === id && document.body.classList.contains('reading')
@@ -823,18 +874,33 @@ try {
   check('global preference uses the same global session in both views', await sid() === 'global-primary'
     && await page.evaluate(() => localStorage.getItem('reader.session.scopeMode')) === 'global');
   page = await newPage('paper', 'zh-CN');
-  await full();
-  check('first Chinese visit displays the default Chinese name and canonical editable identity',
-    await page.$eval('#agentIdentity', node => node.textContent.includes('小林'))
-    && await page.$eval('#agentNameInput', input => input.value) === 'Alina' && await visible('#agentNameForm'));
+  await full({ landing: true });
+  check('first Chinese visit displays the default Chinese name without an inline editor',
+    await page.$eval('#agentLandingName', node => node.textContent.includes('小林'))
+    && await page.$eval('#agentNameInput', input => input.value) === 'Alina' && !await visible('#agentNameInput'));
+  const previousLandingSid = await sid();
+  await page.evaluate(() => {
+    const composer = document.getElementById('composer'), animate = composer.animate.bind(composer);
+    window.__landingComposer = composer; window.__landingAnimations = [];
+    composer.animate = (frames, options) => {
+      window.__landingAnimations.push({ frames, duration: options?.duration });
+      return animate(frames, options);
+    };
+  });
   await typeDraft('FIRST_NAME_DISMISS_QUESTION'); await page.click('#sendBtn');
   await page.waitForFunction(() => !window.__state.busy && document.querySelector('#aiArea').textContent.includes('SYNTHETIC_NAME_DISMISS_REPLY'));
-  check('a first question dismisses naming without requiring setup', !await visible('#agentNameForm') && await scope() === 'default');
+  check('a question from the landing starts a new global conversation without setup', !await visible('#agentLanding')
+    && await scope() === 'default' && await sid() !== previousLandingSid);
+  check('the first question moves the same composer with a short transform animation', await page.evaluate(() =>
+    document.getElementById('composer') === window.__landingComposer
+    && window.__landingAnimations.some(animation => animation.duration === 260
+      && animation.frames.every(frame => typeof frame.transform === 'string'))));
   await page.evaluate(async () => { await window.__ctx.flushComposerDrafts(); await window.__ctx.saveSessionNow(); });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.__ctx && window.__state?.papers.length === 4);
-  await full();
-  check('dismissed initial naming stays dismissed after reload', !await visible('#agentNameForm'));
+  await full({ landing: true });
+  check('returning after the first question opens the dedicated landing again', await visible('#agentLanding')
+    && await page.$('#agentNameForm') === null);
   }
   check('only the local synthetic model was used', modelRequests.length >= 1);
   assert.deepEqual(errors, [], 'no uncaught browser errors or external requests');

@@ -34,6 +34,9 @@ export const AGENT_TOOL_SPECS = [
       parameters: { type: 'object', properties: {
         query: { type: 'string', description: '要寻找的论文名称或主题，2–200字' },
         keywords: { type: 'array', maxItems: 6, items: { type: 'string' }, description: '2–6个有辨识度的标题、术语或同义表达；中文描述英文论文时包括英文术语。每项是独立检索短语，避免只给paper、模型等泛词。' },
+        mode: { type: 'string', enum: ['auto', 'known', 'topic'], description: 'known 找一篇特定论文；topic 查相关主题；不确定用 auto。' },
+        titles: { type: 'array', maxItems: 4, items: { type: 'string' }, description: '同一目标论文的准确完整标题；没有把握时留空，不得加入用户没有请求的替代论文。' },
+        aliases: { type: 'array', maxItems: 6, items: { type: 'string' }, description: '同一目标的简称或别名；不放相关工作、替代方法或宽泛关键词。' },
       }, required: ['query'], additionalProperties: false },
     },
   },
@@ -180,7 +183,7 @@ export const AGENT_TOOL_SPECS = [
 /** 放进 system 末尾的「工具模式」说明（简短，不改变原有规则） */
 export const AGENT_SYSTEM_NOTE = [
   '【寻找论文】读者用标题、主题、方法或模糊内容描述找论文时，使用 discover_papers，并把描述转为有辨识度的中英文术语和同义关键词。它会先查完整本地书架，再按联网权限查学术来源；不要用 list_papers 的文件名列表或一次关键词未命中声称本地不存在。',
-  '发现结果是候选，依据标题和实际命中片段解释关联，不要把关键词相关等同于确认是读者要找的论文。扫描件、读取失败和未完成的查找都不能当作不存在。结果卡片由程序显示，可以直接点击；不要编造本地路径、来源网址或PDF下载链接，不自动打开或下载。查到本地候选后让读者选择，若需要更多证据可以自行继续读候选。',
+  '发现结果是候选，依据标题和实际命中片段解释关联，不要把关键词相关等同于确认是读者要找的论文。relatedMatches/referenceMatches只是提及或引用目标的其它论文，不可当成目标。扫描件、读取失败和未完成的查找都不能当作不存在。结果卡片由程序显示，点击整张卡片会打开论文并恢复阅读位置；不要输出命中页链接或重复打开按钮，不编造路径和网址，不自动打开或下载。只要求找/打开论文时只给简短确认与实际卡片，不补摘要、指标、阅读建议或其它候选主题。',
   '没有当前论文时仍可聊天、查本地书架、发现论文和读取其它论文；当前页工具只在明确指定了文件时使用。一般联网资料可用 search_web；是否允许联网以工具结果为准。',
   `【工具模式】你可以使用只读工具自己决定读哪些材料，最多 ${AGENT_MAX_ROUNDS} 轮、每轮最多 ${AGENT_MAX_CALLS_PER_ROUND} 个工具。`,
   '你自己判断本次应当直接回答、接着上文解释、澄清问题，还是查阅材料。已有选区、所在页和对话记录足够时就直接回答；工具是可选能力，不是每次回答前的必经流程。不要为了检查流程重复读页或获取阅读状态。',
@@ -285,7 +288,11 @@ export function validateToolCall(call, { numPages = 0 } = {}) {
     if (query.length < 2) return { error: 'query 至少 2 个字' };
     const keywords = [...new Set((Array.isArray(args.keywords) ? args.keywords : [])
       .filter(value => typeof value === 'string').map(value => value.trim().slice(0, 100)).filter(value => value.length >= 2))].slice(0, 6);
-    return { name, args: { query, ...(name === 'discover_papers' ? { keywords } : {}) } };
+    const phrases = (value, limit) => [...new Set((Array.isArray(value) ? value : [])
+      .filter(item => typeof item === 'string').map(item => item.trim().slice(0, 180)).filter(item => item.length >= 2))].slice(0, limit);
+    return { name, args: { query, ...(name === 'discover_papers' ? { keywords,
+      mode: ['auto', 'known', 'topic'].includes(args.mode) ? args.mode : 'auto',
+      titles: phrases(args.titles, 4), aliases: phrases(args.aliases, 6) } : {}) } };
   }
   if (name === 'get_reading_state') return { name, args: {} };
   const page = toInt(args.page);

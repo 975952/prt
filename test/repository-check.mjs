@@ -7,7 +7,7 @@ import { execFileSync } from 'node:child_process';
 const root = path.resolve(import.meta.dirname, '..');
 const docs = ['README.md', 'README.en.md', 'docs/quick-start.en.md', 'docs/internationalization.md', 'CHANGELOG.md', 'CONTRIBUTING.md', 'SECURITY.md',
   'docs/README.md', 'docs/使用说明书.md', 'docs/开发指南.md', 'docs/第三方组件.md',
-  'docs/多窗口阅读.md', 'docs/prompts.md', 'docs/assets/README.md', 'desktop/README.md'];
+  'docs/多窗口阅读.md', 'docs/Alina与会话体系.md', 'docs/prompts.md', 'docs/assets/README.md', 'desktop/README.md'];
 const inGit = fs.existsSync(path.join(root, '.git'));
 const files = inGit
   ? execFileSync('git', ['ls-files', '-z'], { cwd: root, encoding: 'utf8' }).split('\0').filter(Boolean) : [];

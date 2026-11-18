@@ -53,10 +53,14 @@ const upstream = http.createServer(async (req, res) => {
     const body = JSON.parse(Buffer.concat(chunks).toString('utf8'));
     const system = body.messages.filter(m => m.role === 'system').map(m => String(m.content)).join('\n');
     if (/PAPER_DISCOVERY_QUERY_PLAN/.test(system)) {
-      if (body.messages.some(m => JSON.stringify(m.content).includes('CASE_MALFORMED'))) {
+      const marker = /CASE_([A-Z_]+)/.exec(body.messages.filter(m => m.role === 'user').map(m => JSON.stringify(m.content)).join('\n'))?.[1];
+      if (marker === 'MALFORMED') {
         plannerCalls++; reply(res, body, { content: '{broken planner JSON' }); return;
       }
-      plannerCalls++; reply(res, body, { content: JSON.stringify({ query: '减少注意力显存开销的文章', keywords: ['FlashAttention', 'memory efficient attention'] }) }); return;
+      const plan = marker === 'MULTI' ? { queries: ['FlashAttention', 'Chemical Measurements'].map(query => ({ query, keywords: [query], mode: 'topic' })) }
+        : ['LOCAL', 'FALLBACK'].includes(marker) ? { query: '减少注意力显存开销的文章', keywords: ['FlashAttention', 'memory efficient attention'], mode: 'topic' }
+          : { query: 'quantum widget discovery', keywords: ['quantum widget'], mode: 'topic' };
+      plannerCalls++; reply(res, body, { content: JSON.stringify(plan) }); return;
     }
     if (/后台学习记忆提取器|滚动摘要|会话标题|起标题/.test(system)) { reply(res, body, { content: '[]' }); return; }
     modelRequests.push(body);
@@ -91,6 +95,21 @@ const sessionUrl = (scope, sid) => `/api/session?${new URLSearchParams({ doc: sc
 const networkCount = () => apiRequests.filter(r => ['/api/ref-search', '/api/web-search'].includes(r.path)).length;
 const settled = () => page.waitForFunction(() => !window.__state.busy && document.querySelector('#rightSide').getAttribute('aria-busy') !== 'true');
 const discovery = () => page.evaluate(() => [...window.__state.sessionEntries].reverse().find(entry => entry.discovery)?.discovery || null);
+async function openAgentEntrance() {
+  const id = await page.waitForFunction(() => ['homeAgent', 'agentBtn'].find(id => {
+    const node = document.getElementById(id); return node && node.getClientRects().length && getComputedStyle(node).visibility !== 'hidden';
+  })).then(handle => handle.jsonValue());
+  await page.locator(`#${id}`).click();
+  await page.waitForSelector('body.agent-full #rightSide', { visible: true });
+}
+async function restoreFromLanding(sid) {
+  await settled();
+  await page.click('#agentHistory');
+  const selector = `#sessHistory .sess-hrow[data-sid=${JSON.stringify(sid)}] .sess-hgo`;
+  await page.waitForSelector(selector, { visible: true });
+  await page.locator(selector).click();
+  await settled();
+}
 async function newPage(names, range = 'web', options = {}) {
   const context = await browser.createBrowserContext();
   const tab = await context.newPage(); page = tab;
@@ -119,7 +138,7 @@ async function newPage(names, range = 'web', options = {}) {
     if (url.origin === base && ['/api/web-search', '/api/ref-search'].includes(url.pathname)) {
       return request.respond({ status: 200, contentType: 'application/json', body: JSON.stringify({ query: url.searchParams.get('q'),
         provider: 'synthetic', status: 'ok', results: [
-          { title: 'Quantum Widget Research', url: 'https://example.test/research/widget', source: 'OpenAlex', year: 2024,
+          { title: 'Quantum Widget Research', url: 'https://doi.org/10.1234/quantum-widget', source: 'OpenAlex', year: 2024,
             snippet: 'A synthetic topical result with a landing page only.' },
           { title: 'Quantum Widget Preprint', url: 'https://arxiv.org/abs/2401.12345', pdfUrl: 'https://arxiv.org/pdf/2401.12345',
             source: 'arXiv', year: 2024, snippet: 'A synthetic preprint with an explicit PDF URL.' },
@@ -149,7 +168,13 @@ async function send(marker, question = '请帮我找研究 quantum widget 的论
   await page.$eval('#chatInput', (input, value) => { input.value = value; input.dispatchEvent(new Event('input', { bubbles: true })); }, `${question} CASE_${marker}`);
   await page.click('#sendBtn');
   if (finish) {
-    await page.waitForFunction(marker => !window.__state.busy && document.querySelector('#aiArea').textContent.includes(`SYNTHETIC_DISCOVERY_REPLY_${marker}`), {}, marker);
+    await page.waitForFunction(marker => {
+      const rows = window.__state.sessionEntries;
+      const at = rows.findLastIndex(row => row.kind === 'user' && row.text?.includes(`CASE_${marker}`));
+      const answer = rows.slice(at + 1).find(row => row.kind === 'assistant');
+      return at >= 0 && !window.__state.busy && answer?.status === 'complete'
+        && (marker === 'GENERIC' ? answer.text.includes(`SYNTHETIC_DISCOVERY_REPLY_${marker}`) : !!answer.discovery);
+    }, {}, marker);
     await settled();
   }
 }
@@ -179,10 +204,10 @@ try {
   const local = await discovery(); assert.equal(local.local.status, 'matched');
   assert.ok(local.local.coverage.complete); assert.equal(local.local.matches[0].path, '2307.08691.pdf');
   assert.match(local.local.matches[0].snippet, /FlashAttention/); assert.equal(networkCount(), beforeLocal);
-  await page.waitForSelector('.paper-discovery-card[data-paper-path="2307.08691.pdf"] .paper-discovery-primary', { visible: true });
+  await page.waitForSelector('button.paper-discovery-local[data-paper-path="2307.08691.pdf"]', { visible: true });
   if (desktop) await page.screenshot({ path: path.join(scratch, 'discovery-local-full.png'), fullPage: true });
   const sourceSid = await page.evaluate(() => window.__ctx.activeSession);
-  await page.locator('.paper-discovery-card[data-paper-path="2307.08691.pdf"] .paper-discovery-primary').click();
+  await page.locator('button.paper-discovery-local[data-paper-path="2307.08691.pdf"]').click();
   await page.waitForFunction(() => !!window.__viewer.pdf && document.body.classList.contains('agent-docked'));
   assert.equal(await page.evaluate(() => window.__ctx.activeSession), sourceSid);
   assert.equal(await page.evaluate(() => window.__ctx.agentWorkspaceState().scope), 'default');
@@ -192,8 +217,8 @@ try {
   const saved = await json(sessionUrl('default', sourceSid));
   assert.ok(saved.entries.some(entry => entry.discovery?.local.matches[0]?.path === '2307.08691.pdf'));
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => !!window.__ctx);
-  await page.click('#agentBtn'); await page.waitForSelector('body.agent-full #rightSide', { visible: true });
-  await settled(); await page.evaluate(sid => window.__ctx.switchSession(sid, { force: true }), sourceSid);
+  await openAgentEntrance();
+  await restoreFromLanding(sourceSid);
   await page.waitForSelector('.paper-discovery-card[data-paper-path="2307.08691.pdf"]', { visible: true });
   pass('structured discovery cards survive real session save and page reload');
   const target = listing.papers.find(p => p.name === 'chemistry.pdf');
@@ -211,7 +236,7 @@ try {
   await send('LOCAL', '帮我找减少注意力显存开销的论文');
   await page.evaluate(() => {
     const nativeFetch = window.fetch; let held = false;
-    window.__lateOpenButton = document.querySelector('.paper-discovery-primary');
+    window.__lateOpenButton = document.querySelector('button.paper-discovery-local');
     window.fetch = (input, options) => {
       const url = new URL(typeof input === 'string' ? input : input.url, location.href);
       if (!held && url.pathname === '/api/papers') {
@@ -223,7 +248,7 @@ try {
       return nativeFetch(input, options);
     };
   });
-  await page.locator('.paper-discovery-card[data-paper-path="2307.08691.pdf"] .paper-discovery-primary').click();
+  await page.locator('button.paper-discovery-local[data-paper-path="2307.08691.pdf"]').click();
   await page.waitForFunction(() => window.__lateOpenRefreshStarted);
   await page.evaluate(() => window.__ctx.newSession({ silent: true }));
   await settled();
@@ -284,11 +309,8 @@ try {
   const stoppedSave = await json(sessionUrl('default', stoppedSid));
   assert.equal(stoppedSave.entries.find(entry => entry.discovery)?.discovery.online.status, 'failed');
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => !!window.__ctx);
-  await page.click('#agentBtn'); await page.waitForSelector('body.agent-full #rightSide', { visible: true });
-  await settled(); await page.evaluate(async sid => {
-    const { sessionsHideEntryCard } = await import('/js/sessions.js');
-    sessionsHideEntryCard(); await window.__ctx.switchSession(sid, { force: true });
-  }, stoppedSid);
+  await openAgentEntrance();
+  await restoreFromLanding(stoppedSid);
   await page.waitForFunction(() => [...document.querySelectorAll('.paper-discovery-action')].some(button => button.textContent === '重试联网查找'));
   assert.equal((await discovery()).online.status, 'failed');
   assert.ok(!(await page.$eval('#aiArea', area => area.textContent)).includes('正在查找网络论文'));
@@ -301,7 +323,7 @@ try {
   for (const [name, marker] of [['scan.pdf', 'SCAN'], ['unavailable.pdf', 'ERROR']]) {
     await newPage([name]); const before = networkCount(); await send(marker); const found = await discovery();
     assert.equal(found.local.status, 'incomplete'); assert.equal(found.local.coverage.complete, false);
-    assert.equal(networkCount(), before); assert.ok(found.local.coverage.unreadable >= 1);
+    assert.equal(networkCount(), before); assert.ok(found.local.coverage.unreadable + found.local.coverage.textIncomplete >= 1);
     if (marker === 'SCAN') {
       await page.locator('.paper-discovery-footer .paper-discovery-action').click();
       await page.waitForFunction(() => [...window.__state.sessionEntries].some(entry => entry.discovery?.online.results?.length));
@@ -318,7 +340,7 @@ try {
   await newPage(['2307.08691.pdf']); const beforeFallback = networkCount(), plansBefore = plannerCalls;
   await send('FALLBACK', '帮我找能减少注意力显存开销的论文');
   assert.ok(plannerCalls > plansBefore); assert.equal((await discovery()).local.matches[0].path, '2307.08691.pdf');
-  assert.equal(networkCount(), beforeFallback); pass('explicit discovery falls back to model keyword planning when tools are ignored');
+  assert.equal(networkCount(), beforeFallback); pass('explicit discovery uses model keyword planning without requiring model tool support');
 
   await newPage(['chemistry.pdf']); const beforeMalformed = networkCount(), malformedPlans = plannerCalls;
   await send('MALFORMED', '帮我找关于量子器件耦合机制的论文');
@@ -339,14 +361,11 @@ try {
   const multiSaved = await json(sessionUrl('default', multiSid));
   assert.equal(multiSaved.entries.find(entry => entry.discoveries?.length).discoveries.length, 2);
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => !!window.__ctx);
-  await page.click('#agentBtn'); await page.waitForSelector('body.agent-full #rightSide', { visible: true });
-  await settled(); await page.evaluate(async sid => {
-    const { sessionsHideEntryCard } = await import('/js/sessions.js'); sessionsHideEntryCard();
-    await window.__ctx.switchSession(sid, { force: true });
-  }, multiSid);
+  await openAgentEntrance();
+  await restoreFromLanding(multiSid);
   await page.waitForFunction(() => document.querySelectorAll('.paper-discovery').length === 2);
   assert.equal(await page.$$eval('.paper-discovery-card[data-paper-path="2307.08691.pdf"], .paper-discovery-card[data-paper-path="chemistry.pdf"]', nodes => nodes.length), 2);
-  pass('two discovery calls in one round preserve both result groups through save and reload');
+  pass('one request for two papers preserves both discovery groups through save and reload');
 
   const importScenario = { attempts: 0 };
   await newPage(['chemistry.pdf'], 'web', { importScenario }); await send('IMPORT');
@@ -357,7 +376,7 @@ try {
   assert.equal(importScenario.attempts, 1); assert.equal((await discovery()).online.results.filter(row => row.pdfUrl).length, 1);
   assert.equal(await page.$eval(importButton, button => button.disabled), false);
   await page.locator(importButton).click();
-  await page.waitForSelector('.paper-discovery-card[data-paper-path="imported-widget.pdf"] .paper-discovery-primary', { visible: true });
+  await page.waitForSelector('button.paper-discovery-local[data-paper-path="imported-widget.pdf"]', { visible: true });
   assert.equal(importScenario.attempts, 2); assert.ok(importScenario.imported);
   assert.equal(await page.evaluate(() => window.__ctx.activeSession), importSid);
   assert.ok(await page.evaluate(() => !window.__viewer.pdf && document.body.classList.contains('agent-full')));
@@ -367,13 +386,10 @@ try {
   assert.equal(await page.$$eval('.paper-discovery-card button.paper-discovery-action', nodes => nodes.filter(node => node.textContent.includes('导入书架')).length), 0);
   await page.evaluate(() => window.__ctx.saveSessionNow());
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => !!window.__ctx);
-  await page.click('#agentBtn'); await page.waitForSelector('body.agent-full #rightSide', { visible: true });
-  await settled(); await page.evaluate(async sid => {
-    const { sessionsHideEntryCard } = await import('/js/sessions.js'); sessionsHideEntryCard();
-    await window.__ctx.switchSession(sid, { force: true });
-  }, importSid);
-  await page.waitForSelector('.paper-discovery-card[data-paper-path="imported-widget.pdf"] .paper-discovery-primary', { visible: true });
-  await page.locator('.paper-discovery-card[data-paper-path="imported-widget.pdf"] .paper-discovery-primary').click();
+  await openAgentEntrance();
+  await restoreFromLanding(importSid);
+  await page.waitForSelector('button.paper-discovery-local[data-paper-path="imported-widget.pdf"]', { visible: true });
+  await page.locator('button.paper-discovery-local[data-paper-path="imported-widget.pdf"]').click();
   await page.waitForFunction(docId => !!window.__viewer.pdf && window.__state.viewerDocId === docId
     && document.body.classList.contains('agent-docked'), {}, importScenario.imported.docId);
   assert.equal(await page.evaluate(() => window.__ctx.activeSession), importSid);

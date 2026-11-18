@@ -10,6 +10,7 @@ import { createAgentWorkspace } from './agent-workspace.js';
 import { discoverLocalPapers } from './paper-discovery.js';
 import { findOnlinePapers, paperDiscoveryIntent, safePaperLink } from './paper-discovery-online.js';
 import { renderPaperDiscovery, normalizePaperDiscovery } from './paper-discovery-ui.js';
+import { isPaperNavigationRequest, normalizePaperSearchPlan, PAPER_SEARCH_PLAN_PROMPT } from './paper-request.js';
 import { AGENT_PROFILE_KEY, readAgentProfile, writeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle, paperAccess } from './pdfview.js';
@@ -713,7 +714,10 @@ let agentWorkspace = null;
 let agentSessionOverride = null;
 let agentFolderOverride = null;
 let agentPaperOverride = '';
+// Opening reading material must not silently move the conversation that opened it.
+let agentPinnedOwner = null;
 let agentWorkspaceView = 'closed';
+let agentLandingActive = false;
 let agentNavigationBusy = false;
 let conversationMoveBusy = false;
 let moveTargetNavigation = '';
@@ -722,6 +726,15 @@ let agentName = '';
 const effectiveSessionScopeMode = () => agentSessionOverride || readSessionScopeMode();
 const hasChatScope = () => !!state.doc || !!agentSessionOverride || effectiveSessionScopeMode() === 'global';
 const sessionFolderPath = () => agentFolderOverride ?? currentFolderPath();
+function chatReadingPaper() {
+  const paper = state.doc;
+  if (!paper || agentWorkspaceView !== 'full') return paper;
+  const mode = effectiveSessionScopeMode();
+  if (mode === 'global') return null;
+  if (agentPinnedOwner) return paper;
+  if (mode === 'paper') return paper.docId === sessionScopeKey() ? paper : null;
+  return (paper.folder || String(paper.path || '').split('/').slice(0, -1).join('/')) === sessionFolderPath() ? paper : null;
+}
 
 const state = {
   doc: null,
@@ -1228,6 +1241,10 @@ function syncHomeBtnVisibility() {
   const home = $('#homeBtn');
   if (!home) return;
   home.classList.remove('hidden');
+  const label = agentWorkspaceView === 'closed' ? tr('首页') : tr('书架');
+  home.querySelector('span').textContent = label;
+  home.title = agentWorkspaceView === 'closed' ? tr('回到首页（书架）') : tr('书架');
+  home.setAttribute('aria-label', home.title);
   if (document.body.classList.contains('reading')) home.removeAttribute('aria-current');
   else home.setAttribute('aria-current', 'page');
 }
@@ -2170,7 +2187,7 @@ function initViewer() {
     openAgentWorkspace, openAgentPaper,
     discoverPapers: (query, keywords = [], options = {}) => discoverPapersForQuery(query, keywords, options),
     agentWorkspaceState: () => ({ view: agentWorkspaceView, scope: sessionScopeKey(),
-      sid: activeSidFor(state.doc?.docId), name: agentName, handoff: !!agentHandoff }),
+      sid: activeSidFor(state.doc?.docId), name: agentName, handoff: !!agentHandoff, landing: agentLandingActive }),
     newSession, switchSession, deleteSession, clearCurrentSession, loadSessionList, switchFolder,
     // P2.5 Agent 读取：开关（写 localStorage）、默认值、最近一次运行统计
     get agentRead() { return agentReadEnabled(); },
@@ -2407,12 +2424,23 @@ let homeReadingState = null;
 
 function setAgentWorkspaceView(view) {
   agentWorkspaceView = view;
+  if (view !== 'full') setAgentLanding(false);
   agentWorkspace?.setView(view);
+  syncHomeBtnVisibility();
   if ($('#chatInput') && rightPanelInCol(1) !== 'translate') {
     $('#chatInput').placeholder = view === 'full' ? tr('描述想找的论文，或直接聊聊…') : tr('问点什么…');
   }
   renderSessionBar();
   updateComposerHint();
+}
+function latestAgentConversation() {
+  return sessionsGetList().filter(row => !row.archived && row.count > 0)
+    .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0))[0] || null;
+}
+function setAgentLanding(on) {
+  agentLandingActive = !!on;
+  const recent = on ? latestAgentConversation() : null;
+  agentWorkspace?.setLanding(!!on, { hasRecent: !!recent, recentTitle: recent?.title || '' });
 }
 function dismissAgentHandoff() {
   agentHandoff = null;
@@ -2437,12 +2465,13 @@ async function parkAgentConversation() {
   parkChatSession();
 }
 async function changeAgentScope(next) {
-  if (agentSessionOverride === next) return;
+  if (agentSessionOverride === next && !agentPinnedOwner) return;
   await parkAgentConversation();
   sessionNavigationSeq += 1;
   sessionsCloseOverlays();
   sessionsHideEntryCard();
   agentSessionOverride = next;
+  agentPinnedOwner = null;
   agentFolderOverride = null;
   agentPaperOverride = '';
   state.history = []; state.sessionSummary = ''; state.summaryCovered = 0; state.paperMemory = '';
@@ -2454,7 +2483,18 @@ function initAgentWorkspace() {
   const profile = readAgentProfile();
   agentName = agentDisplayName(profile);
   agentWorkspace = createAgentWorkspace({
-    onOpen: openAgentWorkspace, onExpand: openAgentWorkspace,
+    onOpen: () => openAgentWorkspace(), onExpand: () => openAgentWorkspace({ landing: false }),
+    onLanding: () => openAgentWorkspace(),
+    onStartSearch: () => $('#chatInput').focus({ preventScroll: true }),
+    onResume: async () => {
+      const row = latestAgentConversation();
+      if (!row) return;
+      sessionsHideEntryCard();
+      await openSessionFromHistory(row, { force: true });
+      setAgentLanding(false);
+      $('#chatInput').focus({ preventScroll: true });
+    },
+    onHistory: () => { $('#sessHist').click(); },
     onBack: async () => { await parkAgentConversation(); showHome(); },
     onOpenPaper: openAgentPaper,
     onContinue: dismissAgentHandoff,
@@ -2478,22 +2518,25 @@ function initAgentWorkspace() {
     refreshAgentTitle();
   });
 }
-async function openAgentWorkspace() {
+async function openAgentWorkspace({ landing = true } = {}) {
   if (agentNavigationBusy) return;
   agentNavigationBusy = true;
   try {
     const from = agentWorkspaceView === 'docked' ? agentWorkspace.captureRect() : null;
-    await changeAgentScope('global');
+    if (landing && agentSessionOverride === 'global') await parkAgentConversation();
+    // The home entrance opens the global landing; expanding a docked chat keeps
+    // its current owner, conversation and unsent draft.
+    if (landing || agentWorkspaceView === 'closed') await changeAgentScope('global');
     dismissAgentHandoff();
     setPanelVisible('chat', true);
     setAgentWorkspaceView('full');
+    setAgentLanding(landing);
     setView('reading');
     const continuing = chatViews.has(currentChatKey()) || sessionHasChatContent();
-    await sessionsOpenWorkspace({ choose: !continuing });
+    await sessionsOpenWorkspace({ choose: landing || !continuing });
+    setAgentLanding(landing);
     activateComposerDraft('chat');
     if (from) await agentWorkspace.animateFrom(from);
-    if (!readFlag('reader.agent.namingSeen') && !localStorage.getItem(AGENT_PROFILE_KEY)
-      && !localStorage.getItem('reader.agent.name')) agentWorkspace.showNameSetup();
   } finally { agentNavigationBusy = false; }
 }
 async function openAgentPaper(paper) {
@@ -2505,6 +2548,13 @@ async function openAgentPaper(paper) {
   agentWorkspace.setTransitioning(true);
   try {
     await parkAgentConversation();
+    if (!agentPinnedOwner && effectiveSessionScopeMode() !== 'global') {
+      const mode = effectiveSessionScopeMode();
+      agentPinnedOwner = { scope: sessionScopeKey(), slot: activeSessionSlot(state.doc?.docId),
+        paperId: state.doc?.docId || '', folder: sessionFolderPath() };
+      agentSessionOverride = mode;
+      if (mode === 'folder') agentFolderOverride = agentPinnedOwner.folder;
+    }
     pendingSessionOpen = true;
     await openDoc(paper);
     if (state.viewerDocId !== paper.docId || !viewer?.pdf) {
@@ -5737,7 +5787,8 @@ function currentComposerOwner(mode = composerMode()) {
     if (moved) return moved;
   }
   return { docId: mode === 'chat' && effectiveSessionScopeMode() === 'global'
-    ? `agent:default:${activeSidFor(state.doc?.docId) || 'new'}` : state.doc?.docId || '', mode };
+    ? `agent:default:${activeSidFor(state.doc?.docId) || 'new'}`
+    : (mode === 'chat' && agentPinnedOwner ? agentPinnedOwner.paperId : state.doc?.docId) || '', mode };
 }
 const movedDraftOwners = new Map();
 const activeSessionFallback = new Map();
@@ -6192,8 +6243,8 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
   else bodyEl.append(root);
   const record = { id: id || newEntryId(), block, tag: tag || '', page: page || null, quote: quote || '', kind, text: text || '', screenshot: !!shots.length, sources: [], meta: '',
     // B 线 P3：消息带来源文档（问答会话全局共享，恢复时能看出每条是哪篇论文下问的）
-    docId: String(docId || (block === 'chat' && agentWorkspaceView === 'full' ? '' : state.doc?.docId) || ''),
-    docTitle: String(docTitle || (block === 'chat' && agentWorkspaceView === 'full' ? '' : state.doc?.name) || ''),
+    docId: String(docId || (block === 'chat' ? chatReadingPaper()?.docId : state.doc?.docId) || ''),
+    docTitle: String(docTitle || (block === 'chat' ? chatReadingPaper()?.name : state.doc?.name) || ''),
     status: isUser ? 'user' : (text !== undefined ? 'complete' : 'pending'), retry: retry || null };
   root.__sessionRecord = record;
   if (isTranslateEntry) {
@@ -6340,6 +6391,7 @@ function serialiseRetryPayload(raw) {
       useFullText: !!raw.useFullText, useWeb: !!raw.useWeb,
       scopeRange: String(raw.scopeRange || Object.values(SCOPE_RANGES).find((r) => r.full === !!raw.useFullText && r.web === !!raw.useWeb)?.key || ''),
       reading: snapshotReadingRequest(raw.reading),
+      previousDiscovery: paperSearchContext(raw.previousDiscovery),
       history: snapshotHistory(raw.history || []).slice(-6).map((m) => ({ ...m, content: m.content.slice(0, 6000) })),
       attachments: (Array.isArray(raw.attachments) ? raw.attachments : []).slice(0, 12).map((a) => {
         const kind0 = a?.kind === 'image' || a?.screenshot ? 'image' : 'text';
@@ -6478,6 +6530,7 @@ function writeSessionScopeMode(mode) {
 /** 问答会话存到哪个 doc 键：folder 按文件夹；paper 真正按论文（docId）；global 统一 default。
  *  传 docId 时按那篇论文算（切换文档过程中 state.doc 可能已经换过，但旧的会话仍要写回旧 scope）。 */
 function sessionScopeKey(docId = '') {
+  if (agentPinnedOwner) return agentPinnedOwner.scope;
   const mode = effectiveSessionScopeMode();
   if (mode === 'global') return 'default';
   if (mode === 'paper') return String(docId || state.doc?.docId || agentPaperOverride || '') || currentFolderKey();
@@ -6593,6 +6646,7 @@ async function moveConversation(row, target) {
       writeComposerDraft(draftOwner, latest, { edited: true });
       sourceDraftRevision = composerDraftState(sourceDraftOwner).revision;
     }
+    agentPinnedOwner = null;
     agentSessionOverride = mode;
     agentFolderOverride = mode === 'folder' ? folder : null;
     agentPaperOverride = mode === 'paper' ? targetPaper.docId : '';
@@ -6629,6 +6683,7 @@ async function moveConversation(row, target) {
 }
 /** 「当前会话」指针存哪一格：按文件夹 / 每篇论文 / 全局 */
 function activeSessionSlot(docId) {
+  if (agentPinnedOwner) return agentPinnedOwner.slot;
   const mode = effectiveSessionScopeMode();
   if (mode === 'global') return 'global';
   if (mode === 'paper') return `doc:${String(docId || state.doc?.docId || agentPaperOverride || '')}`;
@@ -7384,6 +7439,7 @@ function restoreRetryCallback(row, entry, priorUser) {
     const pending = {
       inputValue: String(payload.inputValue ?? payload.question ?? ''),
       question: String(payload.question || fallbackQuestion || tr("请解释我加进来的这段内容。")),
+      previousDiscovery: paperSearchContext(payload.previousDiscovery) || previousPaperDiscovery(row.id),
       attachments,
       quoteText: String(payload.quoteText || attachments.map((a) => (a.page ? tr("[第{0}页] ", a.page) : '') + (a.text || '')).join('\n\n')),
       firstPage: payload.firstPage || attachments[0]?.page || entry.root.dataset.page || null,
@@ -7667,9 +7723,9 @@ function sessionsContext() {
     adoptList: (rows) => { sessionStore.list = rows; },
     showChatAndRender: () => { showAiBlock('chat'); renderAiArea(); },
     renderAi: () => renderAiArea(),
-    continueSession: (sid, opts) => switchSession(sid, opts || {}),
-    openSessionFromHistory: (row, opts) => openSessionFromHistory(row, opts || {}),
-    startNewSession: (opts) => newSession(opts || {}),
+    continueSession: async (sid, opts) => { await switchSession(sid, opts || {}); setAgentLanding(false); },
+    openSessionFromHistory: async (row, opts) => { await openSessionFromHistory(row, opts || {}); setAgentLanding(false); },
+    startNewSession: async (opts) => { await newSession(opts || {}); setAgentLanding(false); },
     deleteSession: (sid) => deleteSession(sid, { confirm: false }),
     discardSessionFile: async (scope, sid) => {
       for (const key of [...chatViews.keys()]) {
@@ -8113,6 +8169,7 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   updateSendScope();
   if (!silent) toast(tr("已新建会话"), 'ok', 1600);
   sessionsOnSessionChanged({ refresh: false });
+  setAgentLanding(false);
 }
 
 /** 删掉一个会话文件（不碰论文 / 笔记）；删的是当前会话就退回老会话或新建
@@ -9957,6 +10014,7 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
     async discoverPapers(args, options = {}) {
       const operationSignal = options.signal || signal;
       return discoverPapersForQuery(args.query, args.keywords, {
+        mode: args.mode, titles: args.titles, aliases: args.aliases,
         useWeb: pending.useWeb, signal: operationSignal,
         timeBudgetMs: Number(window.__agentTestLimits?.discoveryBudgetMs) || 25000,
         onResult: result => {
@@ -11765,7 +11823,7 @@ function applyRangeForSend(rangeKey) {
 /** 这次到底会发什么 —— 给发送框那句短状态用（不让人猜范围） */
 function rangeOverview() {
   const r = SCOPE_RANGES[currentRange()];
-  if (agentWorkspaceView === 'full') return sendScopeText({ attachments: state.attachments,
+  if (agentWorkspaceView === 'full' && !chatReadingPaper()) return sendScopeText({ attachments: state.attachments,
     history: state.history, useFullText: false, useWeb: r.web, query: $('#chatInput')?.value || '', docId: null });
   const sel = String(state.selection || '').replace(/\s+/g, ' ').trim();
   const head = sel ? tr("选中 {0}{1}", sel.slice(0, 24), sel.length > 24 ? '…' : '') : tr("当前页上下文");
@@ -12248,7 +12306,9 @@ function pickRelevantPages(text, query, k = PICK_K, per = 1600) {
     .join('\n\n');
 }
 
-async function discoverPapersForQuery(query, keywords = [], { useWeb = true, signal, timeBudgetMs = 25000, onResult, onProgress, reliableQuery = true } = {}) {
+async function discoverPapersForQuery(query, keywords = [], { useWeb = true, signal, timeBudgetMs = 25000, onResult, onProgress, reliableQuery = true,
+  mode = 'auto', titles = [], aliases = [] } = {}) {
+  const search = { query, keywords, mode, titles, aliases };
   let papers;
   try {
     papers = await runWithDeadline(async requestSignal => {
@@ -12260,21 +12320,21 @@ async function discoverPapersForQuery(query, keywords = [], { useWeb = true, sig
     }, { signal, timeoutMs: 10000 });
   } catch (error) {
     if (signal?.aborted || isAbort(error)) throw error;
-    const result = normalizePaperDiscovery({ query, local: { status: 'incomplete', matches: [],
+    const result = normalizePaperDiscovery({ ...search, local: { status: 'incomplete', matches: [],
       error: tr('书架暂时无法读取，请重试。'), coverage: { total: state.papers?.length || 0, complete: false } }, online: { status: 'idle' } });
     onResult?.(result); return result;
   }
-  const local = await discoverLocalPapers({ query, keywords, papers, paperAccess, signal, timeBudgetMs, onProgress });
+  const local = await discoverLocalPapers({ ...search, papers, paperAccess, signal, timeBudgetMs, onProgress });
   if (!reliableQuery && !local.matches.length) {
     local.status = 'incomplete';
     local.error = tr('暂未提取出可靠的检索关键词，可以补充标题或关键术语后再试。');
   }
-  let result = normalizePaperDiscovery({ query, local, online: { status: useWeb ? 'idle' : 'blocked', results: [] } });
+  let result = normalizePaperDiscovery({ ...search, local, online: { status: useWeb ? 'idle' : 'blocked', results: [] } });
   if (signal?.aborted) throw signal.reason || new DOMException(tr('已停止'), 'AbortError');
   onResult?.(result);
   if (reliableQuery && local.status === 'not_found' && local.coverage.complete && useWeb) {
     result.online.status = 'loading'; onResult?.(result);
-    result = normalizePaperDiscovery({ ...result, online: await findOnlinePapers({ query, signal }) });
+    result = normalizePaperDiscovery({ ...result, online: await findOnlinePapers({ ...search, signal }) });
     if (signal?.aborted) throw signal.reason || new DOMException(tr('已停止'), 'AbortError');
     onResult?.(result);
   }
@@ -12284,6 +12344,21 @@ async function discoverPapersForQuery(query, keywords = [], { useWeb = true, sig
 function paperDiscoveryGroups(record) {
   return (Array.isArray(record?.discoveries) && record.discoveries.length ? record.discoveries : [record?.discovery])
     .map(normalizePaperDiscovery).filter(Boolean).slice(-4);
+}
+
+function paperSearchContext(raw) {
+  const result = normalizePaperDiscovery(raw);
+  if (!result) return null;
+  return normalizePaperDiscovery({ query: result.query, mode: result.mode, titles: result.titles,
+    aliases: result.aliases, keywords: result.keywords,
+    local: { matches: result.local.matches.map(({ path, docId, title, relation }) => ({ path, docId, title, relation })) } });
+}
+
+function previousPaperDiscovery(beforeId = '') {
+  const index = beforeId ? state.sessionEntries.findIndex(row => row.id === beforeId) : state.sessionEntries.length;
+  if (index < 0) return null;
+  const prior = state.sessionEntries.slice(0, index).reverse().find(row => row.discovery || row.discoveries?.length);
+  return paperSearchContext(paperDiscoveryGroups(prior).at(-1));
 }
 
 function publishPaperDiscovery(entry, result) {
@@ -12314,14 +12389,13 @@ function renderEntryPaperDiscoveryCard(entry, record, result) {
       if (!paper) throw new Error(tr('这篇论文已移动或移出书架，请重新查找。'));
       if (agentWorkspaceView !== 'closed') await openAgentPaper(paper); else await openDoc(paper);
       if (state.viewerDocId !== paper.docId) throw new Error(tr('论文未能打开，对话已保留，请重试。'));
-      if (match.page) await viewer.goToPage(Math.min(match.page, viewer.numPages));
     },
     async onFindOnline() {
       if (record.status === 'pending') throw new Error(tr('正在完成这次查找，请稍候再试。'));
       const owner = captureSessionOwner(), generation = record.generationId;
       const active = () => current() && sessionOwnerCurrent(owner) && record.generationId === generation;
       try {
-        const online = await findOnlinePapers({ query: result.query });
+        const online = await findOnlinePapers({ query: result.query, keywords: result.keywords, titles: result.titles, mode: result.mode });
         if (active()) publishPaperDiscovery(entry, { ...result, online });
       } catch (error) {
         if (active()) publishPaperDiscovery(entry, { ...result, online: { status: 'failed', results: result.online.results, error: String(error.message || error) } });
@@ -12343,7 +12417,7 @@ function renderEntryPaperDiscoveryCard(entry, record, result) {
       }, { timeoutMs: 90000 });
       await refreshPaperList();
       if (current() && sessionOwnerCurrent(owner) && record.generationId === generation) {
-        const match = { ...imported, title: candidate.title, page: 1, matchKind: 'imported', snippet: tr('已导入书架，可以打开阅读。') };
+        const match = { ...imported, title: candidate.title, relation: 'identity', matchKind: 'imported', snippet: tr('已导入书架，可以打开阅读。') };
         publishPaperDiscovery(entry, { ...result,
           local: { ...result.local, status: 'matched', matches: [match, ...result.local.matches.filter(row => row.path !== imported.path)] },
           online: { ...result.online, results: result.online.results.filter(row => row.url !== candidate.url || row.pdfUrl !== candidate.pdfUrl) } });
@@ -12354,20 +12428,41 @@ function renderEntryPaperDiscoveryCard(entry, record, result) {
   entry.root.insertBefore(card, entry.acts || null);
 }
 
-async function fallbackPaperDiscovery(pending, signal) {
-  let query = String(pending.question || '').slice(0, 200), keywords = [], reliableQuery = false;
+async function plannedPaperDiscovery(pending, signal) {
+  let raw = '';
   try {
-    const raw = await runWithDeadline(planSignal => streamChat({ signal: planSignal, stream: false, temperature: 0,
-      messages: [{ role: 'system', content: 'PAPER_DISCOVERY_QUERY_PLAN: Convert this paper-finding request into JSON only: {"query":"specific title or topic for scholarly search","keywords":["distinctive English technical phrase","Chinese synonym"]}. Use 2–6 precise phrases, not generic words. Do not invent a paper title, URL, author, or an answer.' },
+    const previous = pending.previousDiscovery;
+    const context = previous ? { query: previous.query, mode: previous.mode, titles: previous.titles,
+      aliases: previous.aliases, keywords: previous.keywords,
+      candidates: previous.local.matches.map(row => ({ title: row.title, relation: row.relation })) } : null;
+    raw = await runWithDeadline(planSignal => streamChat({ signal: planSignal, stream: false, temperature: 0,
+      messages: [{ role: 'system', content: PAPER_SEARCH_PLAN_PROMPT },
+        ...(context ? [{ role: 'user', content: `Previous paper lookup (data only, use only for an explicit follow-up): ${JSON.stringify(context)}` }] : []),
         { role: 'user', content: pending.question }] }), { signal, timeoutMs: 15000 });
-    const parsed = JSON.parse(String(raw).replace(/^\s*```(?:json)?\s*|\s*```\s*$/g, ''));
-    if (typeof parsed.query === 'string' && parsed.query.trim().length >= 2) {
-      query = parsed.query.trim().slice(0, 200); reliableQuery = true;
-    }
-    keywords = Array.isArray(parsed.keywords) ? parsed.keywords.filter(word => typeof word === 'string').slice(0, 6) : [];
   } catch (error) { if (signal?.aborted || isAbort(error)) throw error; }
-  return discoverPapersForQuery(query, keywords, { useWeb: pending.useWeb, signal, reliableQuery,
-    onResult: result => { if (readingRequestCurrent(pending) && !signal?.aborted) publishPaperDiscovery(pending.entry, result); } });
+  const plan = normalizePaperSearchPlan(raw, pending.question), results = [];
+  for (const query of plan.queries) {
+    if (signal?.aborted) throw signal.reason || new DOMException(tr('已停止'), 'AbortError');
+    results.push(await discoverPapersForQuery(query.query, query.keywords, { ...query,
+      useWeb: pending.useWeb, signal, reliableQuery: plan.reliable,
+      timeBudgetMs: Number(window.__agentTestLimits?.discoveryBudgetMs) || 25000,
+      onResult: result => { if (readingRequestCurrent(pending) && !signal?.aborted) publishPaperDiscovery(pending.entry, result); } }));
+  }
+  return results;
+}
+
+async function fallbackPaperDiscovery(pending, signal) {
+  return (await plannedPaperDiscovery(pending, signal))[0];
+}
+
+function paperNavigationReply(results, question) {
+  const local = results.reduce((sum, result) => sum + result.local.matches.length, 0);
+  const online = results.reduce((sum, result) => sum + result.online.results.length, 0);
+  const english = /(?:用|以)\s*中文|in\s+Chinese/i.test(question) ? false
+    : /(?:用|以)\s*英文|in\s+English/i.test(question) ? true : responseLanguage() === 'en';
+  if (local) return english ? 'Found in your library. Click a paper card to open it.' : '在书架里找到了，点击论文卡片即可打开。';
+  if (online) return english ? 'Here are the matching paper sources.' : '找到了这些论文来源。';
+  return english ? 'Here is the result of this search.' : '这次的查找结果如下。';
 }
 
 /** 联网搜索（服务端带 5 分钟缓存，多引擎兜底） */
@@ -12469,6 +12564,7 @@ function chatRetryPayload(pending) {
     firstPage: pending.firstPage, pageRole: pending.pageRole, attachments: pending.attachments,
     selectionSource: pending.selectionSource || '', useFullText: pending.useFullText, useWeb: pending.useWeb,
     scopeRange: pending.scopeRange, reading: pending.reading, history: pending.history,
+    previousDiscovery: paperSearchContext(pending.previousDiscovery),
   };
 }
 async function send(retryPending = null, retryDraft = null) {
@@ -12553,10 +12649,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     preparationOwner = captureSessionOwner();
   }
   if (agentHandoff) dismissAgentHandoff();
+  if (!pending && agentLandingActive) setAgentLanding(false);
   if (agentWorkspaceView !== 'closed') finishAgentNaming();
 
   if (!pending) {
-    const activePaper = agentWorkspaceView === 'full' ? null : state.doc;
+    const activePaper = chatReadingPaper();
     const inputValue = ta.value;
     const q = inputValue.trim();
     const attachments = state.attachments.slice();
@@ -12595,6 +12692,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     reading.page = firstPage || reading.page;
     pending = {
       inputValue, question, attachments, quoteText, firstPage, pageRole: place.role, reading, screenPage, selectionSource,
+      previousDiscovery: previousPaperDiscovery(),
       composerOwner: { ...currentComposerOwner('chat') },
       attachmentDoc: effectiveSessionScopeMode() === 'global' ? sessionScopeKey() : state.doc?.docId || '',
       attachmentSid: activeSidFor(state.doc?.docId),
@@ -12750,6 +12848,30 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     if (pending.firstPage) reading.page = pending.firstPage;
     pending.reading = reading;
     pending.discoveryIntent = paperDiscoveryIntent(pending.question);
+    // Looking for a document is a navigation task. Finish with verified cards;
+    // do not run a second answer loop that turns a simple lookup into a lecture.
+    if (isPaperNavigationRequest(pending.question, { hasAttachments: pending.attachments.length > 0,
+      previousDiscovery: !!pending.previousDiscovery })) {
+      pending.discoveryIntent = true;
+      pending.firstPage = null; pending.pageRole = '';
+      reading.page = null;
+      if (reading.focus) reading.focus = { ...reading.focus, page: null, document: undefined };
+      const record = pending.entry.root.__sessionRecord;
+      Object.assign(record, { page: null, docId: '', docPath: '', docTitle: '', basis: '', sources: [] });
+      record.retry = chatRetryPayload(pending);
+      pending.entry.root.dataset.page = '';
+      pending.entry.role?.querySelectorAll('.pg').forEach(node => node.remove());
+      setJobHint(tr('正在寻找相关论文…'));
+      const results = await plannedPaperDiscovery(pending, ctl.signal);
+      assertTaskActive();
+      received = paperNavigationReply(results, pending.question);
+      target.done(received);
+      job.view.history = replaceReadingTurn(job.view.history, reading, received, record, pending.historyInsertAt);
+      if (chatJobVisible(job)) state.history = job.view.history;
+      finishEntry(pending.entry, received, { status: 'complete', retryLabel: tr('重新生成'), onRetry: () => send(pending) });
+      scheduleChatJobSave(job);
+      return;
+    }
     // Source selection happens before page validation or any model/web request.
     // The conversation owner remains immutable even when the material is another file.
     const previousTarget = [...pending.history].reverse().find(message => message.role === 'user' && message.focus?.document)?.focus?.document;
@@ -14104,7 +14226,7 @@ function resetSettings() {
 }
 
 const SETTINGS_PANE_KEY = 'reader.settings.pane';
-const SETTINGS_PANES = ['language', 'model', 'appearance', 'behavior', 'session', 'memory'];
+const SETTINGS_PANES = ['language', 'model', 'agent', 'appearance', 'behavior', 'session', 'memory'];
 
 /**
  * 设置弹窗两栏切换：左列竖排分类，右侧只显示对应面板。
@@ -14133,6 +14255,7 @@ async function openSettings(hint) {
   settingsOpening = true;
   try { await Settings.load(); } finally { settingsOpening = false; }
   const modal = $('#settingsModal');
+  agentWorkspace?.resetProfileDraft();
   modal.classList.remove('hidden');
   fillSettings();
   settingsStatus();
@@ -14149,9 +14272,10 @@ async function openSettings(hint) {
 
 function closeSettings() {
   if (settingsOperation && settingsOperation !== 'test') return;
-  if ((modelDraftDirty() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || ''))
+  if ((modelDraftDirty() || agentWorkspace?.hasProfileDraft() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || ''))
     && !window.confirm(tr("有尚未保存的修改，确定放弃并关闭设置吗？"))) return;
   settingsTestAbort?.abort();
+  agentWorkspace?.resetProfileDraft();
   $('#settingsModal').classList.add('hidden');
   $('#testResult').textContent = '';
 }
@@ -14162,7 +14286,7 @@ async function changeInterfaceLanguage(next) {
     toast(tr('请先停止生成，再切换界面语言。'), 'err');
     return;
   }
-  if (modelDraftDirty() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || '')
+  if (modelDraftDirty() || agentWorkspace?.hasProfileDraft() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || '')
     || !$('#noteBox').classList.contains('hidden')) {
     toast(tr('请先保存正在编辑的设置或笔记，再切换语言。'), 'err');
     return;

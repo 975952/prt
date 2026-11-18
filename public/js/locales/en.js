@@ -1,6 +1,7 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "起始页": "Start",
   "本次依据：书架检索与来源结果": "Sources: library search and retrieved results",
   "这段会话已被删除，已停止旧任务并打开新会话。": "This conversation was deleted. Its task has stopped and a new conversation is open.",
   "找到多份匹配文件，请使用完整文件名或路径：{0}": "Several files match. Use a full filename or path: {0}",
@@ -526,7 +527,14 @@ export const en = {
   "正在查找…": "Searching…",
   "本轮未开启联网；点击后仅为这次查找联网。": "Online access is off for this turn. Clicking enables it for this search only.",
   "也可以继续联网查找；这不代表本地书架中没有。": "You can also search online. This does not mean the paper is absent from your library.",
-  "继续联网查找": "Continue searching online"
+  "继续联网查找": "Continue searching online",
+  "打开论文：{0}": "Open paper: {0}", "查看论文来源：{0}": "View paper source: {0}",
+  "检索范围": "Search coverage", "{0} 篇含未能核实的内容": "{0} papers contain unverified content",
+  "找论文，读懂它，再一起往下想。": "Find a paper. Read it deeply. Think further together.",
+  "智能体快捷入口": "Assistant shortcuts", "找论文": "Find a paper", "继续上次": "Resume last chat",
+  "历史会话": "Chat history", "新对话": "New chat", "智能体": "Assistant",
+  "名字与交流方式，在所有对话中共用。": "Your assistant's name and communication style apply to every conversation.",
+  "撤销修改": "Discard changes"
 };
 
 // English singular forms are chosen only for known count labels.
@@ -538,4 +546,5 @@ export const enSingular = {
   '共 {0} 页': '{0} page', '{0} 段合并翻译': '{0} passage translated',
   '另外 {0} 篇': '{0} more paper', '已检查书架中的 {0} 篇论文': 'Checked the {0} paper in the library',
   '{0} 篇暂时无法读取': '{0} paper could not be read', '{0} 篇尚未检查': '{0} paper not yet checked',
+  '{0} 篇含未能核实的内容': '{0} paper contains unverified content',
 };

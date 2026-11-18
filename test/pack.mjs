@@ -43,6 +43,7 @@ const INCLUDE = [
   'docs/使用说明书.md',
   'docs/开发指南.md',
   'docs/多窗口阅读.md',
+  'docs/Alina与会话体系.md',
   'docs/第三方组件.md',
   'docs/internationalization.md',
   'docs/quick-start.en.md',

@@ -2,14 +2,15 @@ import { t as tr } from './i18n.js';
 import { el } from './util.js';
 import { iconEl } from './icons.js';
 import { DEFAULT_AGENT_PROFILE, normalizeAgentProfile, agentDisplayName } from './agent-profile.js';
+import { createAgentSettings } from './agent-settings.js';
 
 /** UI only: the caller owns conversation scope, persistence, and document navigation. */
 export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
-  onContinue, onRestore, onNew, getPapers = () => [], onNameChange, onNameDismiss, onProfileChange } = {}) {
+  onContinue, onRestore, onNew, onStartSearch, onResume, onHistory, onLanding,
+  getPapers = () => [], onNameChange, onProfileChange } = {}) {
   const byId = id => document.getElementById(id);
-  const ui = Object.fromEntries(['agentBtn', 'homeAgent', 'agentIdentity', 'agentNameEdit', 'agentNameForm',
-    'agentNameInput', 'agentNameSave', 'agentNameCancel', 'agentNameAlias', 'agentProfileDetails', 'agentPersonalityInput',
-    'agentGenderSelect', 'agentGenderCustomField', 'agentGenderCustom', 'agentHabitsInput', 'agentBack', 'agentExpand', 'agentPapersToggle',
+  const ui = Object.fromEntries(['agentBtn', 'homeAgent', 'agentIdentity', 'agentNameDisplay', 'agentExpand', 'agentPapersToggle', 'agentLandingBack',
+    'agentLanding', 'agentLaunchActions', 'agentStartSearch', 'agentResume', 'agentHistory', 'agentRecentTitle', 'chatInput',
     'agentPaperPicker', 'agentPaperSearch', 'agentPaperList', 'agentPapersClose', 'agentHandoff', 'agentHandoffLayer',
     'agentHandoffContext', 'agentContinue', 'agentRestore', 'agentNew', 'agentStatus', 'rightSide', 'aiArea', 'sessHistory']
     .map(id => [id, byId(id)]));
@@ -18,7 +19,12 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   let profile = { ...defaultProfile };
   let view = 'closed', name = profile.name, transitioning = false, busy = false, animation = null;
   let paperRevision = 0, handoffFrame = 0, handoffVersion = 0, handoffAnimation = null, handoffClosing = false;
-  let firstNameSetup = false;
+  let landing = false, hasRecent = false, composerAnimation = null;
+  const settings = createAgentSettings({ onSave: async next => {
+    if (onProfileChange) await onProfileChange(next);
+    else await onNameChange?.(next.name);
+    profile = normalizeAgentProfile(next); setName(profile.name);
+  } });
 
   for (const host of document.querySelectorAll('[data-agent-icon]')) {
     if (!host.firstElementChild) host.append(iconEl(host.dataset.agentIcon));
@@ -29,10 +35,11 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     ui.agentStatus.hidden = !text;
   }
   function disabled() {
-    for (const id of ['agentBtn', 'homeAgent', 'agentBack', 'agentExpand', 'agentContinue', 'agentRestore', 'agentNew',
-      'agentNameInput', 'agentNameSave', 'agentNameCancel', 'agentPersonalityInput', 'agentGenderSelect', 'agentGenderCustom', 'agentHabitsInput']) {
+    for (const id of ['agentBtn', 'homeAgent', 'agentExpand', 'agentContinue', 'agentRestore', 'agentNew', 'agentLandingBack',
+      'agentStartSearch', 'agentResume', 'agentHistory']) {
       ui[id].disabled = busy || transitioning;
     }
+    ui.agentResume.disabled ||= !hasRecent;
     for (const button of ui.agentPaperList.querySelectorAll('button')) button.disabled = busy || transitioning;
     ui.rightSide.setAttribute('aria-busy', String(busy || transitioning));
   }
@@ -43,30 +50,9 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     catch (error) { status(String(error?.message || tr('操作失败，请重试。'))); }
     finally { busy = false; disabled(); }
   }
-  function closeName({ focus = false } = {}) {
-    firstNameSetup = false;
-    ui.agentNameForm.hidden = true;
-    ui.agentNameForm.style.visibility = 'hidden';
-    ui.agentProfileDetails.open = false;
-    ui.agentNameCancel.textContent = tr('取消');
-    ui.agentNameEdit.setAttribute('aria-expanded', 'false');
-    if (focus) ui.agentNameEdit.focus({ preventScroll: true });
-  }
-  function showNameSetup() {
-    closePapers(); firstNameSetup = true;
-    ui.agentNameForm.hidden = false;
-    fillProfileFields(); ui.agentProfileDetails.hidden = true; ui.agentProfileDetails.open = false;
-    ui.agentNameCancel.textContent = tr('先用默认名称');
-    ui.agentNameEdit.setAttribute('aria-expanded', 'true');
-    positionHandoff();
-  }
-  function dismissName() {
-    const first = firstNameSetup;
-    void act(async () => {
-      if (first) await onNameDismiss?.();
-      closeName({ focus: !first });
-    });
-  }
+  // Kept for callers from earlier versions. Identity editing lives in Settings.
+  function closeName() {}
+  function showNameSetup() {}
   function closePapers({ focus = false } = {}) {
     ui.agentPaperPicker.hidden = true;
     ui.agentPapersToggle.setAttribute('aria-expanded', 'false');
@@ -76,31 +62,44 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     profile.name = limitText(value, 32) || defaultProfile.name;
     name = agentDisplayName(profile);
     for (const node of document.querySelectorAll('[data-agent-name]')) node.textContent = name;
-    ui.agentNameInput.value = profile.name;
-    syncNameAlias();
-    ui.agentNameEdit.title = tr('编辑名字与交流方式');
-    ui.agentNameEdit.setAttribute('aria-label', tr('编辑名字与交流方式'));
     ui.agentBtn.title = tr('打开{0}', name);
     ui.agentBtn.setAttribute('aria-label', tr('打开{0}', name));
     ui.homeAgent.setAttribute('aria-label', tr('打开{0}', name));
   }
-  function syncNameAlias() {
-    const draft = { ...profile, name: ui.agentNameInput.value.trim() || defaultProfile.name };
-    ui.agentNameAlias.hidden = agentDisplayName(draft) === draft.name;
-  }
-  function fillProfileFields() {
-    ui.agentNameInput.value = profile.name;
-    ui.agentPersonalityInput.value = profile.personality;
-    const knownGender = ['', '女', '男'].includes(profile.gender);
-    ui.agentGenderSelect.value = knownGender ? profile.gender : 'custom';
-    ui.agentGenderCustom.value = knownGender ? '' : profile.gender;
-    ui.agentGenderCustomField.hidden = knownGender;
-    ui.agentHabitsInput.value = profile.habits;
-    syncNameAlias();
-  }
   function setProfile(value = {}) {
     profile = normalizeAgentProfile(value);
-    setName(profile.name); fillProfileFields();
+    setName(profile.name); settings.setProfile(profile);
+  }
+  function setLanding(on, options = {}) {
+    const leaving = landing && !on && view === 'full';
+    const composer = byId('composer');
+    const before = leaving && composer.getClientRects().length ? composer.getBoundingClientRect() : null;
+    landing = !!on && view === 'full';
+    if ('hasRecent' in options) hasRecent = !!options.hasRecent;
+    if ('recentTitle' in options) {
+      const title = String(options.recentTitle || '').trim().slice(0, 160);
+      ui.agentRecentTitle.textContent = title;
+      ui.agentRecentTitle.title = title;
+      ui.agentRecentTitle.hidden = !title || !hasRecent;
+    }
+    document.body.classList.toggle('agent-landing', landing);
+    ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
+    if (landing) { closePapers(); hideHandoff(); }
+    disabled(); positionHandoff();
+    composerAnimation?.cancel(); composerAnimation = null;
+    if (before?.height > 0 && !matchMedia('(prefers-reduced-motion: reduce)').matches
+      && typeof composer.animate === 'function') {
+      const after = composer.getBoundingClientRect();
+      // Keep the same input alive while it settles into the conversation footer.
+      // Transform only, so messages and the scroll anchor keep their final layout.
+      if (after.height > 0) {
+        composerAnimation = composer.animate([
+          { transform: `translate(${before.left - after.left}px, ${before.top - after.top}px)` },
+          { transform: 'translate(0, 0)' },
+        ], { duration: 260, easing: 'cubic-bezier(.22, .8, .25, 1)' });
+        ui.aiArea.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: 'ease-out' });
+      }
+    }
   }
   function setView(next) {
     if (!['full', 'docked', 'closed'].includes(next)) return;
@@ -110,6 +109,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     ui.agentIdentity.hidden = next === 'closed';
     ui.agentBtn.setAttribute('aria-expanded', String(next === 'full'));
     ui.agentBtn.setAttribute('aria-current', next === 'full' ? 'page' : 'false');
+    if (next !== 'full') setLanding(false);
     if (next !== 'full') closePapers();
     closeName();
     if (next === 'closed') hideHandoff();
@@ -168,17 +168,6 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     handoffFrame = requestAnimationFrame(() => {
       handoffFrame = 0;
       const area = ui.aiArea, layer = ui.agentHandoffLayer;
-      if (!ui.agentNameForm.hidden) {
-        const anchor = area.offsetHeight > 0 ? area : ui.sessHistory;
-        if (anchor.offsetWidth > 0 && anchor.offsetHeight > 0 && view !== 'closed') {
-          const width = Math.max(0, Math.min(600, anchor.offsetWidth - 24));
-          ui.agentNameForm.style.left = `${anchor.offsetLeft + (anchor.offsetWidth - width) / 2}px`;
-          ui.agentNameForm.style.top = `${anchor.offsetTop + 8}px`;
-          ui.agentNameForm.style.width = `${width}px`;
-          ui.agentNameForm.style.maxHeight = `${Math.max(0, Math.min(430, anchor.offsetHeight - 16))}px`;
-          ui.agentNameForm.style.visibility = 'visible';
-        } else ui.agentNameForm.style.visibility = 'hidden';
-      }
       const visible = !ui.agentHandoff.hidden && view !== 'closed' && area.offsetWidth > 0 && area.offsetHeight > 0;
       layer.hidden = !visible;
       if (!visible) return;
@@ -261,11 +250,14 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
 
   ui.agentBtn.addEventListener('click', () => act(onOpen));
   ui.homeAgent.addEventListener('click', () => act(onOpen));
-  ui.agentBack.addEventListener('click', () => act(onBack));
   ui.agentExpand.addEventListener('click', () => act(onExpand));
+  ui.agentLandingBack.addEventListener('click', () => act(onLanding));
   ui.agentContinue.addEventListener('click', () => act(onContinue));
   ui.agentRestore.addEventListener('click', () => act(onRestore));
   ui.agentNew.addEventListener('click', () => act(onNew));
+  ui.agentStartSearch.addEventListener('click', () => act(async () => { await onStartSearch?.(); ui.chatInput.focus({ preventScroll: true }); }));
+  ui.agentResume.addEventListener('click', () => act(onResume));
+  ui.agentHistory.addEventListener('click', () => act(onHistory));
   ui.agentPapersToggle.addEventListener('click', () => {
     const open = ui.agentPaperPicker.hidden;
     closeName(); ui.agentPaperPicker.hidden = !open;
@@ -277,44 +269,8 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   ui.agentPaperSearch.addEventListener('keydown', event => {
     if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); closePapers({ focus: true }); }
   });
-  ui.agentNameEdit.addEventListener('click', () => {
-    const open = ui.agentNameForm.hidden;
-    firstNameSetup = false; ui.agentNameCancel.textContent = tr('取消');
-    closePapers(); ui.agentNameForm.hidden = !open;
-    ui.agentProfileDetails.hidden = false; ui.agentProfileDetails.open = false;
-    ui.agentNameEdit.setAttribute('aria-expanded', String(open));
-    if (open) {
-      fillProfileFields(); positionHandoff();
-      requestAnimationFrame(() => {
-        if (ui.agentNameForm.hidden) return;
-        ui.agentNameInput.focus({ preventScroll: true }); ui.agentNameInput.select();
-      });
-    }
-  });
-  ui.agentNameCancel.addEventListener('click', dismissName);
-  ui.agentNameInput.addEventListener('input', syncNameAlias);
-  ui.agentGenderSelect.addEventListener('change', () => {
-    ui.agentGenderCustomField.hidden = ui.agentGenderSelect.value !== 'custom';
-    if (!ui.agentGenderCustomField.hidden) ui.agentGenderCustom.focus({ preventScroll: true });
-  });
-  ui.agentNameForm.addEventListener('keydown', event => {
-    if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); dismissName(); }
-  });
-  ui.agentNameForm.addEventListener('submit', event => {
-    event.preventDefault();
-    void act(async () => {
-      const next = {
-        name: limitText(ui.agentNameInput.value, 32) || defaultProfile.name,
-        personality: limitText(ui.agentPersonalityInput.value, 180),
-        gender: limitText(ui.agentGenderSelect.value === 'custom' ? ui.agentGenderCustom.value : ui.agentGenderSelect.value, 40),
-        habits: limitText(ui.agentHabitsInput.value, 600),
-      };
-      if (onProfileChange) await onProfileChange(next);
-      else await onNameChange?.(next.name);
-      setProfile(next); closeName({ focus: true });
-    });
-  });
   setProfile(profile); setView(view);
-  return { setView, setName, setProfile, setTransitioning, showHandoff, hideHandoff, showNameSetup,
+  return { setView, setName, setProfile, setLanding, setTransitioning, showHandoff, hideHandoff, showNameSetup,
+    hasProfileDraft: settings.isDirty, resetProfileDraft: settings.reset,
     closeNameSetup: () => closeName(), refreshPapers, captureRect, animateFrom };
 }

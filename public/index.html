@@ -194,34 +194,19 @@
     <header class="agent-identity" id="agentIdentity" hidden>
       <div class="agent-heading">
         <span class="agent-mark" data-agent-icon="chat" aria-hidden="true"></span>
-        <button class="agent-name-edit" id="agentNameEdit" type="button" aria-label="编辑名字与交流方式" title="编辑名字与交流方式"><span data-agent-name>小林</span><span data-agent-icon="pencil" aria-hidden="true"></span></button>
+        <span class="agent-name-display" id="agentNameDisplay" data-agent-name>小林</span>
       </div>
       <div class="agent-identity-actions">
+        <button class="agent-action agent-landing-back" id="agentLandingBack" type="button"><span data-agent-icon="chevron-left" aria-hidden="true"></span><span>起始页</span></button>
         <button class="agent-action" id="agentPapersToggle" type="button" aria-expanded="false" aria-controls="agentPaperPicker"><span data-agent-icon="book" aria-hidden="true"></span><span>打开论文</span></button>
-        <button class="agent-action agent-back" id="agentBack" type="button"><span data-agent-icon="chevron-left" aria-hidden="true"></span><span>返回书架</span></button>
         <button class="agent-action agent-expand" id="agentExpand" type="button" title="展开助手" aria-label="展开助手"><span data-agent-icon="popout" aria-hidden="true"></span></button>
       </div>
     </header>
-    <form class="agent-name-form" id="agentNameForm" hidden>
-      <label for="agentNameInput">助手的名字</label>
-      <div class="agent-name-controls"><input id="agentNameInput" type="text" maxlength="32" autocomplete="off" /><button class="agent-action agent-action-primary" id="agentNameSave" type="submit">保存</button><button class="agent-action" id="agentNameCancel" type="button">取消</button></div>
-      <p class="agent-name-alias agent-profile-hint" id="agentNameAlias" hidden>中文称呼：小林</p>
-      <details class="agent-profile-details" id="agentProfileDetails">
-        <summary>性格与交流方式</summary>
-        <div class="agent-profile-fields">
-          <label class="agent-profile-field" for="agentPersonalityInput"><span>性格</span><input id="agentPersonalityInput" type="text" maxlength="180" autocomplete="off" placeholder="例如：温和、敏锐、表达清楚" /></label>
-          <label class="agent-profile-field" for="agentGenderSelect"><span>性别（可选）</span><select id="agentGenderSelect">
-            <option value="">不设定</option>
-            <option value="女">女</option>
-            <option value="男">男</option>
-            <option value="custom">自定义</option>
-          </select></label>
-          <label class="agent-profile-field agent-gender-custom" id="agentGenderCustomField" for="agentGenderCustom" hidden><span>自定义性别</span><input id="agentGenderCustom" type="text" maxlength="40" autocomplete="off" /></label>
-          <label class="agent-profile-field agent-profile-habits" for="agentHabitsInput"><span>交流习惯</span><textarea id="agentHabitsInput" maxlength="600" rows="3" placeholder="例如：先直接回答，再按需要展开"></textarea></label>
-          <p class="agent-profile-hint">这些设定用于所有对话，之后随时可以调整。</p>
-        </div>
-      </details>
-    </form>
+    <section class="agent-landing-hero" id="agentLanding" aria-labelledby="agentLandingName" hidden>
+      <span class="agent-landing-mark" data-agent-icon="compass" aria-hidden="true"></span>
+      <h1 id="agentLandingName" data-agent-name>小林</h1>
+      <p>找论文，读懂它，再一起往下想。</p>
+    </section>
     <section class="agent-paper-picker" id="agentPaperPicker" aria-label="选择论文" hidden>
       <div class="agent-picker-heading"><label for="agentPaperSearch">从书架打开</label><button class="agent-action agent-icon-button" id="agentPapersClose" type="button" title="收起论文列表" aria-label="收起论文列表"><span data-agent-icon="close" aria-hidden="true"></span></button></div>
       <input id="agentPaperSearch" type="search" placeholder="搜索论文名称或文件夹…" aria-label="搜索论文名称或文件夹" autocomplete="off" />
@@ -240,9 +225,11 @@
       </button>
       <button type="button" class="sess-icon-btn" id="sessNew" title="新建会话（Ctrl+Shift+N）" aria-label="新建会话">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5.2v13.6M5.2 12h13.6"/></svg>
+        <span class="agent-session-label">新对话</span>
       </button>
       <button type="button" class="sess-icon-btn" id="sessHist" title="会话历史（Ctrl+Shift+H）" aria-label="会话历史" aria-expanded="false">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 6.4h16M4 12h16M4 17.6h16"/></svg>
+        <span class="agent-session-label">历史会话</span>
       </button>
       <div class="sess-menu hidden" id="sessionMenu" role="menu" aria-label="会话列表"></div>
       <div class="sess-quick hidden" id="sessQuickPop" role="dialog" aria-label="快速切换会话"></div>
@@ -302,6 +289,11 @@
         <span class="composer-hint" id="composerHint"></span>
       </div>
     </form>
+    <nav class="agent-launch-actions" id="agentLaunchActions" aria-label="智能体快捷入口" hidden>
+      <button type="button" class="agent-launch" id="agentStartSearch"><span class="agent-launch-icon" data-agent-icon="search" aria-hidden="true"></span><span class="agent-launch-copy"><span class="agent-launch-title">找论文</span></span></button>
+      <button type="button" class="agent-launch" id="agentResume"><span class="agent-launch-icon" data-agent-icon="chat" aria-hidden="true"></span><span class="agent-launch-copy"><span class="agent-launch-title">继续上次</span><span class="agent-launch-recent" id="agentRecentTitle" hidden></span></span></button>
+      <button type="button" class="agent-launch" id="agentHistory"><span class="agent-launch-icon" data-agent-icon="history" aria-hidden="true"></span><span class="agent-launch-copy"><span class="agent-launch-title">历史会话</span></span></button>
+    </nav>
   </aside>
   </div>
   </div><!-- /main-row -->
@@ -394,6 +386,7 @@
       <nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical">
         <button type="button" class="settings-nav-item" id="settingsNavLanguage" data-pane="language" role="tab" aria-selected="false" aria-controls="settingsPaneLanguage">语言 / Language</button>
         <button type="button" class="settings-nav-item on" id="settingsNavModel" data-pane="model" role="tab" aria-selected="true" aria-controls="settingsPaneModel">模型连接</button>
+        <button type="button" class="settings-nav-item" id="settingsNavAgent" data-pane="agent" role="tab" aria-selected="false" aria-controls="settingsPaneAgent">智能体</button>
         <button type="button" class="settings-nav-item" id="settingsNavAppearance" data-pane="appearance" role="tab" aria-selected="false" aria-controls="settingsPaneAppearance">阅读外观</button>
         <button type="button" class="settings-nav-item" id="settingsNavBehavior" data-pane="behavior" role="tab" aria-selected="false" aria-controls="settingsPaneBehavior">阅读与问答</button>
         <button type="button" class="settings-nav-item" id="settingsNavSession" data-pane="session" role="tab" aria-selected="false" aria-controls="settingsPaneSession">会话</button>
@@ -440,6 +433,19 @@
       <button type="button" class="model-profile-button" id="testModel">测试连接</button>
       <span id="profileHint">保存并使用后可测试连接。</span>
     </div>
+        </section>
+        <section class="settings-pane hidden" id="settingsPaneAgent" data-pane="agent" role="tabpanel" aria-labelledby="settingsNavAgent">
+          <div class="settings-pane-title">智能体</div>
+          <div class="settings-pane-sub">名字与交流方式，在所有对话中共用。</div>
+          <form id="agentProfileForm" class="agent-settings-form">
+            <label class="field" for="agentNameInput"><span>助手的名字</span><input id="agentNameInput" type="text" maxlength="32" autocomplete="off" /></label>
+            <p class="modal-note" id="agentNameAlias" hidden>中文称呼：小林</p>
+            <label class="field" for="agentPersonalityInput"><span>性格</span><input id="agentPersonalityInput" type="text" maxlength="180" autocomplete="off" placeholder="例如：温和、敏锐、表达清楚" /></label>
+            <label class="field" for="agentGenderSelect"><span>性别（可选）</span><select id="agentGenderSelect"><option value="">不设定</option><option value="女">女</option><option value="男">男</option><option value="custom">自定义</option></select></label>
+            <label class="field" id="agentGenderCustomField" for="agentGenderCustom" hidden><span>自定义性别</span><input id="agentGenderCustom" type="text" maxlength="40" autocomplete="off" /></label>
+            <label class="field" for="agentHabitsInput"><span>交流习惯</span><textarea id="agentHabitsInput" maxlength="600" rows="3" placeholder="例如：先直接回答，再按需要展开"></textarea></label>
+            <div class="agent-settings-actions"><button type="submit" class="model-profile-button" id="agentProfileSave">保存</button><button type="button" class="model-profile-button" id="agentProfileReset">撤销修改</button><span class="agent-settings-status" id="agentProfileStatus" role="status" aria-live="polite"></span></div>
+          </form>
         </section>
         <section class="settings-pane hidden" id="settingsPaneAppearance" data-pane="appearance" role="tabpanel" aria-labelledby="settingsNavAppearance">
           <div class="settings-pane-title">阅读外观</div>
