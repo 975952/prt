@@ -105,7 +105,8 @@ async function capture(name, trigger, { screenshot = false } = {}) {
             width: style.width, height: style.height, visibility: style.visibility };
         }));
       record.frames.push({ at: performance.now() - record.started, body: document.body.className,
-        phase: document.documentElement.dataset.agentMotion || '', panel: box(document.getElementById('rightSide')),
+        phase: document.documentElement.dataset.agentMotion || '', paperReady: document.documentElement.dataset.agentPaperReady === 'true',
+        panel: box(document.getElementById('rightSide')),
         composer: box(document.querySelector('#composer .composer-row')), identity: box(document.getElementById('agentIdentity')),
         viewer: box(document.getElementById('viewer')), paper: box(window.__viewer?.pageEls?.[current]),
         sidebar: box(document.getElementById('leftSide')), current,
@@ -162,7 +163,7 @@ try {
   const listing = await json('/api/papers'); assert.equal(path.resolve(listing.dir), path.resolve(papersDir));
   const paperA = listing.papers.find(paper => paper.name === 'motion-a.pdf'), paperB = listing.papers.find(paper => paper.name === 'motion-b.pdf');
   assert.ok(paperA && paperB);
-  for (const asset of ['agent-workspace.css', 'js/agent-workspace.js', 'js/app.js'])
+  for (const asset of ['agent-workspace.css', 'agent-motion.css', 'js/agent-motion.js', 'js/agent-workspace.js', 'js/app.js'])
     assert.equal(await fetch(`${base}/${asset}`).then(response => response.text()), fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8'));
   await json('/api/session?doc=default&sid=motion-primary', { title: 'Motion continuity', createdAt: Date.now(), updatedAt: Date.now(),
     entries: [{ id: 'motion-user', block: 'chat', kind: 'user', tag: '提问', text: 'Continue from this global conversation.', status: 'user' },
@@ -202,6 +203,9 @@ try {
   assert.equal(cold.after.workspace.view, 'docked'); assert.equal(cold.after.workspace.sid, sid);
   assert.equal(cold.after.draft, 'UNSENT_MOTION_DRAFT');
   assert.equal(cold.frames.at(-1).current, 3); clean(cold);
+  const finalPaper = cold.frames.at(-1).paper, finalViewer = cold.frames.at(-1).viewer;
+  assert.ok(finalPaper && finalViewer && finalPaper.y < finalViewer.y + finalViewer.h
+    && finalPaper.y + finalPaper.h > finalViewer.y, 'The restored PDF page is actually visible, not just selected in the page control');
   pass('cold open preserves global conversation, unsent draft and saved PDF page');
 
   // Choreography assertions are based on user-visible moving surfaces, not timer names.
@@ -215,7 +219,24 @@ try {
     && paperReveal.some(group => Number(group.opacity) < 1 || group.transform !== 'none'), 'PDF has a staged reveal');
   assert.ok(cold.animations.some(animation => animation.target === 'agent-paper-row' && animation.at < 250), 'click/loading gives immediate visible feedback');
   pass('immediate click response, coordinated moving controls and a real PDF reveal');
+  const travelFrames = dockFrames.filter(frame => frame.viewGroups.some(group => group.name === 'alina-surface'
+    && group.part === 'group' && group.animation !== 'none'));
+  assert.ok(travelFrames.at(-1).at - travelFrames[0].at >= 600, 'The surface remains visibly in motion for a readable interval');
+  const earlyTravel = travelFrames.filter(frame => frame.at - travelFrames[0].at >= 150 && frame.at - travelFrames[0].at <= 300);
+  assert.ok(earlyTravel.length > 1 && earlyTravel.every(frame => frame.viewGroups.some(group => group.name === 'alina-surface'
+    && group.part === 'old' && Number(group.opacity) >= .9)), 'The source surface stays visible while it travels, instead of immediately fading away');
+  const revealedPaper = travelFrames.filter(frame => frame.viewGroups.some(group => group.name === 'alina-paper'
+    && group.part === 'new' && group.animation === 'alina-paper-in' && Number(group.opacity) > .05));
+  assert.ok(revealedPaper.length && revealedPaper.every(frame => frame.paperReady), 'The PDF is prepared before its reveal starts');
+  pass('720 ms travel preserves the moving surface and reveals only the prepared PDF');
 
+  const readingAnchor = await page.evaluate(async () => {
+    window.__viewer._restoreAnchor({ page: 3, frac: .56 });
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    return window.__viewer._captureAnchor();
+  });
+  assert.equal(readingAnchor.page, 3);
+  assert.ok(Math.abs(readingAnchor.frac - .56) < .01);
   const expand = await capture('expand', () => page.locator('#agentExpand').click());
   assert.equal(expand.after.workspace.view, 'full'); assert.equal(expand.after.workspace.sid, sid); clean(expand);
   pass('reverse expansion preserves the conversation and cleans the animation');
@@ -224,6 +245,10 @@ try {
   const zoomed = await capture('same-paper-zoomed', () => page.locator(again).click());
   assert.equal(zoomed.after.workspace.view, 'docked'); assert.equal(zoomed.after.workspace.sid, sid);
   assert.equal(zoomed.frames.at(-1).current, 3); clean(zoomed);
+  const restoredAnchor = await page.evaluate(() => window.__viewer._captureAnchor());
+  assert.equal(restoredAnchor.page, readingAnchor.page);
+  assert.ok(Math.abs(restoredAnchor.frac - readingAnchor.frac) < .01,
+    `Same-paper return keeps the actual reading offset: ${JSON.stringify({ readingAnchor, restoredAnchor })}`);
   pass('repeat opening at 130% agent zoom preserves page and final geometry');
 
   await full(); await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);

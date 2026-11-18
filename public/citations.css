@@ -1,0 +1,46 @@
+/* Source navigation stays at the end of each answer section. */
+.citation-sources {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 3px 5px;
+  margin: 9px 0 18px;
+  color: var(--fg-faint);
+  font-size: .78em;
+  line-height: 1.6;
+}
+.citation-sources:last-child { margin-bottom: 0; }
+.citation-sources-label { margin-right: 3px; }
+.citation-sources .page-ref {
+  padding: 1px 5px;
+  margin: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--fg-dim);
+  font-size: 1em;
+  line-height: inherit;
+}
+.citation-sources .page-ref:hover,
+.citation-sources .page-ref.active {
+  color: var(--accent);
+  background: var(--accent-soft);
+}
+.citation-quote-link,
+.citation-quote-link.quote-inline {
+  display: inline;
+  appearance: none;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 2px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  line-height: inherit;
+  text-align: inherit;
+  cursor: pointer;
+}
+.citation-quote-link:hover { text-decoration: underline; text-decoration-color: var(--accent); text-underline-offset: 3px; }
+.citation-quote-link:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.citation-quote-link.active { background: var(--accent-soft); }

@@ -37,6 +37,7 @@ import {
 import { readingIntent, resolveReadingRequest, resolvePageRole, snapshotReadingRequest, snapshotHistory, readingTurn,
   restoreReadingHistory, replaceReadingTurn, citedSources, stripPageLabels } from './reading-context.js';
 import { validateCitations, collectAvailablePages, planFor, pagesFromText, formatPageList } from './citation-validator.js';
+import { compactCitationDisplay } from './citation-display.js';
 import { runAgentLoop, agentStats, AGENT_TOOL_SPECS, AGENT_SYSTEM_NOTE, toolStepLabel, stripAgentMarkup } from './agent.js';
 import { lastPromptDebug as __promptDebug } from './prompts/index.js';
 import {
@@ -718,6 +719,9 @@ let agentPaperOverride = '';
 let agentPinnedOwner = null;
 let agentWorkspaceView = 'closed';
 let agentLandingActive = false;
+// Library temporarily hides the workspace; only an explicit New conversation
+// action replaces its current conversation with a fresh landing.
+let agentGlobalLanding = null;
 let agentNavigationBusy = false;
 let conversationMoveBusy = false;
 let moveTargetNavigation = '';
@@ -1106,6 +1110,7 @@ async function saveChatJob(job) {
   if (!response) return;
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   notifySessionSaved({ kind: 'chat', docId: job.docId, scope: job.scope, sid: job.sid });
+  refreshSavedConversationList(job.scope, job.sid, { completed: job.finished });
 }
 function scheduleChatJobSave(job) {
   if (job.discarded) return;
@@ -2422,8 +2427,14 @@ async function saveProgressNow({ silent = false } = {}) {
 }
 
 let homeReadingState = null;
+const agentReaderAnchors = new WeakMap();
 
 function setAgentWorkspaceView(view) {
+  if (view === 'full' && agentWorkspaceView !== 'full' && viewer?.pdf
+    && viewer.container.clientWidth > 0 && viewer.container.clientHeight > 0) {
+    viewer.commitZoomPreview?.();
+    agentReaderAnchors.set(viewer.pdf, { anchor: viewer._captureAnchor(), scrollLeft: viewer.container.scrollLeft });
+  }
   agentWorkspaceView = view;
   if (view !== 'full') setAgentLanding(false);
   agentWorkspace?.setView(view);
@@ -2445,6 +2456,7 @@ function latestAgentConversation() {
 }
 function setAgentLanding(on) {
   agentLandingActive = !!on;
+  if (agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global') agentGlobalLanding = !!on;
   const recent = on ? latestAgentConversation() : null;
   agentWorkspace?.setLanding(!!on, { hasRecent: !!recent, recentTitle: recent?.title || '' });
 }
@@ -2490,7 +2502,7 @@ function initAgentWorkspace() {
   agentName = agentDisplayName(profile);
   agentWorkspace = createAgentWorkspace({
     onOpen: () => openAgentWorkspace(), onExpand: () => openAgentWorkspace({ landing: false }),
-    onLanding: () => openAgentWorkspace(),
+    onLanding: () => openAgentWorkspace({ landing: true }),
     onStartSearch: () => $('#chatInput').focus({ preventScroll: true }),
     onResume: async () => {
       const row = latestAgentConversation();
@@ -2502,8 +2514,9 @@ function initAgentWorkspace() {
     },
     onHistory: () => { $('#sessHist').click(); },
     onSessionSelect: async row => {
-      if (!row?.sid) return;
+      if (!row || typeof row.sid !== 'string') return;
       if (agentSessionOverride !== 'global') await changeAgentScope('global');
+      sessionsHideEntryCard();
       await openSessionFromHistory(row, { force: true });
       setAgentLanding(false);
       updateAgentRecentSessions();
@@ -2535,15 +2548,18 @@ function initAgentWorkspace() {
     refreshAgentTitle();
   });
 }
-async function openAgentWorkspace({ landing = true } = {}) {
+async function openAgentWorkspace({ landing } = {}) {
   if (agentNavigationBusy) return;
   agentNavigationBusy = true;
   try {
+    const fresh = landing === true;
+    const expanding = landing === false;
+    landing ??= agentGlobalLanding ?? true;
     const from = agentWorkspaceView === 'docked' ? agentWorkspace.captureRect() : null;
     if (landing && agentSessionOverride === 'global') await parkAgentConversation();
-    // The home entrance opens the global landing; expanding a docked chat keeps
-    // its current owner, conversation and unsent draft.
-    if (landing || agentWorkspaceView === 'closed') await changeAgentScope('global');
+    // Returning from Library restores the last global view. Expanding a docked
+    // chat keeps its current owner, conversation and unsent draft.
+    if (!expanding || agentWorkspaceView === 'closed') await changeAgentScope('global');
     dismissAgentHandoff();
     const update = () => {
       setPanelVisible('chat', true);
@@ -2552,8 +2568,13 @@ async function openAgentWorkspace({ landing = true } = {}) {
       setView('reading');
     };
     const prepare = async () => {
-      const continuing = chatViews.has(currentChatKey()) || sessionHasChatContent();
-      await sessionsOpenWorkspace({ choose: landing || !continuing });
+      await sessionsOpenWorkspace({ choose: false });
+      // Give the landing its own empty conversation before accepting input.
+      // Otherwise the first question is saved as the previous conversation's
+      // draft and copied to a new sid only when sent, leaving a stale copy behind.
+      if (landing && (fresh || !activeSidFor(state.doc?.docId) || sessionHasChatContent())) {
+        await newSession({ silent: true });
+      }
       setAgentLanding(landing);
       activateComposerDraft('chat');
       updateAgentRecentSessions();
@@ -2593,6 +2614,8 @@ async function openAgentPaper(paper, sourceElement = null) {
       setAgentLanding(originalLanding);
       throw new Error(tr('论文未能打开，对话已保留，请重试。'));
     }
+    const readingPage = viewer.current;
+    const readingPosition = agentReaderAnchors.get(viewer.pdf);
     await agentWorkspace.transitionLayout(() => {
       setPanelVisible('chat', true);
       setAgentWorkspaceView('docked');
@@ -2600,6 +2623,14 @@ async function openAgentPaper(paper, sourceElement = null) {
     }, { direction: 'dock', prepare: async () => {
       if (viewer._fitMode) viewer.fitWidth();
       else viewer.layout();
+      // Loading behind the full workspace cannot scroll a hidden reader.
+      // Restore its visible geometry before revealing the PDF, including the
+      // page-internal position when returning from an expanded conversation.
+      if (readingPosition) {
+        viewer._restoreAnchor(readingPosition.anchor);
+        viewer.container.scrollLeft = readingPosition.scrollLeft;
+        await viewer.restorePosition({ scrollTop: viewer.container.scrollTop });
+      } else await viewer.goToPage(readingPage);
       await viewer.refreshPage?.(viewer.current);
     } });
     agentHandoff = { docId: paper.docId };
@@ -7070,7 +7101,10 @@ async function saveSessionNow() {
     savedSessionEditVersion = Math.max(savedSessionEditVersion, editVersion);
   }
   // 通知其它窗口：只有「当前正显示同一会话」的窗口会刷新（见 applyRemoteSessionSaved）
-  if (chatRes) notifySessionSaved({ kind: 'chat', docId, scope, sid });
+  if (chatRes) {
+    notifySessionSaved({ kind: 'chat', docId, scope, sid });
+    refreshSavedConversationList(scope, sid);
+  }
   if (translateRes) notifySessionSaved({ kind: 'translate', docId });
   scheduleRemoteSession();
 }
@@ -7929,6 +7963,17 @@ async function clearCurrentSession({ confirm: askConfirm = true } = {}) {
 
 /** 正在显示的会话（只在 store 里活；关掉就没了） */
 const sessionStore = { open: false, list: [], busySid: null };
+
+const refreshConversationList = debounce(async () => {
+  await sessionsOnSessionChanged({ refresh: true });
+  updateAgentRecentSessions();
+}, 120);
+function refreshSavedConversationList(scope, sid, { completed = false } = {}) {
+  if (!hasChatScope() || scopeDocIdOf(scope) !== scopeDocIdOf(sessionScopeKey())) return;
+  // Publish a newly saved conversation locally as well as to other windows.
+  // Only metadata is refreshed: streaming nodes and the selected draft stay put.
+  if (completed || !sessionsGetList().some(row => row.sid === sid && isScopeFileKey(row.fileKey))) refreshConversationList();
+}
 
 function closeSessionMenu() {
   sessionStore.open = false;
@@ -10578,7 +10623,10 @@ function renderStreamingMarkdown(text) {
 function renderAnswerHTML(text, view = {}) {
   const split = splitPrtBlock(String(text || ''));
   const source = split.text || '';
-  const render = (s) => decorateOtherPaperRefs(decoratePageRefs(view.streaming ? renderStreamingMarkdown(s) : renderMarkdown(s)));
+  const render = (s) => {
+    const html = decorateOtherPaperRefs(decoratePageRefs(view.streaming ? renderStreamingMarkdown(s) : renderMarkdown(s)));
+    return view.streaming ? html : compactCitationDisplay(html, { label: tr('来源') });
+  };
   // Only the explicit multi-question heading contract activates cards; ordinary sections stay intact.
   const grouped = splitAnswerSections(source);
   if (!grouped) return render(source);
@@ -10712,7 +10760,7 @@ function initPageRefs() {
       box.querySelector('[data-card-action="toggle"]').textContent = continuous ? tr("切换为卡片模式") : tr("切换为连续模式");
       return;
     }
-    const btn = e.target.closest('.page-ref');
+    const btn = e.target.closest('.page-ref, .citation-quote-link');
     if (!btn) {
       // 点正文/界面上任意处（右栏里点字不算）取消引用高亮；右栏里点其他引用按钮照常处理
       if (quoteState.page && !e.target?.closest?.('#aiArea')) clearQuoteHighlight();

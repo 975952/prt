@@ -6,16 +6,19 @@
  *  - 点答案的页码标签 / 原文引用块也会跳到文中并高亮；
  *  - 找不到片段时退化为纯跳页，不留假激活态；旧格式 〔p.N〕 行为不变。
  *
- *   node test/citation-quote.mjs
+ *   node test/citation-quote.mjs [--desktop]
  */
 import { spawn } from 'node:child_process';
+import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import http from 'node:http';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, ROOT, SANDBOX } from './_env.mjs';
+import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 
-const scratch = fs.mkdtempSync(path.join(SANDBOX, 'citation-'));
+const desktop = process.argv.includes('--desktop');
+const scratch = fs.mkdtempSync(path.join(SANDBOX, `citation-${desktop ? 'desktop' : 'node'}-`));
 const DATA = path.join(scratch, 'data');
 const PAPERS = path.join(scratch, 'papers');
 assertIsolatedDataDir(DATA);
@@ -24,7 +27,10 @@ fs.mkdirSync(PAPERS);
 fs.copyFileSync(path.join(import.meta.dirname, 'fixtures', 'multipage-sample.pdf'), path.join(PAPERS, 'citation-paper.pdf'));
 fs.copyFileSync(path.join(import.meta.dirname, 'fixtures', 'cn-sample.pdf'), path.join(PAPERS, 'other-paper.pdf'));
 
-const CHROME = process.env.CHROME || 'C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe';
+const CHROME = [process.env.CHROME, 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find(file => file && fs.existsSync(file));
+assert.ok(CHROME, 'a local Chromium browser is available');
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 const checks = [];
 const check = (label, ok, detail = '') => {
@@ -76,7 +82,9 @@ try {
   await new Promise((r) => upstream.listen(0, '127.0.0.1', r));
   const aiPort = upstream.address().port;
   const readerPort = await findPort();
-  reader = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
+  reader = desktop ? spawnReader(stageExe('citation-quote').exe, { args: ['--port', String(readerPort)],
+    env: { PORT: String(readerPort), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS,
+      NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1' } }) : spawn(process.execPath, [path.join(ROOT, 'server.js')], {
     env: {
       ...process.env, PORT: String(readerPort), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS,
       NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1',
@@ -91,6 +99,9 @@ try {
   }
   check('隔离服务启动', ready);
   if (!ready) throw new Error('isolated server failed to start');
+  for (const asset of ['js/app.js', 'js/citation-display.js', 'citations.css']) {
+    assert.equal(await fetch(`${BASE}/${asset}`).then(response => response.text()), fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8'), `${asset}: current embedded asset`);
+  }
   await fetch(`${BASE}/api/config`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ baseURL: `http://127.0.0.1:${aiPort}/v1`, model: 'cite-mock', apiKey: 'cite-key' }),
@@ -448,12 +459,84 @@ try {
     JSON.stringify(comboRefs.refs));
   check('组合页码不残留原始〔p. 文本', !/〔\s*p\./.test(comboRefs.text), comboRefs.text.slice(0, 120));
 
+  /* Repeated inline page labels become one source per section, including saved answers. */
+  answerOverride = `## Problem\n\nA first finding.〔p.5〕 Another observation.〔p.5〕\n\n`
+    + `> ${snippet}〔p.5‖${snippet}〕\n\nThe same page supports the conclusion.〔p.5〕\n\n`
+    + `## Method\n\nA separate section still has its own source.〔p.5〕 Additional evidence.〔p.3〕`;
+  await ask();
+  const compactInfo = await page.evaluate(() => {
+    const row = [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1);
+    window.__compactCitationEntryId = row.__sessionRecord.id;
+    const body = row.querySelector('.text');
+    return {
+      rows: [...body.querySelectorAll('.citation-sources')].map(node => [...node.querySelectorAll('.page-ref')].map(button => button.dataset.page)),
+      proseRefs: [...body.querySelectorAll('.page-ref')].filter(node => !node.closest('.citation-sources')).length,
+      quote: body.querySelector('blockquote')?.textContent.trim() || '',
+      quoteButton: body.querySelector('blockquote .citation-quote-link')?.tagName,
+      quotePayload: body.querySelector('blockquote .citation-quote-link')?.dataset.fragment,
+      sourcePayload: body.querySelector('.citation-sources .page-ref')?.dataset.fragment,
+      sourceFragments: body.querySelector('.citation-sources .page-ref')?.dataset.fragments,
+      border: getComputedStyle(body.querySelector('.citation-sources .page-ref')).borderTopWidth,
+      raw: row.__sessionRecord.text,
+    };
+  });
+  check('同一小节多次页码合并，小节之间仍保留各自来源', JSON.stringify(compactInfo.rows) === JSON.stringify([['5'], ['5', '3']]), JSON.stringify(compactInfo.rows));
+  check('正文与原文引用块中不再穿插页码按钮', compactInfo.proseRefs === 0);
+  check('blockquote原句只显示一次且保留原生键盘按钮', compactInfo.quote === snippet && compactInfo.quoteButton === 'BUTTON', compactInfo.quote);
+  check('原句与合并来源都保留正确高亮片段', compactInfo.quotePayload === snippet && compactInfo.sourcePayload === snippet
+    && JSON.parse(compactInfo.sourceFragments || '[]').includes(snippet));
+  check('来源是紧凑无边框链接，不再使用正文大按钮', compactInfo.border === '0px', compactInfo.border);
+  await page.evaluate(() => window.__ctx.clearQuoteHighlight());
+  await page.$eval('#aiArea .msg.assistant:last-child blockquote .citation-quote-link', button => button.focus());
+  await page.keyboard.press('Enter'); await wait(500);
+  s = await state();
+  check('键盘激活可见原句仍定位和高亮原文', s.page === 5 && s.hits > 0, JSON.stringify({ page: s.page, hits: s.hits }));
+  await page.evaluate(() => window.__ctx.clearQuoteHighlight());
+  await page.$eval('#aiArea .msg.assistant:last-child .citation-sources .page-ref', button => button.click());
+  await wait(500); s = await state();
+  check('合并后的来源按钮仍定位和高亮原文', s.page === 5 && s.hits > 0, JSON.stringify({ page: s.page, hits: s.hits }));
+  const rawCases = await page.evaluate(({ snippet }) => {
+    const render = raw => { const box = document.createElement('div'); box.innerHTML = window.__ctx.renderAnswerHTML(raw); return box; };
+    const samePage = render(`〔p.5〕 〔《other-paper.pdf》p.5〕 〔p.5〕 〔《other-paper.pdf》p.5〕`);
+    const standalone = render(`> ${snippet}〔p.5‖${snippet}〕\n\nA different original sentence: 〔p.5‖another distinct quotation〕`);
+    const resnet = 'with the network depth increasing, accuracy gets saturated (which might be unsurprising) and then degrades rapidly';
+    const reported = render(`## Problem\n\nFinding.〔p.1〕 Another finding.〔p.1〕\n\n> ${resnet}〔p.1‖${resnet}〕`);
+    return {
+      targets: [...samePage.querySelectorAll('.citation-sources .page-ref')].map(button => [button.dataset.paper || '', button.dataset.page]),
+      standalone: standalone.querySelector('.quote-inline')?.textContent,
+      resnetText: reported.querySelector('blockquote')?.textContent.trim(),
+      resnetSources: reported.querySelectorAll('.citation-sources .page-ref').length,
+    };
+  }, { snippet });
+  check('同页的跨论文来源不被错误合并', JSON.stringify(rawCases.targets) === JSON.stringify([['', '5'], ['other-paper.pdf', '5']]), JSON.stringify(rawCases.targets));
+  check('独立的不同原句仍然可见', rawCases.standalone === 'another distinct quotation');
+  check('用户ResNet示例保留一份原句和一个小节来源', rawCases.resnetText === 'with the network depth increasing, accuracy gets saturated (which might be unsurprising) and then degrades rapidly'
+    && rawCases.resnetSources === 1);
+  const savedSid = await page.evaluate(async () => { await window.__ctx.saveSessionNow(); return window.__ctx.activeSession; });
+  await page.screenshot({ path: path.join(scratch, 'compact-sources.png') });
+  await openDoc('citation-paper.pdf');
+  await page.evaluate(async sid => {
+    const sessions = await import('/js/sessions.js'); sessions.sessionsHideEntryCard();
+    await window.__ctx.switchSession(sid, { force: true });
+    window.__ctx.setPanelVisible('chat', true);
+  }, savedSid);
+  const restored = await page.evaluate(raw => {
+    const row = [...document.querySelectorAll('#aiArea .msg.assistant')].find(node => node.__sessionRecord?.text === raw);
+    return { rows: row?.querySelectorAll('.citation-sources').length || 0,
+      buttons: row?.querySelectorAll('.citation-sources .page-ref').length || 0,
+      quote: row?.querySelector('blockquote')?.textContent.trim(), raw: row?.__sessionRecord?.text };
+  }, compactInfo.raw);
+  check('保存的旧回答恢复后也采用来源行且不修改原始回答', restored.rows === 2 && restored.buttons === 3
+    && restored.quote === snippet && restored.raw === compactInfo.raw, JSON.stringify(restored));
+
   check('操作期间没有页面错误', pageErrors.length === 0, pageErrors.join(' | '));
   const failed = checks.filter((c) => !c.ok);
   console.log(`\n引用定位：${checks.length - failed.length}/${checks.length} 通过`);
+  fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop' : 'node', checks, pageErrors }, null, 2), 'utf8');
+  console.log(`Evidence: ${scratch}`);
   process.exitCode = failed.length ? 1 : 0;
 } finally {
   try { await browser?.close(); } catch { /* ignore */ }
-  try { reader?.kill(); } catch { /* ignore */ }
+  try { await stopChild(reader); } catch { /* ignore */ }
   try { upstream.closeAllConnections?.(); await new Promise((r) => upstream.close(r)); } catch { /* ignore */ }
 }

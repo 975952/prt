@@ -169,7 +169,10 @@ async function full({ landing = false } = {}) {
   } else await page.click(await visible('#homeAgent') ? '#homeAgent' : '#agentBtn');
   await page.waitForSelector('body.agent-full #rightSide', { visible: true });
   await settled();
-  if (!landing && !await page.$eval('#agentResume', button => button.disabled)) {
+  if (landing && !await visible('#agentLanding')) {
+    await page.click('#agentNavNew'); await settled();
+  }
+  if (!landing && await visible('#agentLanding') && !await page.$eval('#agentResume', button => button.disabled)) {
     await page.click('#agentResume'); await settled();
   }
   // A restored conversation keeps the same input card and animates it into its
@@ -949,8 +952,8 @@ try {
   const landingComposerBefore = await page.$eval('#composer .composer-row', node => { const r = node.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
   await page.click('#sendBtn');
   await page.waitForFunction(() => !window.__state.busy && document.querySelector('#aiArea').textContent.includes('SYNTHETIC_NAME_DISMISS_REPLY'));
-  check('a question from the landing starts a new global conversation without setup', !await visible('#agentLanding')
-    && await scope() === 'default' && await sid() !== previousLandingSid);
+  check('a question from the landing uses its independent global conversation without setup', !await visible('#agentLanding')
+    && await scope() === 'default' && !!previousLandingSid && await sid() === previousLandingSid);
   check('the first question moves the same composer with a short transform animation', await page.evaluate(() =>
     document.getElementById('composer') === window.__landingComposer
     && window.__landingAnimations.some(animation => animation.duration === 260
