@@ -1,5 +1,5 @@
 {
-  "systemVersion": "2026.11.6",
+  "systemVersion": "2026.11.7",
   "prompts": {
     "bg.digest": "1.0.0",
     "bg.memory.extract": "1.0.0",
@@ -8,8 +8,8 @@
     "bg.sessionTitle": "1.0.0",
     "op.evidence": "2.1.0",
     "op.limits": "2.1.0",
-    "qa.chat": "2.2.0",
-    "qa.explain": "2.2.0",
+    "qa.chat": "2.3.0",
+    "qa.explain": "2.3.0",
     "qa.screenshot": "1.0.0",
     "teach.condense": "1.0.0",
     "teach.intro": "2.1.0",

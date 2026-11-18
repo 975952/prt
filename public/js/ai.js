@@ -435,7 +435,7 @@ export function searchTerms(text) {
 export function webQueryFor(question, selection, { history = [], reading } = {}) {
   const request = reading || resolveReadingRequest({ question, selection, history });
   const q = request.question;
-  if (['guidance', 'feedback'].includes(request.intent) || /^[?？!！。.\s]+$/.test(q)) return '';
+  if (['acknowledgement', 'guidance', 'feedback'].includes(request.intent) || /^[?？!！。.\s]+$/.test(q)) return '';
   const sel = stripPageLabels(request.selection || (request.inherited ? request.focus.text : ''));
   const anchor = searchTerms(sel.slice(0, 1600));
   const terms = searchTerms(q);

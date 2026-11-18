@@ -34,7 +34,7 @@ import {
   digestMessages, webQueryFor, filterWebResults, opMessages, teachMessages, condenseMessages,
   scanPageMessages, sessionSummaryMessages, sessionTitleMessages,
 } from './ai.js';
-import { resolveReadingRequest, resolvePageRole, snapshotReadingRequest, snapshotHistory, readingTurn,
+import { readingIntent, resolveReadingRequest, resolvePageRole, snapshotReadingRequest, snapshotHistory, readingTurn,
   restoreReadingHistory, replaceReadingTurn, citedSources, stripPageLabels } from './reading-context.js';
 import { validateCitations, collectAvailablePages, planFor, pagesFromText, formatPageList } from './citation-validator.js';
 import { runAgentLoop, agentStats, AGENT_TOOL_SPECS, AGENT_SYSTEM_NOTE, toolStepLabel, stripAgentMarkup } from './agent.js';
@@ -12950,7 +12950,9 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // window cannot move this conversation while its answer is being generated.
     await saveChatJob(job);
     assertTaskActive();
-    const reading = pending.reading && (!images.length || pending.reading.screenshotCount === images.length)
+    const outdatedReplyIntent = pending.reading?.intent !== 'acknowledgement' && !images.length
+      && readingIntent(pending.question, pending.quoteText) === 'acknowledgement';
+    const reading = pending.reading && !outdatedReplyIntent && (!images.length || pending.reading.screenshotCount === images.length)
       ? pending.reading : resolveReadingRequest({ question: pending.question,
         selection: pending.quoteText, page: pending.firstPage, history: pending.history,
         selectionSource: pending.selectionSource || '', screenshotCount: images.length });
@@ -12985,8 +12987,11 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // Source selection happens before page validation or any model/web request.
     // The conversation owner remains immutable even when the material is another file.
     const previousTarget = [...pending.history].reverse().find(message => message.role === 'user' && message.focus?.document)?.focus?.document;
+    const inheritedTarget = retryPending ? reading.focus?.document || previousTarget
+      : pending.attachments.length ? null : reading.inherited ? reading.focus?.document || previousTarget : previousTarget;
     let source = resolvePaperTarget({ question: pending.question, papers: job.papers, currentDocId: pending.docId, currentPath: pending.docPath, currentPage: pending.screenPage || pending.firstPage,
-      previousTarget: retryPending ? pending.reading?.focus?.document || previousTarget : previousTarget });
+      followup: reading.inherited,
+      previousTarget: inheritedTarget });
     const retrySource = retryPending && pending.reading?.focus?.document;
     if (retrySource && source.status !== 'multiple') {
       const candidates = retrySource.path ? job.papers.filter(paper => paper.path === retrySource.path)
@@ -13082,10 +13087,16 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     });
     if (chatJobVisible(job)) { state.activeSendScope = pending.scope; updateSendScope(); }
 
-    // 联网是允许查找材料；短追问先确定对象，纠正消息和纯问号不会拿去检索。
-    // 追问直答这类短问题也不联网（省一次搜索往返；需要查资料的问题一般会点名要查/最新/出处）。
-    if (pending.useWeb && !pending.discoveryIntent && pending.docId && !crossFile && (!images.length || pending.inputValue.trim() || reading.selection)
-      && webQueryFor(pending.question, reading.selection, { reading })) {
+    const batch = splitNumberedQuestions(pending.inputValue);
+    const agentAllowed = agentReadEnabled() && !shotOnly
+      && ((!pending.docId && !pending.sourcePaper) || !!reader?.pdf);
+    // Web mode grants permission; the agent decides whether and what to search
+    // after seeing the conversation. Preloading the raw reply can change its meaning.
+    // The non-agent path still gathers sources because it has no search tools.
+    const loadFallbackSources = async () => {
+      if (!pending.useWeb || pending.discoveryIntent || !pending.docId || crossFile
+        || (images.length && !pending.inputValue.trim() && !reading.selection)
+        || !webQueryFor(pending.question, reading.selection, { reading })) return;
       setJobHint(tr("正在联网搜索…"));
       try {
         sources = await runWithDeadline(signal => readingSources(reading, references, signal), { signal: ctl.signal, timeoutMs: 18000 });
@@ -13095,15 +13106,13 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         sources = [];
         setJobHint(tr("联网搜索不可用，这次只用论文内容回答"));
       }
-    }
+    };
+    if (!agentAllowed) await loadFallbackSources();
 
     // ② P2.5：让 AI 自己决定读哪些页。成功就用它读到的页做材料（白名单=读过的页），
     // 失败（模型不支持 tools / 超时 / 任何异常）静默回退到下面的 P1.5 预装路径。
     // 用户口径（2026-11-02）：带截图提问时也要能自己继续查页（截图是附加材料，不是禁止工具的理由）；
     // 只有「只发截图没写问题」（shotOnly）才不启用，避免模型把截图当成唯一依据乱翻。
-    const batch = splitNumberedQuestions(pending.inputValue);
-    const agentAllowed = agentReadEnabled() && !shotOnly
-      && ((!pending.docId && !pending.sourcePaper) || !!reader?.pdf);
     let agentRun = null;
     if (agentAllowed) {
       setJobHint(tr("思考中…"));
@@ -13139,6 +13148,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       // Unsupported tools fall back in the same status slot until answer text arrives.
       if (!agentRun && received) { received = ''; target.status(tr("思考中…")); }
       if (!readingRequestCurrent(pending)) return;
+      if (!agentRun) await loadFallbackSources();
     }
     if (pending.discoveryIntent && !pending.entry.root.__sessionRecord.discovery) {
       setJobHint(tr('正在寻找相关论文…'));

@@ -280,6 +280,10 @@ export function renderMarkdown(src) {
         });
     }
     raw = raw.replace(/\\([\\`*{}\[\]()#+\-.!_|>])/g, (_, char) => hold(escapeHtml(char)));
+    // Let HTML decode complete character references once, after Markdown parsing.
+    // Protecting the reference itself keeps encoded tags and Markdown punctuation
+    // as text; code/math were already protected and must retain their literals.
+    raw = raw.replace(/&(?:#[xX][0-9a-fA-F]+|#[0-9]+|[a-zA-Z][a-zA-Z0-9]*);/g, (entity) => hold(entity));
     return restore(escapeHtml(raw)
       .replace(/\*\*([^*\n]+)\*\*/g, '<strong>$1</strong>')
       .replace(/__([^_\n]+)__/g, '<strong>$1</strong>')

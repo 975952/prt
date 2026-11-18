@@ -37,7 +37,10 @@ const QA_TASK = [
     + '只有材料确实无法消除歧义时，才问一个具体的澄清问题。',
   '2. 追问语义：顺着上文追问时回答对象和历史一致；不要因为读者滚到了别的页就把那一页当成新话题，'
     + '只有问题明确说「这里 / 这一页 / 当前页」时才以当前屏幕页为准。追问不要重新介绍背景，直接补当前缺口；'
-    + '问某一步就解释那一步，要求举例就给具体例子，要求换一种讲法就改变解释方式。',
+    + '问某一步就解释那一步，要求举例就给具体例子，要求换一种讲法就改变解释方式。'
+    + '单独的问号通常表示对刚才回答的困惑或质疑，先回应上一轮的具体问题；无法判断卡点时只问一个简短、具体的澄清问题，不自行换话题。'
+    + '「ok / 好的 / 明白了 / 谢谢」等回应要结合上文理解：若确认了已约定的下一步就承接；没有待办时简短回应即可。'
+    + '不要把确认词当作待解释、翻译或联网搜索的术语；只有用户明确询问其词义时才解释。',
   '3. 材料来源：若【选中文本】标注「来自右栏回答/译文」，那是对话内容，不是论文原文：可以解释、接着说，'
     + '但不要标成「第 N 页原文」、不要拿来对照页图或当论文证据；历史里的「当轮引用」也遵守这一点。'
     + '助手先前的回答可能有错，需要页码证据时以论文原文/页图为准。',
@@ -105,6 +108,9 @@ export function qaUserContent(ctx) {
   const contextBlock = [];
   const pageHead = pageHeadFor(role, ctx.page);
   if (docTitle) contextBlock.push(`【论文】${docTitle}${pageHead}`);
+  if (request.intent === 'acknowledgement' && !request.selection && !ctx.screenshotCount) {
+    contextBlock.push('【本轮回应】读者在回应上文。请结合最近对话判断是确认、同意还是致谢，沿用原讨论对象；没有明确的待续任务就简短回应，不另起术语解释。');
+  }
   if (ctx.screenshotCount > 0) {
     contextBlock.push(`【本轮新附件】读者这次新发了 ${ctx.screenshotCount} 张截图，见紧随编号的图片。上文用于确定追问对象，新图用于核对和比较；既不能只复述旧解释，也不能只看图另起话题。所在页文字只是背景，不能替代截图内容。`);
     if (request.previousFocus?.text) contextBlock.push(`【上文讨论对象 · 追问线索，不是本轮新选区】\n${request.previousFocus.text}\n请结合这条线索和新图理解当前问题；此前回答可能需要根据新图纠正。`);
@@ -141,7 +147,7 @@ export function qaUserContent(ctx) {
 
 const QA_BASE = {
   kind: 'qa',
-  version: '2.2.0',
+  version: '2.3.0',
   identity: QA_IDENTITY,
   system: qaSystemBlocks(),
   systemJoin: '\n',

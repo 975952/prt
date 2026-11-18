@@ -56,6 +56,9 @@ function bindLegacyHistory(history, entries) {
 
 export function readingIntent(question, selection = '') {
   const q = String(question || '').trim();
+  // An acknowledgement is a conversational turn, not a term to define or search.
+  // Explicit questions such as "OK 是什么意思" still take the normal question path.
+  if (!selection && /^(?:o\.?k\.?|okay|yes|yep|yeah|sure|got it|understood|thanks?|thank you|好(?:的|吧|呀|啊)?|行|可以|没问题|明白(?:了)?|知道(?:了)?|懂(?:了)?|收到|了解(?:了)?|嗯+|哦+|谢谢(?:你)?|对(?:的)?|是的)[\s,.!，。！~～]*$/i.test(q)) return 'acknowledgement';
   if (/\b(from now on|by default|always)\b/i.test(q) && /\b(explain|answer|concise|detail|example)\b/i.test(q)) return 'guidance';
   if (/\b(that'?s wrong|you misunderstood|off topic|not what I asked)\b/i.test(q)) return 'feedback';
   if (/^(?:please )?(?:explain|clarify) (?:this|that|these|the attached|the selected)/i.test(q)) return selection ? 'explain' : 'followup';
@@ -67,7 +70,8 @@ export function readingIntent(question, selection = '') {
     return selection ? 'explain' : 'followup';
   }
   if (/^(?:他|她|它|这|那|这里|那里|二者|两者|前者|后者|上述|上面|上一|刚才|这些|那些)/.test(q)
-    || /^(?:继续|接着|展开|再讲|没懂|不懂|说简单点|举个例子|举一个例子|解释一下|详细点|具体点)/.test(q)
+    || /^(?:继续|接着|展开|再讲|没懂|不懂|说简单点|举个例子|举一个例子|详细点|具体点)/.test(q)
+    || /^解释一下[?？!！。.\s]*$/.test(q)
     || /^(?:为什么|为何|怎么|如何)(?:会|要|能|就|是|做|理解|实现|更快|省|用|有效|这样|这么|做到|工作|的)*[?？。!！]*$/.test(q)
     || /^(?:who is (?:he|she)|what (?:is|does) (?:it|this|that)|why|how so|continue|explain more)[?!.\s]*$/i.test(q)) return 'followup';
   return 'question';
@@ -113,11 +117,18 @@ export function resolvePageRole({ question, reading = null, screenPage = null, a
 export function resolveReadingRequest({ question, selection = '', page, history = [], screenRef = false, selectionSource = '', screenshotCount = 0 } = {}) {
   const q = String(question || '请解释我加进来的这段内容。').trim();
   const intent = readingIntent(q, selection);
-  const previous = [...history].reverse().find((m) => m?.role === 'user');
-  let priorFocus = cleanFocus(previous?.focus);
-  // 老会话没有对象字段时，明确的问题本身仍可作为追问线索。
-  if (!priorFocus && previous?.content && readingIntent(previous.content) === 'question') {
-    priorFocus = { text: String(previous.content).slice(0, MAX_FOCUS), page: null, kind: 'question', source: '' };
+  let priorFocus = null;
+  // Old saved turns may have no focus, or may have incorrectly made "ok" the
+  // focus. Recover the latest meaningful object without dropping intervening replies.
+  for (const previous of [...history].reverse()) {
+    if (previous?.role !== 'user') continue;
+    const focus = cleanFocus(previous.focus);
+    if (focus && (focus.kind === 'selection' || (readingIntent(focus.text) !== 'acknowledgement' && !/^[?？!！。.\s]+$/.test(focus.text)))) {
+      priorFocus = focus; break;
+    }
+    if (previous.content && readingIntent(previous.content) === 'question') {
+      priorFocus = { text: String(previous.content).slice(0, MAX_FOCUS), page: null, kind: 'question', source: '' }; break;
+    }
   }
   // 「这一页讲了什么 / 这里怎么理解」是在问眼前的页面，不继承上一轮的选区对象。
   const screenQuestion = !selection && (screenRef || screenPageRequested(q));
@@ -150,7 +161,7 @@ export function snapshotReadingRequest(request) {
   return { question: String(request.question || '').slice(0, 6000),
     selection: String(request.selection || '').slice(0, MAX_FOCUS), page: focus?.source === 'right' ? null : pageNumber(request.page),
     focus, guidance: String(request.guidance || '').slice(0, 400),
-    intent: ['explain', 'followup', 'feedback', 'guidance', 'question'].includes(request.intent) ? request.intent : 'question',
+    intent: ['explain', 'followup', 'acknowledgement', 'feedback', 'guidance', 'question'].includes(request.intent) ? request.intent : 'question',
     inherited: !!request.inherited,
     ...(request.screenshotCount > 0 ? { screenshotCount: Math.floor(request.screenshotCount),
       ...(cleanFocus(request.previousFocus) ? { previousFocus: cleanFocus(request.previousFocus) } : {}) } : {}) };

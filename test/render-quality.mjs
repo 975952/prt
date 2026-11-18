@@ -14,8 +14,25 @@ const CHROME = [process.env.CHROME, 'C:/Program Files (x86)/Google/Chrome/Applic
   'C:/Program Files/Google/Chrome/Application/chrome.exe',
   'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'].find((file) => file && fs.existsSync(file));
 assert.ok(CHROME, 'a local browser is available');
-const source = fs.readFileSync(path.join(ROOT, 'public/js/util.js'), 'utf8');
-const moduleUrl = `data:text/javascript;base64,${Buffer.from(source).toString('base64')}`;
+// Serve the real modules so relative imports (including locale dependencies)
+// resolve exactly as they do in the app, without rewriting module source.
+const moduleRoot = path.join(ROOT, 'public/js');
+const moduleServer = http.createServer((req, res) => {
+  const pathname = new URL(req.url, 'http://127.0.0.1').pathname;
+  if (pathname === '/') {
+    res.writeHead(200, { 'Content-Type': 'text/html' });
+    res.end('<!doctype html><html lang="en"><body></body></html>');
+    return;
+  }
+  const file = path.resolve(moduleRoot, `.${pathname}`);
+  const relative = path.relative(moduleRoot, file);
+  if (!relative.startsWith('..') && !path.isAbsolute(relative) && file.endsWith('.js') && fs.existsSync(file)) {
+    res.writeHead(200, { 'Content-Type': 'text/javascript' });
+    res.end(fs.readFileSync(file));
+    return;
+  }
+  res.writeHead(404); res.end();
+});
 const cases = {
   lists: '3. Main argument\n   - First condition\n     7. Detail\n     8. More detail\n   - Second condition\n\n4. Next argument\n\n9. Explicit numbering\n\nA separate paragraph.',
   continuation: '- First paragraph\n  continuation\n\n  Second paragraph in the same item.\n\n- Next item',
@@ -29,14 +46,22 @@ const cases = {
   quoteCode: '> Example:\n>\n> ```python\n> if x:\n>     print("$x$")\n> ```\n\nOutside quotation.',
   edgePipe: 'A | B\n--- | ---\nvalue | ends with \\|',
   deep: `${'> '.repeat(100)}Deep content survives.`,
+  entities: '**OK（也写作 okay）**&#x662F;常见的口语表达\n\n&#26159; &#X1F642; &amp; &lt; &gt; &quot; &apos; &nbsp; &copy; &mdash; &hellip; &alpha;',
+  entityBlocks: '## A &amp; B\n\n- &#x662F;\n\n| Label | Value |\n| --- | --- |\n| &lt; | &#26159; |\n\n[source &#x662F;](https://example.com/)',
+  entitySyntax: '&#35; Heading\n\n&#45; item\n\n&#96;not code&#96; &#42;&#42;not bold&#42;&#42; &#36;x&#36;\n\n&#91;not a link&#93;&#40;https://example.com&#41;\n\n&amp;lt; &#38;#x662F; &unknown; &#xZZ; &#x66',
+  entityCode: '`&#x662F; &amp; &lt;`\n\n```html\n&#26159; &copy; &#x3C;img src=x onerror=alert(1)&#x3E;\n```',
+  entityHtml: '&#x3C;img src=x onerror=alert(1)&#x3E;\n\n&lt;script&gt;alert(2)&lt;/script&gt;\n\n&#60;svg onload=alert(3)&#62;\n\n[unsafe](jav&#x61;script:alert%281%29)',
 };
 
 let browser;
 try {
+  await new Promise((resolve) => moduleServer.listen(0, '127.0.0.1', resolve));
+  const moduleBase = `http://127.0.0.1:${moduleServer.address().port}`;
+  const moduleUrl = `${moduleBase}/util.js`;
   browser = await puppeteer.launch({ executablePath: CHROME, headless: 'shell',
     args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1100, height: 850 } });
   const page = await browser.newPage();
-  await page.setContent('<!doctype html><html lang="en"><body></body></html>');
+  await page.goto(moduleBase);
   await page.addScriptTag({ path: path.join(ROOT, 'public/vendor/katex/katex.min.js') });
   const rendered = await page.evaluate(async ({ moduleUrl, cases }) => {
     const { renderMarkdown } = await import(moduleUrl);
@@ -57,7 +82,7 @@ try {
         headers: [...box.querySelectorAll('th')].map((node) => ({ text: node.textContent, align: node.style.textAlign })),
         code: [...box.querySelectorAll('code')].map((node) => ({ text: node.textContent, class: node.className })),
         links: [...box.querySelectorAll('a')].map((node) => ({ href: node.href, text: node.textContent, rel: node.rel })),
-        dangerous: box.querySelectorAll('script, img, iframe, [onclick], [onerror]').length,
+        dangerous: box.querySelectorAll('script, img, iframe, svg, [onclick], [onerror], [onload]').length,
         math: box.querySelectorAll('.katex').length,
         displayMath: box.querySelectorAll('.katex-display').length,
         mathBreaks: box.querySelectorAll('math br, .katex br').length,
@@ -135,8 +160,38 @@ try {
   assert.deepEqual(rendered.quoteCode.children, ['BLOCKQUOTE', 'P']);
   assert.equal(rendered.edgePipe.cells[0][1], 'ends with |');
   console.log('PASS quoted code retains indentation and a final escaped table pipe remains visible');
+
+  assert.equal(rendered.entities.text, 'OK（也写作 okay）是常见的口语表达\n是 🙂 & < > " \' \u00a0 © — … α');
+  assert.equal((rendered.entities.html.match(/<strong>/g) || []).length, 1);
+  assert.deepEqual(rendered.entityBlocks.children, ['H4', 'UL', 'DIV', 'P']);
+  assert.ok(rendered.entityBlocks.text.startsWith('A & B\n是'));
+  assert.deepEqual(rendered.entityBlocks.cells, [['<', '是']]);
+  assert.equal(rendered.entityBlocks.links[0].text, 'source 是');
+  console.log('PASS numeric and named entities display as characters in prose, headings, lists, tables and link labels');
+
+  assert.deepEqual(rendered.entitySyntax.children, ['P', 'P', 'P', 'P', 'P']);
+  assert.ok(rendered.entitySyntax.text.includes('`not code` **not bold** $x$'));
+  assert.ok(rendered.entitySyntax.text.includes('[not a link](https://example.com)'));
+  assert.ok(rendered.entitySyntax.text.endsWith('&lt; &#x662F; &unknown; &#xZZ; &#x66'));
+  assert.equal(rendered.entitySyntax.code.length, 0);
+  assert.equal(rendered.entitySyntax.links.length, 0);
+  assert.equal(rendered.entitySyntax.math, 0);
+  assert.ok(!rendered.entitySyntax.html.includes('<strong>'));
+  assert.deepEqual(rendered.entityCode.code.map((node) => node.text), [
+    '&#x662F; &amp; &lt;', '&#26159; &copy; &#x3C;img src=x onerror=alert(1)&#x3E;',
+  ]);
+  console.log('PASS entity decoding happens once, never creates Markdown syntax, and preserves code literals');
+
+  assert.equal(rendered.entityHtml.dangerous, 0);
+  assert.equal(rendered.entityHtml.links.length, 0);
+  assert.ok(rendered.entityHtml.text.includes('<img src=x onerror=alert(1)>'));
+  assert.ok(rendered.entityHtml.text.includes('<script>alert(2)</script>'));
+  assert.ok(rendered.entityHtml.text.includes('<svg onload=alert(3)>'));
+  assert.equal(rendered.entityCode.dangerous, 0);
+  console.log('PASS entity-encoded tags and unsafe link schemes stay inert text');
 } finally {
   await browser?.close();
+  await new Promise((resolve) => moduleServer.close(resolve));
 }
 
 if (process.argv.includes('--math')) {

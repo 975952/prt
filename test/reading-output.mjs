@@ -64,6 +64,8 @@ try {
   browser = await puppeteer.launch({ executablePath: CHROME, headless: 'shell', args: ['--no-sandbox', '--disable-gpu'],
     userDataDir: path.join(scratch, 'browser'), defaultViewport: { width: 1400, height: 940 } });
   const page = await browser.newPage();
+  // This fixture asserts Chinese action labels; isolate its locale as well as data.
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   const errors = [];
   page.on('pageerror', (error) => errors.push(String(error)));
   await page.goto(`${base}/?open=reading-output.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
@@ -180,22 +182,57 @@ try {
     const input = document.querySelector('#chatInput'); input.value = text;
     await window.__ctx.send();
   }, original);
-  const sourceView = await page.evaluate(() => {
+  const sourceClosed = await page.evaluate(() => {
     const row = document.querySelector('.ai-block[data-block="translate"] .msg');
     const details = row.querySelector('.translation-original');
     const source = row.querySelector('.translation-source');
-    const initiallyClosed = !details.open;
-    details.open = true;
+    return { closed: !details.open, visible: source.checkVisibility(), text: source.textContent };
+  });
+  assert.ok(sourceClosed.closed && !sourceClosed.visible, 'the original starts collapsed');
+  assert.equal(sourceClosed.text, original, 'the complete original is retained');
+  await page.click('.ai-block[data-block="translate"] .msg .translation-original > summary');
+  const sourceView = await page.evaluate(() => {
+    const row = document.querySelector('.ai-block[data-block="translate"] .msg');
+    const source = row.querySelector('.translation-source');
+    source.scrollIntoView({ block: 'center' });
     const css = getComputedStyle(source);
-    return { initiallyClosed, text: source.textContent, overflow: css.overflowY, maxHeight: css.maxHeight,
+    const rect = source.getBoundingClientRect();
+    const first = document.createRange();
+    first.setStart(source.firstChild, 0); first.setEnd(source.firstChild, 'Paragraph 1:'.length);
+    const line = first.getBoundingClientRect();
+    return { visible: source.checkVisibility(), width: rect.width, height: rect.height,
+      firstVisible: line.top >= rect.top && line.bottom <= rect.bottom,
+      scrollable: source.scrollHeight > source.clientHeight,
+      scrollHeight: source.scrollHeight, overflow: css.overflowY,
       size: css.fontSize, bodySize: getComputedStyle(row.querySelector('.text')).fontSize };
   });
-  assert.ok(sourceView.initiallyClosed);
-  assert.equal(sourceView.text, original);
-  assert.ok(['visible', 'clip'].includes(sourceView.overflow));
-  assert.equal(sourceView.maxHeight, 'none'); assert.equal(sourceView.size, sourceView.bodySize);
+  assert.ok(sourceView.visible && sourceView.width > 0 && sourceView.height > 0, 'expanding reveals the original');
+  assert.ok(sourceView.firstVisible, 'the first paragraph is visible when expanded');
+  assert.equal(sourceView.size, sourceView.bodySize, 'the original uses the reading font size');
+  if (sourceView.scrollable) {
+    assert.ok(['auto', 'scroll'].includes(sourceView.overflow), 'a bounded original must permit user scrolling');
+    const sourceBox = await (await page.$('.ai-block[data-block="translate"] .msg .translation-source')).boundingBox();
+    await page.mouse.move(sourceBox.x + sourceBox.width / 2, sourceBox.y + sourceBox.height / 2);
+    await page.mouse.wheel({ deltaY: sourceView.scrollHeight });
+    await page.waitForFunction(() => {
+      const source = document.querySelector('.ai-block[data-block="translate"] .msg .translation-source');
+      return source.scrollTop + source.clientHeight >= source.scrollHeight - 1;
+    });
+  }
+  const sourceEnd = await page.evaluate(() => {
+    const source = document.querySelector('.ai-block[data-block="translate"] .msg .translation-source');
+    const rect = source.getBoundingClientRect();
+    const last = document.createRange();
+    last.setStart(source.firstChild, source.textContent.lastIndexOf('unchanged.'));
+    last.setEnd(source.firstChild, source.textContent.length);
+    const line = last.getBoundingClientRect();
+    return { visible: line.top >= Math.max(0, rect.top) && line.bottom <= Math.min(innerHeight, rect.bottom) + 1,
+      overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth };
+  });
+  assert.ok(sourceEnd.visible, 'the final words can be brought fully into view');
+  assert.ok(sourceEnd.overflow <= 1, 'expanded original does not widen the application');
   await (await page.$('#rightSide')).screenshot({ path: path.join(scratch, 'reading-translation.png') });
-  console.log('PASS translation original is collapsed by default and expands fully at reading size');
+  console.log('PASS translation original is collapsed by default and is readable through its final paragraph');
 
   mode = 'fail-partial';
   await page.evaluate(async () => {
@@ -249,7 +286,8 @@ try {
     window.__restoredSuccess = complete;
     return { failed: failed && { text: failed.querySelector('.text').textContent, status: failed.__sessionRecord.status,
       retry: failed.querySelector('.acts').textContent },
-      complete: complete && { text: complete.querySelector('.text').textContent, actions: complete.querySelector('.acts').textContent },
+      complete: complete && { text: complete.querySelector('.text').textContent,
+        actions: [...complete.querySelectorAll('.acts button')].map((button) => button.getAttribute('aria-label') || button.textContent) },
       count: window.__state.sessionEntries.length };
   });
   assert.equal(restored.failed?.status, 'failed');
@@ -263,7 +301,7 @@ try {
   assert.equal(requests.length, beforeRestoredRetry + 1);
   const countBeforeRetranslate = await page.evaluate(() => {
     const count = window.__state.sessionEntries.length;
-    [...window.__restoredSuccess.querySelectorAll('.acts button')].find((button) => button.textContent.includes('重新翻译')).click();
+    window.__restoredSuccess.querySelector('.acts button[aria-label="重新翻译"]').click();
     return count;
   });
   await page.waitForFunction((count) => window.__state.sessionEntries.length > count && !window.__state.busy

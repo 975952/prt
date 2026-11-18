@@ -78,7 +78,7 @@ function rangesFor(raw, value, tier) {
   const re = new RegExp(boundary + tokens.map(escapeRe).join('[^\\p{L}\\p{N}]*') + tail, 'giu');
   return [...fold(raw).matchAll(re)].map(match => ({ start: match.index, end: match.index + match[0].length, tier }));
 }
-export function resolvePaperTarget({ question, papers = [], currentDocId = '', currentPath = '', currentPage = null, previousTarget = null } = {}) {
+export function resolvePaperTarget({ question, papers = [], currentDocId = '', currentPath = '', currentPage = null, previousTarget = null, followup = false } = {}) {
   const raw = String(question || '').trim(), normalized = normalize(raw), folded = fold(raw);
   const pageState = pageIn(raw), { page } = pageState;
   const phraseRaw = namedPhrase(raw), phrase = normalize(phraseRaw);
@@ -186,7 +186,7 @@ export function resolvePaperTarget({ question, papers = [], currentDocId = '', c
       ...(!pageState.requested && relative && (!Number.isSafeInteger(next) || next < 1) ? { invalidPage: true, pageError: next === null ? '请先指定要继续阅读的页码' : '页码必须是大于 0 的整数' } : {}) });
   }
   const pageOnly = pageState.requested && (!phrase || generic.test(phrase) || /^(?:那|那么|然后|再|再看|那再看|then|and|whatabout)$/i.test(phrase));
-  const follow = relative || pageOnly || /^(?:那(?:篇|本|个)|刚才|上一个|上一轮|这(?:个|段|部分)|继续|接着|详细|再讲|为什么|为何|没懂|不懂|\?|？)|\b(?:that (?:paper|book|page)|continue|explain more|why|what about)\b/i.test(raw);
+  const follow = followup || relative || pageOnly || /^(?:那(?:篇|本|个)|刚才|上一个|上一轮|这(?:个|段|部分)|继续|接着|详细|再讲|为什么|为何|没懂|不懂|\?|？)|\b(?:that (?:paper|book|page)|continue|explain more|why|what about)\b/i.test(raw);
   const screen = /当前|这一?页|本页|这篇|这本|眼前|屏幕|\bcurrent\b|\bthis (?:page|paper|book|document)\b|\bon screen\b/i.test(raw);
   const namedQuote = quotes.find(quote => quote.title || /\.pdf$/i.test(quote.value));
   const hasExplicitName = !!namedQuote || /\.pdf\b/i.test(raw)

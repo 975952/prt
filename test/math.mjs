@@ -87,13 +87,12 @@ page.on('request', (req) => {
   return req.continue();
 });
 
-await page.goto(`${BASE}/?topbar=static`, { waitUntil: 'domcontentloaded' });
-await page.waitForSelector('#fileList li', { timeout: 20000 });
-await page.evaluate((id) => {
-  const li = [...document.querySelectorAll('#fileList li')].find((x) => x.dataset.id === id) || document.querySelector('#fileList li');
-  li.click();
-}, first.docId);
-await page.waitForFunction(() => window.__viewer?.pdf, { timeout: 40000 });
+if (!first.name || !first.docId) throw new Error('The isolated math suite needs a synthetic PDF fixture.');
+await page.goto(`${BASE}/?open=${encodeURIComponent(first.name)}&topbar=static`, { waitUntil: 'domcontentloaded' });
+await page.waitForFunction((docId) => document.body.classList.contains('reading')
+  && document.querySelector('#home')?.classList.contains('hidden')
+  && window.__viewer?.pdf && window.__state?.doc?.docId === docId
+  && window.__state?.viewerDocId === docId, { timeout: 40000 }, first.docId);
 await sleep(1200);
 
 check('页面里加载了 KaTeX', await page.evaluate(() => typeof window.katex?.renderToString === 'function'));

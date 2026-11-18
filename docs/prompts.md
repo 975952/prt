@@ -14,7 +14,7 @@ node test/prompts-manifest.mjs
 npm --prefix test test
 ```
 
-快照保存在 `test/fixtures/prompts-manifest.json`，用于检查代码、文档与版本是否一致。系统版本：**2026.11.6**。
+快照保存在 `test/fixtures/prompts-manifest.json`，用于检查代码、文档与版本是否一致。系统版本：**2026.11.7**。
 
 ## 注册清单
 
@@ -29,8 +29,8 @@ npm --prefix test test
 | `bg.sessionTitle` | 1.0.0 |
 | `op.evidence` | 2.1.0 |
 | `op.limits` | 2.1.0 |
-| `qa.chat` | 2.2.0 |
-| `qa.explain` | 2.2.0 |
+| `qa.chat` | 2.3.0 |
+| `qa.explain` | 2.3.0 |
 | `qa.screenshot` | 1.0.0 |
 | `teach.condense` | 1.0.0 |
 | `teach.intro` | 2.1.0 |

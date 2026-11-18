@@ -100,6 +100,42 @@ assert.equal(currentNext.paper.docId, mobile.docId); assert.equal(currentNext.pa
 assert.equal(resolve('下一页', { currentPage: 5 }).page, 6);
 pass('follow-up questions inherit the prior target and page even after switching the visible PDF');
 
+for (const question of ['ok', 'okay', 'yes', 'got it', '好的', '嗯', '明白了', '谢谢']) {
+  const got = resolve(question, { previousTarget: snapshotPaperTarget(analog, 278), followup: true,
+    currentPath: mobile.path, currentPage: 5 });
+  assert.equal(got.status, 'matched', question);
+  assert.equal(got.paper.path, analog.path, question);
+  assert.equal(got.page, 278, question);
+  assert.equal(got.inherited, true, question);
+  assert.equal(got.explicit, false, question);
+  assert.equal(got.crossFile, true, question);
+}
+assert.equal(resolve('ok', { followup: true }).status, 'none', 'confirmation cannot invent a missing previous target');
+assert.equal(resolve('ok', { previousTarget: snapshotPaperTarget(analog, 278), followup: true, papers: [mobile] }).status, 'missing',
+  'a removed previous target cannot silently become the visible paper');
+assert.equal(resolve('OK是什么意思', { previousTarget: snapshotPaperTarget(analog, 278), followup: false }).status, 'none',
+  'an independent definition must not inherit a paper target');
+pass('reading-context acknowledgements recover the prior file without replacing it with the visible PDF');
+
+const namedAfterConfirmation = resolve('Explain Attention Is All You Need page 4', {
+  previousTarget: snapshotPaperTarget(analog, 278), followup: true,
+});
+assert.equal(namedAfterConfirmation.status, 'matched');
+assert.equal(namedAfterConfirmation.paper.docId, transformer.docId);
+assert.equal(namedAfterConfirmation.page, 4);
+assert.equal(namedAfterConfirmation.explicit, true);
+assert.equal(namedAfterConfirmation.inherited, false);
+assert.equal(resolve('Read MissingBook.pdf page 4', { previousTarget: snapshotPaperTarget(analog, 278), followup: true }).status, 'missing');
+for (const question of ['讲讲当前这篇论文', '解释这一页', 'Explain this page', 'Explain this paper']) {
+  assert.equal(resolve(question, { previousTarget: snapshotPaperTarget(analog, 278), followup: true }).status, 'none', question);
+}
+const screenNextAfterConfirmation = resolve('当前论文下一页', { previousTarget: snapshotPaperTarget(analog, 278), followup: true,
+  currentPath: mobile.path, currentPage: 5 });
+assert.equal(screenNextAfterConfirmation.paper.docId, mobile.docId);
+assert.equal(screenNextAfterConfirmation.page, 6);
+assert.equal(screenNextAfterConfirmation.inherited, false);
+pass('explicitly named files and screen-page requests outrank a general follow-up hint');
+
 for (const [question, page] of [['模电课本第0页', 0], ['模电课本第-1页', -1], ['MobileNet.pdf page 2.5', 2.5], ['模电书第零页', 0]]) {
   const got = resolve(question); assert.equal(got.status, 'matched', question); assert.equal(got.invalidPage, true, question); assert.equal(got.page, page);
 }
