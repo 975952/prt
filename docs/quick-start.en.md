@@ -2,13 +2,15 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.2.13](https://github.com/975952/prt/releases/tag/v1.2.13), including tabs across folders, Home and fullscreen navigation, Fit width, questions about specific pages in other files, background generation, and save protection.
+This guide covers [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0), including Windows installation, migration from portable copies, file locations, workspace navigation, cross-file questions, and background generation.
 
 Name an imported file and page in your question to read it without opening it on screen. Comparisons can specify a different page for each file. “Next page” follows the previous source; “current page” refers to the visible file. Use a full path when names or editions are ambiguous. Page numbers initially refer to PDF positions; printed book numbers may require checking an offset. Stopping rejects late output, and regenerating replaces both the answer and its corresponding conversation history.
 
 ## Open a paper
 
-Put `prt.exe` in a writable folder and launch it. Import a PDF or drag it into the app. Use tabs for multiple papers, or open a tab in another window for comparison. The page number, fit-width control, and zoom slider are in the bottom toolbar. Use `Ctrl+F` to search.
+Download **prt-setup.exe** and follow the wizard to install it for your Windows account without administrator privileges. Open prt from the Start menu or desktop shortcut. Import a PDF or drag it into the app. Use tabs for multiple papers, or open a tab in another window for comparison. The page number, fit-width control, and zoom slider are in the bottom toolbar. Use `Ctrl+F` to search.
+
+For portable use, download **prt.exe**, put it in a writable folder, and launch it. The portable app continues storing `papers/` and `data/` beside its executable. Both editions have the same reading features.
 
 Tabs belong to the window's whole workspace. Switching between folders keeps the other tabs, and reloading restores existing files in their original order. A tab's close button closes only that tab. Selecting a folder in the reader sidebar opens that folder on Home; the reading and conversation context changes when you open a PDF.
 
@@ -66,6 +68,10 @@ Background brightness ranges from 92% to 100%; older settings below that range m
 
 ## Back up and upgrade
 
-Close the reader and copy the executable together with `papers/` and `data/`. To upgrade, replace the executable while keeping both folders. The `data/` folder contains API keys and private conversations; do not publish it.
+The installed app places its program in `%LOCALAPPDATA%\Programs\prt`, papers in `prt\papers` under your Windows Documents folder, and settings, conversations, API keys, and WebView2 data in `%LOCALAPPDATA%\prt\data`. Redirected Documents folders, including OneDrive, follow the Windows setting. The portable app uses `papers/` and `data/` beside its executable.
+
+To import a portable copy, close the old reader and select its folder in the setup wizard. Migration copies both `papers/` and `data/`, leaving the original intact. Destinations must be empty: existing data is never silently merged or overwritten. If the old reader is running or copying fails, setup reports the failure so you can correct it and retry. The original portable copy and the installed app do not automatically synchronize afterward.
+
+Close all reader windows before backing up both the library and data folders. Upgrade an installed app by running the latest **prt-setup.exe**; for a portable app, replace **prt.exe** while keeping both folders. Uninstalling via Windows keeps personal papers and data. Do not publish the data folder: it contains API keys and private conversations. Releases include checksums; the current packages are not commercially code-signed.
 
 If an AI request fails, check the provider URL, model availability, credentials, quota, and network connection. For a bug report, include the version, steps, expected behavior, and a public or synthetic example. Remove personal information from screenshots. [Report a bug](https://github.com/975952/prt/issues/new/choose).

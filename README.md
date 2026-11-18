@@ -6,13 +6,13 @@
 
 **简体中文** · [English](README.en.md)
 
-面向 Windows 的本地 PDF 阅读器，将原文、翻译、跨文件问答与笔记放在同一个工作区。
+面向 Windows 的 PDF 阅读应用，将原文、翻译、跨文件问答与笔记放在同一个工作区。支持安装版与便携版，个人资料保存在本机。
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square&label=release)](https://github.com/975952/prt/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-586976?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
 
-[下载 Windows 版](https://github.com/975952/prt/releases/latest/download/prt.exe) · [使用指南](docs/使用说明书.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/975952/prt/issues/new/choose)
+[下载安装版](https://github.com/975952/prt/releases/latest/download/prt-setup.exe) · [便携版](https://github.com/975952/prt/releases/latest/download/prt.exe) · [使用指南](docs/使用说明书.md) · [更新记录](CHANGELOG.md) · [反馈问题](https://github.com/975952/prt/issues/new/choose)
 
 </div>
 
@@ -43,15 +43,17 @@
 
 ## 开始使用
 
-1. 从 [Releases](https://github.com/975952/prt/releases/latest) 下载 **prt.exe**，放入一个可写文件夹。
-2. 双击启动，拖入 PDF 或点击导入，即可阅读、搜索和记笔记。
+1. 从 [Releases](https://github.com/975952/prt/releases/latest) 下载 **prt-setup.exe**，按向导安装到当前 Windows 账户，无需管理员权限。
+2. 从开始菜单或桌面快捷方式打开 **prt**，拖入 PDF 或点击导入，即可阅读、搜索和记笔记。
 3. 需要翻译或问答时，在设置中填写 **OpenAI 兼容接口地址、模型名和 API Key**。图表与扫描件需要支持图像的模型。
 
 首次使用默认显示 English，可在 **Settings → Language / 语言** 中切换简体中文或 English。界面切换会保存当前阅读位置、会话和草稿；回答语言可跟随界面或独立选择，翻译目标保持单独设置。
 
-桌面版免安装，无需 Node.js。支持 Windows 10/11 x64，需要 [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（多数系统已安装）。模型服务由你自行配置，服务费用按对应提供商规则计算。
+支持 Windows 10/11 x64，无需 Node.js，需要 [Microsoft WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/)（多数系统已安装）。安装器会检查运行环境；模型服务由你自行配置，服务费用按对应提供商规则计算。需要免安装或放在移动硬盘时，下载 **prt.exe** 到可写文件夹即可。
 
-**当前版本：** [v1.2.13](https://github.com/975952/prt/releases/tag/v1.2.13)。跨文件夹切换保留已打开的标签，刷新后恢复原顺序；选择文件夹只在首页浏览该目录，点开 PDF 才切换阅读内容。全屏保留标签栏和“首页”入口，回首页后任务继续生成。点击 **Fit width / 适应宽度** 后，纸面铺满阅读区可用宽度，开关侧栏和调整窗口时继续贴合。
+**当前版本：** [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0)。新增 Windows 安装向导、开始菜单与桌面快捷方式、升级与卸载入口。安装版将程序、论文和会话分开保存；升级不覆盖资料，卸载保留个人数据。首次安装可选择旧便携版所在目录，复制论文、设置和会话，原目录保持完整。
+
+跨文件夹切换保留已打开的标签，刷新后恢复原顺序；全屏保留标签栏与“首页”入口，回首页后任务继续生成。**Fit width / 适应宽度** 铺满阅读区可用宽度，开关侧栏和调整窗口时继续贴合。
 
 跨文件问答先定位目标资料，指定页只读该页，扫描页直接读图；多文件比较分别保留页码。生成跟随所属会话，切换文件或会话时继续运行；停止、重试和保存分别校验任务归属，防止迟到内容串入其他对话或覆盖新答案。
 
@@ -61,7 +63,7 @@
 
 本版也包含近期的阅读修复：输入框光影更明显，背景亮度范围提高到 92%–100%；多条译文最多三条同时生成、按发起顺序排列；窄栏论文不再混选相邻栏文字，深色阅读保留淡彩色底框的原有色相。引用卡片和参考文献列表中的“浏览器搜索论文”直接打开默认浏览器，使用 Bing 搜索。
 
-升级时，退出旧版并替换同一目录的 `prt.exe`，保留 `papers/` 和 `data/`。下载页提供 `SHA256SUMS.txt` 校验文件。
+安装版升级时退出 prt，再运行新的 **prt-setup.exe**。便携版升级仍只替换原位置的 **prt.exe**，保留 `papers/` 和 `data/`。下载页提供源码包与 `SHA256SUMS.txt` 校验文件。
 
 <details>
 <summary>查看两种译文卡片、米宣与深色主题</summary>
@@ -90,7 +92,13 @@
 
 ## 数据由你保管
 
-论文保存在程序旁的 `papers/`，配置、笔记、会话和 API Key 保存在 `data/`。备份或迁移时，将两个目录一起复制。API Key 作为本地配置保存，请妥善保管该目录。
+| 内容 | 安装版默认位置 | 便携版位置 |
+| --- | --- | --- |
+| 应用程序 | `%LOCALAPPDATA%\Programs\prt` | `prt.exe` 所在目录 |
+| 论文库 | 系统“文档”目录下的 `prt\papers` | 程序旁的 `papers/` |
+| 设置、笔记、会话、API Key 与窗口数据 | `%LOCALAPPDATA%\prt\data` | 程序旁的 `data/` |
+
+系统“文档”目录若已重定向到其他磁盘或 OneDrive，安装版会跟随系统位置。备份时退出 prt，将论文库与数据目录一起复制；卸载不会删除这两个目录。API Key 作为本地配置保存，不应公开上传数据目录。旧版迁移只向空目标复制，不会合并覆盖已存在的资料；迁移的源和目标需要是普通本地目录，遇到链接、联接点或云端占位路径会停止并提示。完整步骤见[使用指南](docs/使用说明书.md#数据备份与升级)。
 
 本地服务只监听 `127.0.0.1`。阅读、搜索和笔记不需要模型服务；使用 AI 时，相关原文、截图及对话上下文会发送到你配置的接口，联网检索会向检索服务发送查询。AI 输出可能有误，可通过引用回到原文核对。
 

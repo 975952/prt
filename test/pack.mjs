@@ -6,6 +6,13 @@ const ROOT = path.join(import.meta.dirname, '..');
 const STAGE = path.join(import.meta.dirname, 'artifacts', 'pkg');
 const STAGE_ROOT = path.join(import.meta.dirname, 'artifacts');
 const ZIP = path.join(import.meta.dirname, 'artifacts', 'prt-src.zip');
+const VERIFY = path.join(STAGE_ROOT, 'pkg-verify');
+// Every cleanup target is fixed under the isolated packaging directory.
+for (const target of [STAGE, ZIP, VERIFY]) {
+  if (!path.resolve(target).startsWith(`${path.resolve(STAGE_ROOT)}${path.sep}`)) {
+    throw new Error(`Refusing packaging cleanup outside ${path.resolve(STAGE_ROOT)}`);
+  }
+}
 
 /** 要发布的顶层文件 / 目录（相对 ROOT） */
 const INCLUDE = [
@@ -28,6 +35,8 @@ const INCLUDE = [
   'desktop/Cargo.lock',
   'desktop/README.md',
   'desktop/build.bat',
+  'desktop/build-setup.ps1',
+  'desktop/installer',
   'desktop/build.rs',
   'desktop/tools',
   'docs/README.md',
@@ -50,7 +59,8 @@ const DENY = [
   /node_modules/,
   /[\\/]target[\\/]/,
   /[\\/]artifacts[\\/]/,
-  /\.exe$/i,
+  /(^|[\\/])dist([\\/]|$)/i,
+  /\.(exe|dll|msi|msix|msixbundle|appx|zip|pfx|p12|key)$/i,
   /\.pdf$/i,        // 例外只有下面 isFixturePdf() 放行的合成夹具
   /\.log$/i,
   /webview2/,
@@ -66,12 +76,13 @@ const DENY = [
 const isFixturePdf = (rel) => /^test[\\/]fixtures[\\/][^\\/]+\.pdf$/i.test(rel);
 
 const walk = (abs, rel, out) => {
+  // Reject whole private/build directories before walking them.
+  if (DENY.some((re) => re.test(rel)) && !isFixturePdf(rel)) return;
   const st = fs.statSync(abs);
   if (st.isDirectory()) {
     for (const e of fs.readdirSync(abs)) walk(path.join(abs, e), path.join(rel, e), out);
     return;
   }
-  if (DENY.some((re) => re.test(rel)) && !isFixturePdf(rel)) return;
   out.push({ abs, rel });
 };
 
@@ -92,16 +103,16 @@ if (dangerous.length) {
   process.exit(1);
 }
 // 反向自检：敏感目录一个都不许出现在清单里（正常情况 DENY 已经拦掉了，这里是第二道）
-const forbidden = files.filter((f) => /(^|[\\/])(data|papers|node_modules|artifacts)([\\/]|$)/i.test(f.rel)
+const forbidden = files.filter((f) => /(^|[\\/])(data|papers|node_modules|artifacts|dist)([\\/]|$)/i.test(f.rel)
   || /[\\/]target[\\/]/i.test(f.rel));
 if (forbidden.length) {
-  console.error('拒绝打包：清单里出现了 data/ papers/ artifacts/ node_modules/ target/');
+  console.error('拒绝打包：清单里出现了 data/ papers/ artifacts/ dist/ node_modules/ target/');
   for (const f of forbidden) console.error('  ' + f.rel);
   process.exit(1);
 }
 const leaked = [];
 for (const f of files) {
-  if (!/\.(js|mjs|json|html|css|md|rs|toml|bat|txt|ya?ml)$/i.test(f.rel)) continue;
+  if (!/\.(js|mjs|json|html|css|md|rs|toml|bat|ps1|iss|flag|txt|ya?ml)$/i.test(f.rel)) continue;
   const txt = fs.readFileSync(f.abs, 'utf8');
   // 真实 API Key 长这样：sk- 后面 30+ 位
   if (/sk-[A-Za-z0-9]{20,}/.test(txt)) leaked.push(f.rel);
@@ -127,6 +138,10 @@ const REQUIRED_PUBLIC = [
   'public/js/teaching.js',
   'public/js/tabs.js',
   'public/tabs.css',
+  'desktop/build-setup.ps1',
+  'desktop/installer/prt.iss',
+  'desktop/installer/prt-installed.flag',
+  '.github/workflows/release.yml',
 ];
 const missingPublic = REQUIRED_PUBLIC.filter((rel) => !files.some((f) => f.rel.replace(/\\/g, '/') === rel));
 if (missingPublic.length) {
@@ -161,7 +176,6 @@ try {
 }
 fs.rmSync(STAGE, { recursive: true, force: true });
 
-const VERIFY = path.join(STAGE_ROOT, 'pkg-verify');
 let verifyNote = '';
 try {
   fs.rmSync(VERIFY, { recursive: true, force: true });
@@ -209,4 +223,4 @@ for (const f of files.slice(0, 20)) console.log('  ' + f.rel);
 const fixturePdfs = files.filter((f) => isFixturePdf(f.rel)).map((f) => f.rel).sort();
 console.log(`\n合成 PDF 夹具（${fixturePdfs.length} 个）：`);
 for (const f of fixturePdfs) console.log('  ' + f);
-console.log(`敏感路径自检：${forbidden.length === 0 ? '通过（清单里没有 data/ / papers/ / artifacts/ / node_modules/ / target/）' : '失败'}`);
+console.log(`敏感路径自检：${forbidden.length === 0 ? '通过（清单里没有 data/ / papers/ / artifacts/ / dist/ / node_modules/ / target/）' : '失败'}`);

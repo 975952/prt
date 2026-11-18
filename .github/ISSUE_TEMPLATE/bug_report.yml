@@ -9,14 +9,14 @@ body:
     id: version
     attributes:
       label: prt 版本
-      placeholder: "例如 v1.1.1，或 main 的提交号"
+      placeholder: "例如 v1.3.0，或 main 的提交号"
     validations:
       required: true
   - type: input
     id: environment
     attributes:
       label: 运行环境
-      placeholder: "例如 Windows 11 x64 / 桌面版；浏览器版请填写浏览器版本"
+      placeholder: "例如 Windows 11 x64 / 安装版或便携版；开发服务请填写浏览器版本"
     validations:
       required: true
   - type: textarea

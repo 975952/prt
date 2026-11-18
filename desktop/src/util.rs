@@ -12,9 +12,9 @@ use std::sync::OnceLock;
 pub struct Dirs {
     /// exe 所在目录
     pub exe: PathBuf,
-    /// <exe>/papers
+    /// 论文库（安装版在“文档/prt/papers”，便携版在 exe/papers）
     pub papers: PathBuf,
-    /// <exe>/data
+    /// 设置、会话及 WebView2 数据（安装版在 LocalAppData，便携版在 exe/data）
     pub data: PathBuf,
 }
 
@@ -27,20 +27,53 @@ pub fn exe_dir() -> PathBuf {
         .unwrap_or_else(|| PathBuf::from("."))
 }
 
-/// 初始化（并记住）exe 同级目录；papers/ data/ 不存在就创建。
+const INSTALLED_MARKER: &str = "prt-installed.flag";
+
+pub fn is_installed(exe: &Path) -> bool {
+    exe.join(INSTALLED_MARKER).is_file()
+}
+
+fn resolve_dirs(
+    exe: PathBuf,
+    installed: bool,
+    local_data: Option<PathBuf>,
+    documents: Option<PathBuf>,
+    data_override: Option<PathBuf>,
+    papers_override: Option<PathBuf>,
+) -> Dirs {
+    let app_data = local_data.map(|path| path.join("prt"));
+    let data = data_override.unwrap_or_else(|| {
+        if installed {
+            app_data.as_ref().map(|path| path.join("data")).unwrap_or_else(|| exe.join("data"))
+        } else {
+            exe.join("data")
+        }
+    });
+    let papers = papers_override.unwrap_or_else(|| {
+        if installed {
+            documents
+                .map(|path| path.join("prt").join("papers"))
+                .or_else(|| app_data.map(|path| path.join("papers")))
+                .unwrap_or_else(|| exe.join("papers"))
+        } else {
+            exe.join("papers")
+        }
+    });
+    Dirs { exe, papers, data }
+}
+
+/// 初始化并记住目录。安装版将个人文件与程序分开；无标记 EXE 继续使用便携布局。
 pub fn init_dirs() -> &'static Dirs {
     DIRS.get_or_init(|| {
         let exe = exe_dir();
-        let papers = std::env::var_os("PRT_PAPERS_DIR").map(PathBuf::from).unwrap_or_else(|| exe.join("papers"));
-        let data = std::env::var_os("PRT_DATA_DIR").map(PathBuf::from).unwrap_or_else(|| exe.join("data"));
-        let d = Dirs {
-            papers,
-            data,
-            exe,
-        };
-        // 建目录失败不致命：后面每个写操作自己还会兜底
-        let _ = std::fs::create_dir_all(&d.papers);
-        let _ = std::fs::create_dir_all(&d.data);
+        let d = resolve_dirs(
+            exe.clone(),
+            is_installed(&exe),
+            dirs::data_local_dir(),
+            dirs::document_dir(),
+            std::env::var_os("PRT_DATA_DIR").map(PathBuf::from),
+            std::env::var_os("PRT_PAPERS_DIR").map(PathBuf::from),
+        );
         d
     })
 }
@@ -416,6 +449,55 @@ pub fn normalize_chat_url(base_url: &str) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    #[test]
+    fn portable_storage_stays_next_to_executable() {
+        let exe = PathBuf::from(r"C:\portable\prt");
+        let dirs = resolve_dirs(exe.clone(), false, None, None, None, None);
+        assert_eq!(dirs.data, exe.join("data"));
+        assert_eq!(dirs.papers, exe.join("papers"));
+    }
+
+    #[test]
+    fn installed_storage_uses_local_app_data_and_documents() {
+        let exe = PathBuf::from(r"C:\Users\Reader\AppData\Local\Programs\prt");
+        let dirs = resolve_dirs(
+            exe,
+            true,
+            Some(PathBuf::from(r"C:\Users\Reader\AppData\Local")),
+            Some(PathBuf::from(r"D:\OneDrive\Documents")),
+            None,
+            None,
+        );
+        assert_eq!(dirs.data, PathBuf::from(r"C:\Users\Reader\AppData\Local").join("prt").join("data"));
+        assert_eq!(dirs.papers, PathBuf::from(r"D:\OneDrive\Documents").join("prt").join("papers"));
+    }
+
+    #[test]
+    fn explicit_test_directories_override_installed_defaults() {
+        let dirs = resolve_dirs(
+            PathBuf::from(r"C:\install\prt"),
+            true,
+            Some(PathBuf::from(r"C:\Users\Reader\AppData\Local")),
+            Some(PathBuf::from(r"C:\Users\Reader\Documents")),
+            Some(PathBuf::from(r"C:\test\data")),
+            Some(PathBuf::from(r"C:\test\papers")),
+        );
+        assert_eq!(dirs.data, PathBuf::from(r"C:\test\data"));
+        assert_eq!(dirs.papers, PathBuf::from(r"C:\test\papers"));
+    }
+
+    #[test]
+    fn installer_marker_is_required_for_new_storage_layout() {
+        let nonce = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let temp = std::env::temp_dir().join(format!("prt-marker-test-{}-{nonce}", std::process::id()));
+        std::fs::create_dir_all(&temp).unwrap();
+        assert!(!is_installed(&temp));
+        std::fs::write(temp.join(INSTALLED_MARKER), b"installed").unwrap();
+        assert!(is_installed(&temp));
+        std::fs::remove_dir_all(temp).unwrap();
+    }
 
     #[test]
     fn doc_id_matches_node() {

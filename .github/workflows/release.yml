@@ -1,0 +1,140 @@
+name: Build Windows release
+
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Windows x64 installer and portable
+    runs-on: windows-2022
+    timeout-minutes: 45
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Select stable Rust
+        run: |
+          rustup update stable --no-self-update
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          rustup default stable
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Check package version and tag
+        id: version
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $metadata = cargo metadata --manifest-path desktop/Cargo.toml --locked --no-deps --format-version 1 | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $version = ($metadata.packages | Where-Object name -eq 'prt').version
+          if ($version -notmatch '^\d+\.\d+\.\d+$') { throw 'Expected a stable semantic package version.' }
+          if ($env:GITHUB_REF_TYPE -eq 'tag' -and $env:GITHUB_REF_NAME -cne "v$version") {
+            throw "Tag $env:GITHUB_REF_NAME does not match Cargo version v$version."
+          }
+          "version=$version" >> $env:GITHUB_OUTPUT
+      - name: Check source and build desktop executable
+        run: |
+          $ErrorActionPreference = 'Stop'
+          npm --prefix test test
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          cargo test --manifest-path desktop/Cargo.toml --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          # rust-embed must see newly added frontend files on every release build.
+          (Get-Item desktop/src/assets.rs).LastWriteTimeUtc = [DateTime]::UtcNow
+          cargo build --manifest-path desktop/Cargo.toml --release --locked
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Install Inno Setup compiler
+        run: |
+          $ErrorActionPreference = 'Stop'
+          # Match the locally tested compiler, with the digest from the official
+          # jrsoftware/issrc is-6_7_3 release. Never resolve an unpinned latest.
+          $installer = Join-Path $env:RUNNER_TEMP 'innosetup-6.7.3.exe'
+          $compilerRoot = Join-Path $env:RUNNER_TEMP 'inno-setup-6.7.3'
+          Invoke-WebRequest -Uri 'https://github.com/jrsoftware/issrc/releases/download/is-6_7_3/innosetup-6.7.3.exe' -OutFile $installer
+          $expected = '9c73c3bae7ed48d44112a0f48e66742c00090bdb5bef71d9d3c056c66e97b732'
+          if ((Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash.ToLowerInvariant() -cne $expected) {
+            throw 'The Inno Setup download does not match the approved SHA256.'
+          }
+          if ((Get-AuthenticodeSignature -LiteralPath $installer).Status -ne 'Valid') {
+            throw 'The Inno Setup installer signature is not valid.'
+          }
+          $installArgs = @('/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/CURRENTUSER', ('/DIR="{0}"' -f $compilerRoot))
+          $install = Start-Process -FilePath $installer -ArgumentList $installArgs -WindowStyle Hidden -Wait -PassThru
+          if ($install.ExitCode -ne 0) { throw "Inno Setup installation failed: $($install.ExitCode)" }
+          $compiler = Join-Path $compilerRoot 'ISCC.exe'
+          if (-not (Test-Path -LiteralPath $compiler -PathType Leaf)) { throw 'ISCC.exe was not installed.' }
+          "PRT_ISCC=$compiler" >> $env:GITHUB_ENV
+      - name: Build installer and verified source archive
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & ./desktop/build-setup.ps1 -SkipBuild -ISCC $env:PRT_ISCC -OutputDir (Join-Path $PWD 'dist')
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node test/pack.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          Copy-Item -LiteralPath desktop/target/release/prt.exe -Destination dist/prt.exe -Force
+          Copy-Item -LiteralPath test/artifacts/prt-src.zip -Destination dist/prt-src.zip -Force
+          $names = @('prt.exe', 'prt-setup.exe', 'prt-src.zip')
+          $lines = foreach ($name in $names) {
+            $asset = Join-Path $PWD "dist/$name"
+            if (-not (Test-Path -LiteralPath $asset -PathType Leaf)) { throw "Missing release asset: $name" }
+            if ((Get-Item -LiteralPath $asset).Length -eq 0) { throw "Empty release asset: $name" }
+            "{0}  {1}" -f (Get-FileHash -LiteralPath $asset -Algorithm SHA256).Hash.ToLowerInvariant(), $name
+          }
+          [IO.File]::WriteAllText((Join-Path $PWD 'dist/SHA256SUMS.txt'), ($lines -join "`n") + "`n", [Text.UTF8Encoding]::new($false))
+      - name: Upload verified build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: prt-${{ steps.version.outputs.version }}-windows-x64
+          path: |
+            dist/prt.exe
+            dist/prt-setup.exe
+            dist/prt-src.zip
+            dist/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 30
+
+  draft-release:
+    name: Create release draft
+    if: github.event_name == 'push' && github.ref_type == 'tag'
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: prt-${{ needs.build.outputs.version }}-windows-x64
+          path: release-assets
+      - name: Verify assets and create a new draft
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd release-assets
+          sha256sum --check SHA256SUMS.txt
+          # Never overwrite an existing draft or a published release on reruns.
+          if gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            echo "Release $RELEASE_TAG already exists; verified artifacts remain on this workflow run."
+            exit 0
+          fi
+          gh release create "$RELEASE_TAG" prt.exe prt-setup.exe prt-src.zip SHA256SUMS.txt \
+            --verify-tag --draft --title "prt $RELEASE_TAG" --generate-notes

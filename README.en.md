@@ -6,12 +6,12 @@
 
 [简体中文](README.md) · **English**
 
-A local PDF reader for Windows, with translation, cross-file questions, and notes beside the original.
+A PDF reading app for Windows, with translation, cross-file questions, and notes beside the original. Available as an installer or portable app, with your files stored locally.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
 
-[Download for Windows](https://github.com/975952/prt/releases/latest/download/prt.exe) · [Quick start](docs/quick-start.en.md) · [Report an issue](https://github.com/975952/prt/issues/new/choose)
+[Download installer](https://github.com/975952/prt/releases/latest/download/prt-setup.exe) · [Portable app](https://github.com/975952/prt/releases/latest/download/prt.exe) · [Quick start](docs/quick-start.en.md) · [Report an issue](https://github.com/975952/prt/issues/new/choose)
 
 </div>
 
@@ -42,14 +42,16 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 
 ## Get started
 
-1. Download **prt.exe** from [Releases](https://github.com/975952/prt/releases/latest) and put it in a writable folder.
-2. Open it and import or drag in a PDF. Reading, search, and notes work without an AI service.
+1. Download **prt-setup.exe** from [Releases](https://github.com/975952/prt/releases/latest) and install it for your Windows account. Administrator privileges are not required.
+2. Open **prt** from the Start menu or desktop shortcut and import or drag in a PDF. Reading, search, and notes work without an AI service.
 3. For AI features, enter an OpenAI-compatible service URL, model name, and API key in Settings. Image questions require a vision-capable model.
 4. The interface starts in **English**. Use **Settings → Language / 语言** to switch between English and Simplified Chinese. The answer language and translation target can be set separately.
 
-No installation or Node.js is required for the desktop app. Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required. You supply your own model service; provider charges may apply.
+Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required; the installer checks for the runtime. Node.js is not needed. For an app that runs without installation, download **prt.exe** into a writable folder. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.2.13](https://github.com/975952/prt/releases/tag/v1.2.13). Switching between folders keeps open tabs, and reloading restores their order. Choosing a folder browses it on Home; the reading context changes when you open a PDF. Fullscreen keeps the tab bar and Home button visible, and generation continues while you browse Home. **Fit width** fills the available reading area and adapts when sidebars or window size change.
+**Current release:** [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0). Adds a Windows setup wizard, Start menu and desktop shortcuts, upgrades, and an uninstaller. The installed app keeps program files separate from papers and conversation data. Upgrades preserve your files, and uninstalling keeps personal data. During first installation, you can select a portable copy to copy its papers, settings, and conversations; the original folder remains intact.
+
+Switching between folders keeps open tabs, and reloading restores their order. Fullscreen keeps the tab bar and Home button visible, and generation continues while you browse Home. **Fit width** fills the available reading area and adapts when sidebars or window size change.
 
 Questions can target other imported files and specific pages without scanning an entire textbook. Scanned pages are supplied as images, and comparisons keep each file's page numbers separate. Generation stays with its conversation through navigation; cancellation, retries and ordered saves prevent late results from entering another conversation or replacing a newer answer.
 
@@ -72,7 +74,15 @@ The cards show illustrative Chinese translations in the actual desktop interface
 
 ## Your data
 
-Papers are stored in `papers/` beside the EXE. Settings, API keys, notes, conversations, and drafts are stored in `data/`. Keep both folders when upgrading or moving the app. Do not publish `data/` or attach it to an issue.
+| Content | Installed app | Portable app |
+| --- | --- | --- |
+| Program | `%LOCALAPPDATA%\Programs\prt` | The folder containing `prt.exe` |
+| Paper library | `prt\papers` inside your Windows Documents folder | `papers/` beside the EXE |
+| Settings, notes, conversations, API keys, and window data | `%LOCALAPPDATA%\prt\data` | `data/` beside the EXE |
+
+The installed app follows the Windows Documents folder, including redirected locations or OneDrive. Close prt before backing up both the library and data folders. Uninstalling preserves them. Migration copies into empty destinations and refuses to merge or overwrite existing data. Import requires ordinary local source and destination directories; links, junctions, and cloud placeholder paths stop the import with an explanation. Do not publish your data folder or attach it to an issue.
+
+To upgrade the installed app, close prt and run the latest **prt-setup.exe**. For the portable app, replace **prt.exe** in its original folder and keep `papers/` and `data/`. Releases include a source archive and `SHA256SUMS.txt`.
 
 The local service listens on `127.0.0.1`. AI requests send the relevant text, images, and conversation context to your configured provider. Online search sends queries to search services. Verify important claims against the original paper.
 

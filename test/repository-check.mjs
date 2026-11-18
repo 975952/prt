@@ -30,7 +30,7 @@ for (const file of docs) {
     links++;
   }
 }
-const forbidden = /^(?:AGENTS\.md$|design\/|data\/|papers\/|docs\/internal\/|tools\/internal\/|archive\/|desktop\/target\/|test\/artifacts\/)|(?:^|\/)(?:node_modules\/|\.env(?:\.|$))|\.(?:exe|apk)$/i;
+const forbidden = /^(?:AGENTS\.md$|design\/|data\/|papers\/|docs\/internal\/|tools\/internal\/|archive\/|desktop\/target\/|test\/artifacts\/)|(?:^|\/)(?:dist\/|node_modules\/|\.env(?:\.|$))|\.(?:exe|apk|dll|msi|msix|msixbundle|appx|zip|pfx|p12|key)$/i;
 assert.deepEqual(files.filter(file => forbidden.test(file)), [], 'private data and binaries must remain outside Git');
 assert.deepEqual(files.filter(file => file.startsWith('docs/') && !publicDoc(file)), [],
   'public documentation must be listed in the documentation index and source package');
