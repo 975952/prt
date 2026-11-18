@@ -667,7 +667,7 @@ const DEFAULT_UI_STYLE = Object.freeze({
   paper: 'tint',
   // 界面尺度：uiFontSize = 界面字号 px（--ui-fs），controlSize = 控件大小 %（--ctl-scale）。
   // 这两个和上面的 fontSize（阅读/结果字号 --ai-fs）是互相独立的三套刻度。
-  uiFontSize: 13.5, controlSize: 100, homeZoom: 140,
+  uiFontSize: 13.5, controlSize: 100, homeZoom: 140, agentZoom: 100,
   showPage: true, showQuote: true, showSources: false,
   useFullText: true, useWeb: true,
   zoomSpeed: 1,
@@ -2027,6 +2027,7 @@ function applyUiStyle() {
   root.style.setProperty('--ui-fs', `${uiFontSizePx(style.uiFontSize)}px`);
   root.style.setProperty('--ctl-scale', `${ctlScaleOf(style.controlSize)}`);
   root.style.setProperty('--home-scale', String(clamp(Number(style.homeZoom) || DEFAULT_UI_STYLE.homeZoom, 70, 160) / 100));
+  root.style.setProperty('--agent-scale', String(clamp(Number(style.agentZoom) || DEFAULT_UI_STYLE.agentZoom, 70, 160) / 100));
   root.style.setProperty('--glass-paper-opacity', String(1 - glassValue('glassTransparency') / 100));
   root.style.setProperty('--glass-surface-opacity', String(1 - glassValue('glassSurfaceTransparency') / 100));
   // Menus and controls retain a quiet shadow; PDF elevation is independent.
@@ -5573,6 +5574,11 @@ function clearChatBlock() {
 
 function createReadingWelcome(id) {
   const translating = id === 'translate';
+  if (!translating && !chatReadingPaper()) {
+    return el('div', { class: 'ai-hint reading-welcome scope-welcome' },
+      el('h3', { text: effectiveSessionScopeMode() === 'folder' ? folderDisplayName(sessionFolderPath()) : agentName }),
+      el('p', { text: tr("直接提问，或描述你想找的论文。") }));
+  }
   const actions = translating
     ? [el('button', { type: 'button', class: 'welcome-action', text: tr("截图翻译"), onclick: () => {
       state.startRegion?.('translate');
@@ -6168,7 +6174,7 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     const qref = msg?.querySelector?.(`.page-ref.quote-ref[data-page="${page}"]`);
     return qref?.dataset.fragment || refText;
   };
-  const role = el('div', { class: `role${!isUser && !page ? ' hidden' : ''}` },
+  const role = el('div', { class: `role${isTranslateEntry || (!isUser && !page) ? ' hidden' : ''}` },
     tag ? el('span', { class: 'tag', text: tr(tag), 'aria-hidden': 'true' }) : null,
     page && uiStyle.showPage ? el('button', {
       class: 'pg', type: 'button', text: tr("第{0}页", page),
@@ -6214,27 +6220,32 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     const targetLang = retry?.targetLang || (retry?.kind === 'translate' ? targetLangFor(String(quote || '')) : '中文');
     const sourceText = retry?.kind === 'translate-text' || retry?.kind === 'translate'
       ? String(retry.text || quote || '') : (!shots.length ? String(quote || '') : '');
-    const originLang = sourceText && targetLang === 'English' && /[\u4e00-\u9fff]/.test(sourceText) ? '中文' : tr("原文");
     const sourceSegments = snapshotTranslationSegments(retry?.segments);
-    const direction = el('div', { class: 'translation-direction', text: `${sourceSegments.length ? tr("{0} 段合并翻译", sourceSegments.length)
-      : retry?.kind === 'translate-text' ? tr("文本翻译") : tr("译文")} · ${tr(originLang)} → ${tr(targetLang)}` });
-    root.insertBefore(direction, ref || shot || textEl);
+    // Keep the result first. Source, language and actions share one quiet footer.
+    const direction = el('div', { class: 'translation-direction' });
+    const caption = el('span', { class: 'translation-language', text: `→ ${tr(targetLang)}` });
     if (sourceText) {
       root.querySelector('.ref')?.remove();
       const original = el('details', { class: 'translation-original' },
-        el('summary', { text: tr("原文对照") }),
+        el('summary', { title: tr("原文对照") }, el('span', { text: tr("原文") }), caption),
         el('div', { class: 'translation-source', text: sourceText }),
         sourceSegments.length ? el('div', { class: 'translation-segment-sources' }, ...sourceSegments.filter((part) => part.page).map((part, index) =>
           el('button', { type: 'button', class: 'translation-locate', text: tr("选段 {0} · 第{1}页", index + 1, (part.pages.length ? part.pages : [part.page]).join('、')),
-            onclick: () => jumpAndHighlight(part.page, part.text),
+            onclick: () => navigateEntrySource(root, part.page, part.text),
           }))) : null,
-        page && retry?.kind !== 'translate-text' ? el('button', {
-          type: 'button', class: 'translation-locate', text: tr("定位原文"),
-          onclick: () => jumpAndHighlight(page, sourceText),
+        page && !sourceSegments.length ? el('button', {
+          type: 'button', class: 'translation-locate', text: tr("第{0}页", page), title: tr("定位原文"),
+          onclick: () => navigateEntrySource(root, page, sourceText),
         }) : null,
       );
-      root.insertBefore(original, textEl);
+      direction.append(original);
+    } else {
+      direction.append(caption);
+      if (page) direction.append(el('button', { type: 'button', class: 'translation-locate', text: tr("第{0}页", page),
+        onclick: () => navigateEntrySource(root, page) }));
     }
+    root.append(direction);
+    direction.append(acts);
   }
   // 全局序号：分块之后 DOM 顺序 ≠ 时间顺序，取「最新一条」要靠它
   state.msgSeq = (state.msgSeq || 0) + 1;
@@ -6250,7 +6261,6 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
   if (isTranslateEntry) {
     let header = root.querySelector('.translation-direction');
     if (!header) { header = el('div', { class: 'translation-direction' }); root.prepend(header); }
-    else { const label = header.textContent; header.replaceChildren(el('span', { text: label })); }
     header.append(el('button', { class: 'translation-delete', type: 'button', title: tr("删除这条翻译"),
       'aria-label': tr("删除这条翻译"), onclick: () => deleteTranslationEntry(root) }, iconEl('trash')));
   }
@@ -6343,7 +6353,10 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
       onclick: () => navigateEntrySource(entry.root, page),
     }, iconEl('jump-back')) : null,
     bare ? null : (onAsk ? el('button', { text: tr("接着问"), onclick: onAsk }) : null),
-    onRetry ? el('button', { text: retryLabel || (status === 'stopped' ? tr("重新生成") : tr("重试")), onclick: onRetry }) : null,
+    onRetry ? el('button', { class: bare && status === 'complete' ? 'act-icon' : '',
+      text: bare && status === 'complete' ? null : retryLabel || (status === 'stopped' ? tr("重新生成") : tr("重试")),
+      title: retryLabel || tr("重试"), 'aria-label': retryLabel || tr("重试"), onclick: onRetry },
+    bare && status === 'complete' ? iconEl('refresh') : null) : null,
   );
   const extra = [];
   if (sources?.length) extra.push(renderSources(sources));
@@ -6363,12 +6376,31 @@ function addFailureRetry(entry, message, onRetry) {
   const rec = entry.root.__sessionRecord;
   const partial = entry.root.__partialText || '';
   if (rec) { rec.status = 'failed'; rec.text = partial; rec.meta = ''; }
+  if (rec?.block === 'translate') {
+    renderTranslationInterruption(entry, { text: partial, message, onRetry });
+    scheduleSessionSave();
+    return;
+  }
   entry.root.classList.toggle('err', !partial);
   entry.acts.replaceChildren(el('button', { text: tr("重试这次发送"), onclick: onRetry }));
   entry.acts.classList.remove('hidden');
   entry.root.querySelectorAll('.entry-meta').forEach((node) => node.remove());
   entry.root.append(el('div', { class: 'entry-meta failed', text: tr("生成中断：{0}{1} · 可重试本次请求", message, partial ? tr(" · 已保留收到的内容") : '') }));
   if (entry.root.__chatJob) scheduleChatJobSave(entry.root.__chatJob); else scheduleSessionSave();
+}
+
+function renderTranslationInterruption(entry, { text = '', message = '', onRetry, waiting = false } = {}) {
+  // Stream errors and restored records use the same single notice. Keep the
+  // saved original/retry payload intact and show any received translation.
+  entry.body.innerHTML = renderAnswerHTML(text);
+  entry.root.classList.remove('err');
+  entry.root.querySelectorAll('.entry-meta, .stream-error').forEach(node => node.remove());
+  const label = waiting ? tr("正在翻译…") : tr("翻译未完成，原文已保留");
+  const notice = el('div', { class: `entry-meta translation-notice${waiting ? '' : ' failed'}`, text: label,
+    title: message || null, role: 'status' });
+  entry.root.insertBefore(notice, entry.root.querySelector('.translation-direction'));
+  entry.acts.replaceChildren(...(onRetry ? [el('button', { type: 'button', text: tr("重试"), onclick: onRetry })] : []));
+  entry.acts.classList.toggle('hidden', !onRetry);
 }
 
 /**
@@ -7657,12 +7689,20 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
         retryLabel: row.block === 'translate' ? tr("重新翻译") : tr("重新生成"), restore: true,
       });
       else if (row.kind !== 'user' && row.status === 'failed') {
+        if (row.block === 'translate') {
+          renderTranslationInterruption(entry, { text, onRetry: retry });
+          continue;
+        }
         if (!row.text) entry.body.textContent = tr("上次生成未完成。问题和附件保留在请求中，可以重试。");
         entry.root.classList.toggle('err', !row.text);
         entry.acts.replaceChildren(el('button', { text: tr("重试这次发送"), onclick: retry }));
         entry.acts.classList.remove('hidden');
         entry.root.append(el('div', { class: 'entry-meta failed', text: tr("上次生成中断{0} · 问题和附件仍保留在请求里", row.text ? tr(" · 已保留收到的内容") : '') }));
       } else if (row.kind !== 'user' && row.status === 'pending') {
+        if (row.block === 'translate') {
+          renderTranslationInterruption(entry, { text, waiting: !!canApply, onRetry: canApply ? null : retry });
+          continue;
+        }
         entry.body.textContent = canApply ? tr("正在等待另一窗口的回答…") : tr("上次回答尚未完成。");
         if (canApply) continue;
         entry.acts.replaceChildren(el('button', { text: tr("恢复并重试"), onclick: retry }));
@@ -7725,7 +7765,7 @@ function sessionsContext() {
     renderAi: () => renderAiArea(),
     continueSession: async (sid, opts) => { await switchSession(sid, opts || {}); setAgentLanding(false); },
     openSessionFromHistory: async (row, opts) => { await openSessionFromHistory(row, opts || {}); setAgentLanding(false); },
-    startNewSession: async (opts) => { await newSession(opts || {}); setAgentLanding(false); },
+    startNewSession: async (opts) => { await newSession(opts || {}); },
     deleteSession: (sid) => deleteSession(sid, { confirm: false }),
     discardSessionFile: async (scope, sid) => {
       for (const key of [...chatViews.keys()]) {
@@ -8169,7 +8209,7 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   updateSendScope();
   if (!silent) toast(tr("已新建会话"), 'ok', 1600);
   sessionsOnSessionChanged({ refresh: false });
-  setAgentLanding(false);
+  setAgentLanding(agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global');
 }
 
 /** 删掉一个会话文件（不碰论文 / 笔记）；删的是当前会话就退回老会话或新建
@@ -8216,6 +8256,7 @@ async function deleteSession(sid, { confirm: askConfirm = true } = {}) {
   renderSessionBar();
   toast(tr("会话已删除"), 'ok', 1600);
   sessionsOnSessionChanged({ refresh: false });
+  if (owner.sid === (sid || '') && agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global') setAgentLanding(true);
 }
 
 function renderSessionBar() {
@@ -14145,6 +14186,12 @@ function setHomeZoom(value) {
   toast(tr("首页缩放 {0}%", uiStyle.homeZoom), '', 1200);
 }
 
+function setAgentZoom(value) {
+  uiStyle = { ...uiStyle, agentZoom: clamp(Math.round(value / 10) * 10, 70, 160) };
+  applyUiStyle(); saveUi();
+  toast(tr("对话界面缩放 {0}%", uiStyle.agentZoom), '', 1200);
+}
+
 function setReadingFontSize(px) {
   const next = clamp(Math.round(Number(px) || DEFAULT_UI_STYLE.fontSize), READ_FS_MIN, READ_FS_MAX);
   uiStyle = { ...uiStyle, fontSize: next };
@@ -14511,7 +14558,8 @@ function initShortcuts() {
     if ((e.ctrlKey || e.metaKey) && !e.altKey && ['=', '+', '-', '_', '0'].includes(e.key)) {
       e.preventDefault();
       const reset = e.key === '0', step = ['=', '+'].includes(e.key) ? 1 : -1;
-      if (!document.body.classList.contains('reading')) setHomeZoom(reset ? DEFAULT_UI_STYLE.homeZoom : (Number(uiStyle.homeZoom) || DEFAULT_UI_STYLE.homeZoom) + step * 10);
+      if (agentWorkspaceView === 'full') setAgentZoom(reset ? DEFAULT_UI_STYLE.agentZoom : (Number(uiStyle.agentZoom) || DEFAULT_UI_STYLE.agentZoom) + step * 10);
+      else if (!document.body.classList.contains('reading')) setHomeZoom(reset ? DEFAULT_UI_STYLE.homeZoom : (Number(uiStyle.homeZoom) || DEFAULT_UI_STYLE.homeZoom) + step * 10);
       else setReadingFontSize(reset ? DEFAULT_UI_STYLE.fontSize : uiStyle.fontSize + step);
       return;
     }

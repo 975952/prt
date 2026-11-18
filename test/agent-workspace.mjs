@@ -14,6 +14,7 @@ import { writeTitlePdf } from './fixtures/make-title-pdf.mjs';
 
 const desktop = process.argv.includes('--desktop');
 const moveReview = process.argv.includes('--move-review');
+const landingReview = process.argv.includes('--landing-review');
 const executablePath = [process.env.CHROME, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe']
   .find(file => file && fs.existsSync(file));
@@ -30,7 +31,7 @@ for (const relative of fixturePaths) {
 }
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
-const checks = [], errors = [], apiRequests = [], modelRequests = [], dialogs = [];
+const checks = [], errors = [], apiRequests = [], modelRequests = [], dialogs = [], animationChecks = [];
 const pass = label => { checks.push(label); console.log(`PASS ${label}`); };
 const check = (label, condition) => { assert.ok(condition, label); pass(label); };
 let reader, browser, page, base;
@@ -171,6 +172,12 @@ async function full({ landing = false } = {}) {
   if (!landing && !await page.$eval('#agentResume', button => button.disabled)) {
     await page.click('#agentResume'); await settled();
   }
+  // A restored conversation keeps the same input card and animates it into its
+  // footer. Wait for that visible transition before clicking content behind it.
+  await page.evaluate(async () => {
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    await Promise.all(document.querySelector('#composer').getAnimations().map(animation => animation.finished.catch(() => {})));
+  });
 }
 async function history() {
   if (!await visible('#sessHistory')) await page.click(await visible('#agentHistory') ? '#agentHistory' : '#sessHist');
@@ -242,8 +249,10 @@ async function reviewMoveCases({ paperA, paperB }) {
   const openMove = async (targetPaper, sourceSid = '') => {
     if (sourceSid) {
       await history();
-      await page.waitForSelector(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(sourceSid)}] .sess-hact.move`, { visible: true });
-      await page.locator(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(sourceSid)}] .sess-hact.move`).click();
+      await page.waitForSelector(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(sourceSid)}] .sess-hmore`, { visible: true });
+      await page.locator(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(sourceSid)}] .sess-hmore`).click();
+      await page.waitForSelector('.sess-row-menu .sess-hact.move', { visible: true });
+      await page.click('.sess-row-menu .sess-hact.move');
     } else {
       await page.click('#sessBtn'); await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
     }
@@ -400,7 +409,7 @@ try {
     if (!ready) await wait(100);
   }
   check('isolated reader starts', ready);
-  for (const asset of ['index.html', 'style.css', 'agent-workspace.css', 'js/app.js', 'js/agent-workspace.js',
+  for (const asset of ['index.html', 'style.css', 'agent-workspace.css', 'session-history.css', 'js/app.js', 'js/agent-workspace.js',
     'js/agent-profile.js', 'js/agent-settings.js', 'js/ai.js', 'js/sessions.js', 'js/session-move.js']) {
     let served = await fetch(`${base}/${asset}`).then(response => response.text());
     if (asset === 'index.html') served = served.replace(/\n<!-- prt-auth:[\s\S]*?<\/script>\n/, '');
@@ -424,6 +433,7 @@ try {
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: path.join(scratch, 'browser') });
   if (moveReview) await reviewMoveCases({ paperA, paperB });
   else {
+  if (!landingReview) {
   page = await newPage('paper');
   check('home assistant entry is available before opening any PDF', await visible('#homeAgent')
     && !await visible('#agentBtn') && await page.evaluate(() => !window.__state.doc && !window.__viewer.pdf));
@@ -748,7 +758,9 @@ try {
   async function openMove(mode, target = null, fromHistory = false) {
     if (fromHistory) {
       const currentSid = await sid(); await history();
-      await page.click(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(currentSid)}] .sess-hact.move`);
+      await page.click(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(currentSid)}] .sess-hmore`);
+      await page.waitForSelector('.sess-row-menu .sess-hact.move', { visible: true });
+      await page.click('.sess-row-menu .sess-hact.move');
     } else {
       await page.click('#sessBtn');
       await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
@@ -873,21 +885,57 @@ try {
   await settled();
   check('global preference uses the same global session in both views', await sid() === 'global-primary'
     && await page.evaluate(() => localStorage.getItem('reader.session.scopeMode')) === 'global');
+  }
   page = await newPage('paper', 'zh-CN');
   await full({ landing: true });
   check('first Chinese visit displays the default Chinese name without an inline editor',
     await page.$eval('#agentLandingName', node => node.textContent.includes('小林'))
     && await page.$eval('#agentNameInput', input => input.value) === 'Alina' && !await visible('#agentNameInput'));
+  await history();
+  check('full history hides the duplicated conversation entrances', !await visible('#agentIdentity')
+    && !await visible('#sessBar') && await visible('.sess-hist-back'));
+  await page.click('.sess-hist-back');
+  check('history opened from the landing returns to the landing', await visible('#agentLanding') && !await visible('#aiArea'));
+  await page.keyboard.down('Control');
+  for (let i = 0; i < 6; i++) await page.keyboard.press('Equal');
+  await page.keyboard.up('Control');
+  await page.waitForFunction(() => getComputedStyle(document.documentElement).getPropertyValue('--agent-scale').trim() === '1.6');
   const previousLandingSid = await sid();
-  await page.evaluate(() => {
+  const captureLandingTrace = () => page.evaluate(() => {
     const composer = document.getElementById('composer'), animate = composer.animate.bind(composer);
     window.__landingComposer = composer; window.__landingAnimations = [];
     composer.animate = (frames, options) => {
-      window.__landingAnimations.push({ frames, duration: options?.duration });
-      return animate(frames, options);
+      const animation = animate(frames, options);
+      animation.currentTime = 0;
+      const rect = () => { const r = composer.querySelector('.composer-row').getBoundingClientRect();
+        return { left: r.left, top: r.top, width: r.width, height: r.height }; };
+      const trace = { frames, duration: options?.duration, start: rect(), samples: [], done: false };
+      window.__landingAnimations.push(trace);
+      const sample = () => { trace.samples.push(rect()); if (animation.playState === 'running') requestAnimationFrame(sample); };
+      requestAnimationFrame(sample);
+      void animation.finished.then(() => { trace.end = rect(); trace.done = true; }, () => { trace.cancelled = true; });
+      return animation;
     };
   });
-  await typeDraft('FIRST_NAME_DISMISS_QUESTION'); await page.click('#sendBtn');
+  const verifyLandingTrace = async (before, label) => {
+    await page.waitForFunction(() => window.__landingAnimations.some(animation => animation.duration === 260 && animation.done));
+    const animation = await page.evaluate(() => window.__landingAnimations.find(animation => animation.duration === 260));
+    for (const key of ['left', 'top', 'width', 'height']) assert.ok(Math.abs(animation.start[key] - before[key]) <= 1,
+      `${label} input-card animation at ${key}: ${JSON.stringify({ before, animation })}`);
+    assert.ok(animation.samples.length >= 3, 'observe the rendered transition across real frames');
+    for (const key of ['left', 'top', 'width', 'height']) {
+      const increasing = animation.end[key] >= animation.start[key];
+      const samples = [animation.start, ...animation.samples, animation.end];
+      for (let i = 1; i < samples.length; i++) assert.ok(increasing ? samples[i][key] >= samples[i - 1][key] - 1
+        : samples[i][key] <= samples[i - 1][key] + 1, `${label} input-card ${key} reverses during animation: ${JSON.stringify(animation)}`);
+    }
+    animationChecks.push({ label, before, animation });
+    pass(label);
+  };
+  await captureLandingTrace();
+  await typeDraft('FIRST_NAME_DISMISS_QUESTION');
+  const landingComposerBefore = await page.$eval('#composer .composer-row', node => { const r = node.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
+  await page.click('#sendBtn');
   await page.waitForFunction(() => !window.__state.busy && document.querySelector('#aiArea').textContent.includes('SYNTHETIC_NAME_DISMISS_REPLY'));
   check('a question from the landing starts a new global conversation without setup', !await visible('#agentLanding')
     && await scope() === 'default' && await sid() !== previousLandingSid);
@@ -895,18 +943,39 @@ try {
     document.getElementById('composer') === window.__landingComposer
     && window.__landingAnimations.some(animation => animation.duration === 260
       && animation.frames.every(frame => typeof frame.transform === 'string'))));
+  await verifyLandingTrace(landingComposerBefore, 'the visible input card keeps its physical bounds and moves continuously at 160% zoom');
+  await layout('conversation keeps the composer usable at 160% zoom');
   await page.evaluate(async () => { await window.__ctx.flushComposerDrafts(); await window.__ctx.saveSessionNow(); });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.__ctx && window.__state?.papers.length === 4);
   await full({ landing: true });
   check('returning after the first question opens the dedicated landing again', await visible('#agentLanding')
     && await page.$('#agentNameForm') === null);
+  await captureLandingTrace();
+  await typeDraft('FIRST_NAME_DISMISS_QUESTION\nCompare the assumptions in this synthetic example.\nExplain the first step carefully.\nThen check the second step.\nFinally summarize the differences.');
+  await page.$eval('#chatInput', input => input.focus({ preventScroll: true }));
+  const multilineBefore = await page.$eval('#composer .composer-row', node => { const r = node.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height }; });
+  await page.keyboard.press('Enter');
+  await page.waitForFunction(() => !document.body.classList.contains('agent-landing') && !window.__state.busy
+    && document.querySelector('#aiArea').textContent.includes('SYNTHETIC_NAME_DISMISS_REPLY'));
+  await verifyLandingTrace(multilineBefore, 'multiline first questions keep the input card continuous as the textarea clears');
+  await page.evaluate(() => window.__ctx.saveSessionNow());
+  await page.keyboard.down('Control'); await page.keyboard.press('Digit0'); await page.keyboard.up('Control');
+  const beforeHistorySid = await sid();
+  await history();
+  await page.click('#sessHistory .sess-hrow .sess-hmore');
+  await page.waitForSelector('.sess-row-menu', { visible: true });
+  await wait(250);
+  await page.screenshot({ path: path.join(scratch, 'real-global-history-menu.png') });
+  await page.keyboard.press('Escape'); await page.click('.sess-hist-back');
+  check('history opened from a conversation returns to that same conversation', await sid() === beforeHistorySid
+    && !await visible('#agentLanding') && await visible('#aiArea') && (await chatText()).includes('SYNTHETIC_NAME_DISMISS_REPLY'));
   }
   check('only the local synthetic model was used', modelRequests.length >= 1);
   assert.deepEqual(errors, [], 'no uncaught browser errors or external requests');
   pass('no browser errors or external service requests');
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop' : 'node',
-    checks, errors, dialogs, apiRequests, modelRequests: modelRequests.length, failedReads, failedMoves }, null, 2), 'utf8');
+    checks, errors, dialogs, apiRequests, animationChecks, modelRequests: modelRequests.length, failedReads, failedMoves }, null, 2), 'utf8');
   console.log(`agent-workspace: ${checks.length}/${checks.length} passed; ${scratch}`);
 } catch (error) {
   fs.writeFileSync(path.join(scratch, 'failure.txt'), error.stack || String(error), 'utf8');

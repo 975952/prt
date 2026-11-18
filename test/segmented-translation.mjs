@@ -113,6 +113,7 @@ try {
   browser = await puppeteer.launch({ executablePath: CHROME, headless: 'shell', args: ['--no-sandbox', '--disable-gpu'],
     userDataDir: path.join(scratch, 'browser'), defaultViewport: { width: 1400, height: 940 } });
   page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   const errors = []; page.on('pageerror', (error) => errors.push(String(error)));
   await page.goto(`${base}/?open=segments-a.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
   const loaded = () => page.waitForFunction(() => window.__viewer?.pdf && window.__ctx?.addToTranslate
@@ -159,7 +160,7 @@ try {
     const index = requests.length;
     await page.evaluate((id) => {
       const row = [...document.querySelectorAll('.msg')].find((node) => node.__sessionRecord?.id === id);
-      [...row.querySelectorAll('.acts button')].find((button) => button.textContent === '重新翻译').click();
+      [...row.querySelectorAll('.acts button')].find((button) => (button.getAttribute('aria-label') || button.textContent) === '重新翻译').click();
     }, id);
     return nextRequest(index);
   };

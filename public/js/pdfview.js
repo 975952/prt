@@ -848,11 +848,13 @@ export class PdfViewer {
   }
 
   _computeFitScale() {
-    // Fit uses the entire readable width in every theme, with no outer gutter.
+    // Leave a narrow, symmetric gap outside the paper in every theme. This
+    // changes only fit scale; the PDF's own margins and page coordinates stay intact.
+    const gutter = this.container.clientWidth < 360 ? 8 : 10;
     // 双页向下取整到完整像素，避免奇数宽度让第二页被挤到下一行。
     const span = this._twoUp ? 2 : 1;
     const gap = this._twoUp ? TWO_UP_GAP : 0;
-    const avail = Math.max(1, Math.floor((this.container.clientWidth - gap) / span));
+    const avail = Math.max(1, Math.floor((this.container.clientWidth - 2 * gutter - gap) / span));
     const size = this._sizeOf(1);
     const w = (size && size.width) || 612;   // 没有文档时 baseSizes 是空的
     return clamp(avail / w, 0.15, 6);

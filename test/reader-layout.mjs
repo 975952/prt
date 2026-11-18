@@ -1,4 +1,4 @@
-/** Isolated regression: edge-to-edge fit, sidebar resizing, balanced pan and compact footer. */
+/** Isolated regression: narrow fit gutters, sidebar resizing, balanced pan and compact footer. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -16,6 +16,7 @@ const papers = path.join(scratch, 'papers');
 fs.mkdirSync(data); fs.mkdirSync(papers);
 fs.copyFileSync(path.join(ROOT, 'test/fixtures/multipage-sample.pdf'), path.join(papers, 'layout.pdf'));
 const wait = (ms) => new Promise(resolve => setTimeout(resolve, ms));
+const checks = [];
 let reader, browser;
 try {
   const server = http.createServer();
@@ -57,18 +58,20 @@ try {
         tf: getComputedStyle(el).transform })).filter(el => el.w > p.offsetWidth + 1) };
   });
   const check = (label, ok, detail) => {
+    checks.push({ label, ok, detail });
     console.log(`${ok ? 'PASS' : 'FAIL'} ${label}: ${JSON.stringify(detail)}`);
     if (!probeOnly) assert.ok(ok, label);
   };
-  const fillsWidth = g => g.fitMode && Math.abs(g.edgeLeft) <= 1 && Math.abs(g.edgeRight) <= 1
-    && g.max <= 1 && Math.abs(g.width - g.pageWidth) <= 1;
+  const fitsWithGutter = g => g.fitMode && g.edgeLeft >= 7 && g.edgeLeft <= 11
+    && g.edgeRight >= 7 && g.edgeRight <= 11 && Math.abs(g.edgeLeft - g.edgeRight) <= 1
+    && g.max <= 1 && g.width - g.pageWidth >= 16 && g.width - g.pageWidth <= 21;
   for (const width of [1500, 1051]) {
     await page.setViewport({ width, height: 950 });
     await wait(250);
     await page.click('#footFitWidth');
     await wait(500);
     const fit = await geometry();
-    check(`fit reaches both viewer edges at ${width}px`, fillsWidth(fit), fit);
+    check(`fit leaves narrow balanced paper gutters at ${width}px`, fitsWithGutter(fit), fit);
     check('scrollbar meets footer without an empty strip', Math.abs(fit.footerGap) <= 1, fit.footerGap);
     await page.screenshot({ path: path.join(scratch, `fit-width-${width}.png`) });
     await page.evaluate(() => window.__viewer.setScale(window.__viewer.scale * 1.7));
@@ -82,10 +85,10 @@ try {
     await page.evaluate(() => { window.__viewer.container.scrollLeft = 99999; });
     await page.click('#footFitWidth');
     const reset = await geometry();
-    check('fit clears previous pan immediately and fills both edges', fillsWidth(reset) && reset.left === 0, reset);
+    check('fit clears previous pan immediately and restores narrow gutters', fitsWithGutter(reset) && reset.left === 0, reset);
     await wait(550);
     const rendered = await geometry();
-    check('fit keeps both edges filled after repaint', fillsWidth(rendered), rendered);
+    check('fit keeps narrow gutters after repaint', fitsWithGutter(rendered), rendered);
     await page.evaluate(() => {
       const range = document.querySelector('#zoomRange');
       range.value = String(Math.round(window.__viewer.scale * 180));
@@ -108,7 +111,7 @@ try {
       const closed = await page.evaluate(side => document.body.classList.contains(`no-${side}`), side);
       check(`${side} sidebar visibility changes`, closed === (step === 0 ? !initiallyClosed : initiallyClosed), { closed, initiallyClosed, step });
       const resized = await geometry();
-      check(`fit reaches both edges with ${side} sidebar ${closed ? 'closed' : 'open'}`, fillsWidth(resized), resized);
+      check(`fit keeps narrow gutters with ${side} sidebar ${closed ? 'closed' : 'open'}`, fitsWithGutter(resized), resized);
       await page.screenshot({ path: path.join(scratch, `fit-width-${side}-${closed ? 'closed' : 'open'}.png`) });
     }
     await page.evaluate(() => window.__viewer.setScale(window.__viewer.scale * 1.6));
@@ -123,7 +126,7 @@ try {
     await page.click('#footFitWidth');
     await wait(550);
     const restored = await geometry();
-    check(`fit clears pan after ${side} sidebar manual-zoom changes`, fillsWidth(restored) && restored.left === 0, restored);
+    check(`fit clears pan after ${side} sidebar manual-zoom changes`, fitsWithGutter(restored) && restored.left === 0, restored);
   }
   await page.setViewport({ width: 1050, height: 950 });
   await wait(250);
@@ -138,8 +141,9 @@ try {
       edgeRight: contentLeft + c.clientWidth - b.right,
       center: (a.left + b.right) / 2 - (contentLeft + c.clientWidth / 2) };
   });
-  check('two-page fit fills both edges without wrapping at odd widths', spread.width % 2 === 1 && spread.sameRow && spread.max <= 1
-    && Math.abs(spread.center) <= 1 && Math.abs(spread.unused) <= 1 && Math.abs(spread.edgeLeft) <= 1 && Math.abs(spread.edgeRight) <= 1, spread);
+  check('two-page fit leaves narrow gutters without wrapping at odd widths', spread.width % 2 === 1 && spread.sameRow && spread.max <= 1
+    && Math.abs(spread.center) <= 1 && spread.unused >= 16 && spread.unused <= 22
+    && spread.edgeLeft >= 8 && spread.edgeLeft <= 11 && spread.edgeRight >= 8 && spread.edgeRight <= 11, spread);
   await page.screenshot({ path: path.join(scratch, 'fit-width-two-page.png') });
   await page.click('#footTwoUp');
   await wait(250);
@@ -152,10 +156,55 @@ try {
       footerY: input.top + input.height / 2 - total.top - total.height / 2 };
   });
   check('page-gap and footer page numbers align on both axes', Math.abs(numbers.pageX) <= 1 && Math.abs(numbers.pageY) <= 1 && Math.abs(numbers.footerY) <= 1, numbers);
+  for (const theme of ['glass', 'light', 'dark']) {
+    await page.$eval('#uiTheme', (control, value) => { control.value = value; control.dispatchEvent(new Event('input', { bubbles: true })); }, theme);
+    for (const width of [1920, 740, 320]) {
+      await page.setViewport({ width, height: 950 }); await wait(250);
+      if (width === 320) {
+        // On phone-width desktop windows the open side panel owns the width.
+        // Close it through the normal controls before measuring the PDF surface.
+        await page.evaluate(() => {
+          if (!document.body.classList.contains('no-right')) document.querySelector('#topbarRightToggle').click();
+          if (!document.body.classList.contains('no-left')) document.querySelector('#topbarLeftToggle').click();
+        });
+        await wait(250);
+      }
+      await page.evaluate(() => window.__viewer.fitWidth()); await wait(250);
+      const fit = await geometry();
+      check(`${theme} at ${width}px retains small symmetric gutters and no horizontal overflow`, fitsWithGutter(fit), fit);
+      if (fit.width < 360) check('narrow reader uses an 8px gutter', Math.abs(fit.edgeLeft - 8) <= 1 && Math.abs(fit.edgeRight - 8) <= 1, fit);
+      else check('normal reader uses a 10px gutter', Math.abs(fit.edgeLeft - 10) <= 1 && Math.abs(fit.edgeRight - 10) <= 1, fit);
+      if (width !== 740) await page.screenshot({ path: path.join(scratch, `paper-gutters-${theme}-${width}.png`) });
+    }
+  }
+  await page.$eval('#uiTheme', control => { control.value = 'glass'; control.dispatchEvent(new Event('input', { bubbles: true })); });
+  await page.setViewport({ width: 1500, height: 950 }); await wait(300);
+  await page.evaluate(() => window.__ctx.resetPanels()); await wait(300);
+  await page.evaluate(() => { window.__viewer.fitWidth(); window.__viewer.paintSelection({ 1: [{ x: .2, y: .2, w: .3, h: .04 }] }); });
+  await page.waitForFunction(() => window.__viewer.rendered.get(1)?.hlLayer?.querySelector('.sel-mark'));
+  const annotation = () => page.evaluate(() => {
+    const v = window.__viewer, paper = v.pageEls[1].getBoundingClientRect();
+    const mark = v.rendered.get(1).hlLayer.querySelector('.sel-mark').getBoundingClientRect();
+    return { dx: mark.left - paper.left - paper.width * .2, dy: mark.top - paper.top - paper.height * .2,
+      dw: mark.width - paper.width * .3, dh: mark.height - paper.height * .04 };
+  });
+  let mark = await annotation();
+  check('fit gutters preserve normalized selection overlay coordinates', Object.values(mark).every(n => Math.abs(n) <= 1.5), mark);
+  await page.evaluate(() => { const v = window.__viewer; v.setScale(v.scale * 1.6); v.fitWidth(); }); await wait(500);
+  mark = await annotation();
+  check('selection overlay remains aligned after zoom and fit restore', Object.values(mark).every(n => Math.abs(n) <= 1.5), mark);
+  await page.evaluate(() => window.__viewer.paintSelection(null));
+  await page.evaluate(() => window.__viewer.goToPage(3)); await wait(400);
+  const anchor = await page.evaluate(() => window.__viewer._captureAnchor());
+  const restoredAnchor = await page.evaluate(() => { const v = window.__viewer; v.setScale(v.scale * 1.4); v.fitWidth(); return v._captureAnchor(); });
+  check('zoom and fit restore preserve the vertical reading anchor', anchor.page === restoredAnchor.page
+    && Math.abs(anchor.frac - restoredAnchor.frac) < .003, { anchor, restoredAnchor });
   await page.click('#pageInput'); await page.keyboard.down('Control'); await page.keyboard.press('KeyA'); await page.keyboard.up('Control');
   await page.keyboard.type('3'); await page.keyboard.press('Enter');
   await page.waitForFunction(() => window.__viewer.current === 3);
-  await page.click('.aibar-btn[data-block="translate"]');
+  await page.evaluate(() => window.__ctx.setPanelVisible('translate', true));
+  await page.waitForSelector('.aibar-btn[data-block="translate"]', { visible: true });
+  await page.locator('.aibar-btn[data-block="translate"]').click();
   await page.evaluate(() => { const side = document.querySelector('#rightSide'); side.style.width = side.style.minWidth = side.style.maxWidth = '300px'; });
   await page.focus('#translateTargetLang'); await page.keyboard.press('End'); await page.keyboard.press('Tab');
   assert.equal(await page.$eval('#translateTargetLang', el => el.value), 'English');
@@ -180,6 +229,8 @@ try {
   assert.equal(await page.$eval('.translate-target-control', el => getComputedStyle(el).display), 'none', 'chat mode hides the translation-only control');
   await page.screenshot({ path: path.join(scratch, 'reader-layout.png') });
   assert.deepEqual(errors, []);
+  fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop' : 'node', checks, errors }, null, 2), 'utf8');
+  console.log(`reader-layout: ${checks.filter(row => row.ok).length}/${checks.length} passed`);
   console.log(`Artifacts: ${scratch}`);
 } finally {
   await browser?.close();

@@ -19,7 +19,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   let profile = { ...defaultProfile };
   let view = 'closed', name = profile.name, transitioning = false, busy = false, animation = null;
   let paperRevision = 0, handoffFrame = 0, handoffVersion = 0, handoffAnimation = null, handoffClosing = false;
-  let landing = false, hasRecent = false, composerAnimation = null;
+  let landing = false, hasRecent = false, composerAnimation = null, composerFrame = 0, composerVersion = 0;
   const settings = createAgentSettings({ onSave: async next => {
     if (onProfileChange) await onProfileChange(next);
     else await onNameChange?.(next.name);
@@ -71,9 +71,11 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     setName(profile.name); settings.setProfile(profile);
   }
   function setLanding(on, options = {}) {
+    const revision = ++composerVersion;
     const leaving = landing && !on && view === 'full';
     const composer = byId('composer');
-    const before = leaving && composer.getClientRects().length ? composer.getBoundingClientRect() : null;
+    const inputCard = composer.querySelector('.composer-row');
+    const before = leaving && inputCard?.getClientRects().length ? inputCard.getBoundingClientRect() : null;
     landing = !!on && view === 'full';
     if ('hasRecent' in options) hasRecent = !!options.hasRecent;
     if ('recentTitle' in options) {
@@ -86,19 +88,30 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
     if (landing) { closePapers(); hideHandoff(); }
     disabled(); positionHandoff();
+    if (composerFrame) { cancelAnimationFrame(composerFrame); composerFrame = 0; }
     composerAnimation?.cancel(); composerAnimation = null;
     if (before?.height > 0 && !matchMedia('(prefers-reduced-motion: reduce)').matches
       && typeof composer.animate === 'function') {
-      const after = composer.getBoundingClientRect();
-      // Keep the same input alive while it settles into the conversation footer.
-      // Transform only, so messages and the scroll anchor keep their final layout.
-      if (after.height > 0) {
+      // Send clears and resizes the textarea in this same task. Measure its final
+      // footer position before the next paint, rather than animating stale height.
+      composerFrame = requestAnimationFrame(() => {
+        composerFrame = 0;
+        if (revision !== composerVersion || landing || view !== 'full') return;
+        const after = composer.getBoundingClientRect();
+        const cardAfter = inputCard.getBoundingClientRect();
+        if (after.height <= 0 || cardAfter.width <= 0 || cardAfter.height <= 0) return;
+        const scale = after.width / composer.offsetWidth || 1;
+        const sx = before.width / cardAfter.width, sy = before.height / cardAfter.height;
+        // Match the visible input card, including its size and the different
+        // landing/footer padding. The outer form remains the same DOM node.
+        const dx = before.left - after.left - (cardAfter.left - after.left) * sx;
+        const dy = before.top - after.top - (cardAfter.top - after.top) * sy;
         composerAnimation = composer.animate([
-          { transform: `translate(${before.left - after.left}px, ${before.top - after.top}px)` },
-          { transform: 'translate(0, 0)' },
+          { transformOrigin: 'top left', transform: `translate(${dx / scale}px, ${dy / scale}px) scale(${sx}, ${sy})` },
+          { transformOrigin: 'top left', transform: 'translate(0, 0) scale(1, 1)' },
         ], { duration: 260, easing: 'cubic-bezier(.22, .8, .25, 1)' });
         ui.aiArea.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 220, easing: 'ease-out' });
-      }
+      });
     }
   }
   function setView(next) {
@@ -239,8 +252,9 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
       setTransitioning(false); return;
     }
     setTransitioning(true);
+    const scale = to.width / ui.rightSide.offsetWidth || 1;
     const current = ui.rightSide.animate([
-      { transformOrigin: 'top left', transform: `translate(${dx}px, ${dy}px) scale(${from.width / to.width}, ${from.height / to.height})` },
+      { transformOrigin: 'top left', transform: `translate(${dx / scale}px, ${dy / scale}px) scale(${from.width / to.width}, ${from.height / to.height})` },
       { transformOrigin: 'top left', transform: 'translate(0, 0) scale(1, 1)' },
     ], { duration: 320, easing: 'cubic-bezier(.22, .8, .25, 1)', fill: 'none' });
     animation = current;

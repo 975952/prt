@@ -3246,11 +3246,16 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body > .msg { flex-shrink: 0; min-width: 0; padding: 10px 14px; gap: 7px; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .msg + .msg { border-top: 0; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body > .msg.user {
-  width: calc(100% - 20px); margin: 6px auto 10px; padding: 10px 12px;
+  width: fit-content; max-width: min(86%, var(--ai-max-width)); margin: 10px 14px 14px auto; padding: 11px 15px;
   border: 1px solid rgba(var(--surface-rgb), .44);
-  border-radius: 13px 13px 3px 13px;
-  background: rgba(var(--surface-rgb), .20); opacity: 1;
+  border-radius: 16px 16px 5px 16px;
+  background: rgba(var(--surface-rgb), .30); opacity: 1;
 }
+/* One conversation rhythm for streaming and restored messages: questions to
+   the right, answers in the readable column, with space between turns. */
+.ai-block[data-block="chat"] .ai-body > .msg.assistant { padding-top: 14px; padding-bottom: 20px; }
+.ai-block[data-block="chat"] .ai-body > .msg.assistant + .msg.user { margin-top: 24px; }
+.ai-block[data-block="chat"] .msg.user > .role { justify-content: flex-end; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body .msg .text { line-height: 1.85; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body .msg.user .text { padding: 0; background: transparent; border-radius: 0; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .msg.user .role:not(:has(.pg)) { display: none; }
@@ -3323,6 +3328,30 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .translation-segment-sources { display: flex; flex-wrap: wrap; gap: 4px 12px; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .translation-locate { text-decoration: underline; text-decoration-color: #aaa; text-underline-offset: 3px; }
+/* A translation is the result plus one source/action footer. Sources stay
+   expandable; retry and original navigation never duplicate the headline. */
+.ai-block[data-block="translate"] .msg.msg-translation > .role { display: none; }
+.ai-block[data-block="translate"] .msg.msg-translation > .text:empty { display: none; }
+:root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-block[data-block="translate"] .msg.msg-translation {
+  padding-block: 16px; gap: 10px;
+}
+.ai-block[data-block="translate"] .translation-direction {
+  display: flex; flex-wrap: wrap; align-items: flex-start; gap: 5px; margin-top: 2px;
+}
+.translation-direction > .translation-original { flex: 1 1 130px; }
+.translation-direction > .translation-original[open] { flex-basis: 100%; }
+.translation-direction > .translation-language { flex: 1 1 auto; padding-block: 4px; }
+.translation-original > summary { padding: 3px 0; }
+.translation-original > summary .translation-language { margin-left: 9px; color: var(--fg-dim); font-variant-numeric: tabular-nums; }
+.ai-block[data-block="translate"] .translation-direction .acts:not(:empty) {
+  margin: 0 0 0 auto; padding: 0; align-items: center; min-height: 28px;
+}
+.ai-block[data-block="translate"] .translation-direction .translation-delete { width: 26px; height: 28px; }
+.ai-block[data-block="translate"] .translation-notice { font-size: var(--ui-fs-xs); }
+.ai-block[data-block="translate"] .translation-original[open] .translation-source { max-height: 260px; overflow: auto; }
+@media (max-width: 600px) {
+  :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body > .msg.user { max-width: 90%; margin-right: 8px; }
+}
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .msg .agent-steps {
   padding: 8px 10px; gap: 5px; border-radius: 9px; background: rgba(var(--surface-rgb), .16);
   border: 1px solid rgba(var(--surface-rgb), .4); font-family: var(--font-ui);

@@ -36,6 +36,7 @@ const ICONS = {
   dot: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7.4"/></svg>',
   doc: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6.4 4.4h7.6l4 4v11.2H6.4z"/><path d="M14 4.4v4h4"/><path d="M9 12.4h6M9 15.6h6"/></svg>',
   clock: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><circle cx="12" cy="12" r="7.6"/><path d="M12 7.4V12l3.2 2"/></svg>',
+  more: '<svg viewBox="0 0 24 24" width="16" height="16" fill="currentColor" aria-hidden="true"><circle cx="5" cy="12" r="1.8"/><circle cx="12" cy="12" r="1.8"/><circle cx="19" cy="12" r="1.8"/></svg>',
 };
 
 const st = {
@@ -63,6 +64,7 @@ const st = {
   showArchived: false,
   /** null = 没有行处于改名态；'' 是旧默认会话的合法 sid，不能拿它当哨兵 */
   renameSid: null,
+  historyMenu: null,
   confirmResolve: null,
   ui: null,
   moveUi: null,
@@ -795,6 +797,7 @@ function buildHistory() {
 function renderMemoryBtn() {
   const btn = st.ui?.history?.querySelector('#sessHistMemory');
   if (!btn) return;
+  btn.hidden = !!st.ctx?.isAgentWorkspace?.() || !st.ctx?.doc?.()?.docId;
   const off = !!st.ctx?.paperMemoryOff?.();
   btn.textContent = off ? tr("论文记忆：关") : tr("论文记忆：开");
   btn.setAttribute('aria-pressed', String(!off));
@@ -814,6 +817,7 @@ async function openHistory() {
 }
 
 function closeHistory() {
+  closeHistoryMenu();
   if (!st.historyOpen) return;
   st.historyOpen = false;
   st.renameSid = null;
@@ -1027,8 +1031,11 @@ function groupHead(label, count, { button = false, onclick = null } = {}) {
 function renderHistoryList() {
   const box = st.ui?.history?.querySelector('.sess-hist-list');
   if (!box) return;
+  closeHistoryMenu();
   const rows = rowsForGroups();
   const globalScope = scopeMode() === 'global';
+  const arrangement = st.ui?.history?.querySelector('.sess-arrange-chips');
+  if (arrangement) arrangement.hidden = globalScope;
   const summary = st.ui?.history?.querySelector('#sessHistSummary');
   if (summary) {
     summary.textContent = rows.length ? tr("{0} 个会话", rows.length) : '';
@@ -1045,44 +1052,25 @@ function renderHistoryList() {
   const renameShown = new Set();
   const currentShown = new Set();
 
-  if (st.histMode === 'file') {
-    if (globalScope) {
-      // 全局共用：所有会话都属于同一段跨论文对话，只分一组，论文顺序用 trail 标出
-      const gids = Array.from(new Set(active.flatMap((r) => (r.docIds || []).map(String).filter(Boolean))));
-      const gindex = docNameIndex(active);
-      const gnames = gids.map((id) => gindex.get(id)?.name || tr("未知论文"));
-      const subText = gnames.length
-        ? tr("所有论文共用一段对话 · 读过 {0} 篇：{1}{2}", gnames.length, gnames.slice(0, 3).join('、'), gnames.length > 3 ? tr(" 等") : '')
-        : tr("所有论文共用一段对话");
+  if (st.histMode === 'file' && !globalScope) {
+    const groups = fileGroups(active);
+    for (const g of groups) {
+      const pathText = g.folder ? `papers / ${g.folder.replace(/\//g, ' / ')}` : 'papers/';
       nodes.push(el('div', { class: 'sess-fileblock' },
         el('div', { class: 'sess-filegroup' },
           el('span', { class: 'sess-filegroup-ic', html: ICONS.doc }),
-          el('span', { class: 'sess-filegroup-name', text: tr("共用会话") }),
-          el('span', { class: 'sess-filegroup-count', text: String(active.length) })),
-        el('div', { class: 'sess-filegroup-sub', text: subText, title: gnames.join(' → ') })));
+          el('span', { class: 'sess-filegroup-name', text: g.name, title: g.name }),
+          el('span', { class: 'sess-filegroup-count', text: String(g.rows.length) })),
+        el('div', { class: 'sess-filegroup-sub', text: pathText })));
       const rowsBox = el('div', { class: 'sess-fileblock-rows' });
-      for (const r of active) rowsBox.append(historyRow(r, { trail: true, renameShown, currentShown }));
+      for (const r of g.rows) rowsBox.append(historyRow(r, { group: g, renameShown, currentShown }));
       nodes.push(rowsBox);
-    } else {
-      const groups = fileGroups(active);
-      for (const g of groups) {
-        const pathText = g.folder ? `papers / ${g.folder.replace(/\//g, ' / ')}` : 'papers/';
-        nodes.push(el('div', { class: 'sess-fileblock' },
-          el('div', { class: 'sess-filegroup' },
-            el('span', { class: 'sess-filegroup-ic', html: ICONS.doc }),
-            el('span', { class: 'sess-filegroup-name', text: g.name, title: g.name }),
-            el('span', { class: 'sess-filegroup-count', text: String(g.rows.length) })),
-          el('div', { class: 'sess-filegroup-sub', text: pathText })));
-        const rowsBox = el('div', { class: 'sess-fileblock-rows' });
-        for (const r of g.rows) rowsBox.append(historyRow(r, { trail: false, group: g, renameShown, currentShown }));
-        nodes.push(rowsBox);
-      }
     }
   } else {
     const pinned = active.filter((r) => r.pinned).sort((a, b) => (b.pinnedAt || 0) - (a.pinnedAt || 0));
     if (pinned.length) {
       nodes.push(groupHead(tr("置顶"), pinned.length));
-      nodes.push(...pinned.map((r) => historyRow(r, { trail: true, renameShown, currentShown })));
+      nodes.push(...pinned.map((r) => historyRow(r, { renameShown, currentShown })));
     }
     const rest = active.filter((r) => !r.pinned);
     const buckets = [[], [], [], []];
@@ -1091,7 +1079,7 @@ function renderHistoryList() {
     for (let i = 0; i < buckets.length; i++) {
       if (!buckets[i].length) continue;
       nodes.push(groupHead(labels[i], buckets[i].length));
-      for (const r of buckets[i]) nodes.push(historyRow(r, { trail: true, renameShown, currentShown }));
+      for (const r of buckets[i]) nodes.push(historyRow(r, { renameShown, currentShown }));
     }
   }
   if (archived.length) {
@@ -1100,7 +1088,7 @@ function renderHistoryList() {
       onclick: () => { st.showArchived = !st.showArchived; renderHistoryList(); },
     }));
     if (st.showArchived) {
-      for (const r of archived) nodes.push(historyRow(r, { trail: st.histMode === 'time', renameShown, currentShown }));
+      for (const r of archived) nodes.push(historyRow(r, { renameShown, currentShown }));
     }
   }
   if (!nodes.length) {
@@ -1108,39 +1096,96 @@ function renderHistoryList() {
       class: 'sess-empty',
       text: st.histQuery.trim()
         ? tr("没有匹配的会话")
-        : st.histMode === 'file'
-          ? tr("还没有带论文记录的会话；发出第一条消息后会归到对应论文下。")
-          : tr("还没有会话"),
+        : tr("还没有会话"),
     }));
   }
   box.replaceChildren(...nodes);
 }
 
-/** 每行下面的「按顺序读过哪些论文」（最多 3 个，其余 +N）。
- *  两种排列都显示：按时间排时它是补充信息；按文件排时它负责讲清
- *  「这段对话除了当前这篇，还问过哪几篇、先后顺序是什么」。 */
-function historyTrail(row) {
-  const ids = Array.from(new Set((row.docIds || []).map(String).filter(Boolean)));
-  if (!ids.length) return null;
-  const index = docNameIndex([row]);
-  const names = ids.map((id) => docLabel(row, id, index));
-  const MAX = 3;
-  const chips = [el('span', { class: 'sess-htrail-label', text: tr("读过") })];
-  names.slice(0, MAX).forEach((name, i) => {
-    chips.push(el('span', { class: 'sess-htrail-doc', title: tr("第 {0} 篇：{1}", i + 1, name) },
-      el('span', { class: 'sess-htrail-n', text: String(i + 1) }),
-      el('span', { class: 'sess-htrail-name', text: name })));
-  });
-  if (names.length > MAX) chips.push(el('span', { class: 'sess-htrail-more', text: `+${names.length - MAX}` }));
-  return el('span', { class: 'sess-htrail', title: tr("按提问顺序：{0}", names.join(' → ')) }, ...chips);
+function closeHistoryMenu({ focus = false } = {}) {
+  const menu = st.historyMenu;
+  if (!menu) return;
+  st.historyMenu = null;
+  menu.trigger.setAttribute('aria-expanded', 'false');
+  menu.trigger.removeAttribute('aria-controls');
+  menu.panel.remove();
+  if (focus && menu.trigger.isConnected) menu.trigger.focus({ preventScroll: true });
 }
 
-function historyRow(row, { trail = false, group = null, renameShown = null, currentShown = null } = {}) {
+function focusHistoryRow(row) {
+  if (!st.historyOpen) return;
+  const current = document.activeElement;
+  if (current && current !== document.body && current.getClientRects().length) return;
+  const match = [...st.ui.history.querySelectorAll('.sess-hrow')]
+    .find(node => node.dataset.sid === row.sid && node.dataset.fileKey === row.fileKey);
+  (match?.querySelector('.sess-hmore') || st.ui.history.querySelector('.sess-hist-search'))?.focus({ preventScroll: true });
+}
+
+function openHistoryMenu(row, trigger) {
+  if (st.historyMenu?.trigger === trigger) { closeHistoryMenu({ focus: true }); return; }
+  closeHistoryMenu();
+  const panel = el('div', { id: 'sessRowMenu', class: 'sess-row-menu', role: 'menu', 'aria-label': tr('更多操作') });
+  const action = (icon, label, cls, callback, { restore = true } = {}) => el('button', {
+    type: 'button', role: 'menuitem', tabindex: '-1', class: `sess-hact ${cls}`,
+    onclick: async (event) => {
+      event.stopPropagation();
+      closeHistoryMenu({ focus: true });
+      await callback();
+      if (restore) focusHistoryRow(row);
+    },
+  }, el('span', { class: 'sess-row-menu-icon', html: ICONS[icon] }), el('span', { text: label }));
+  panel.append(
+    action('pin', row.pinned ? tr('取消置顶') : tr('置顶'), `pin${row.pinned ? ' on' : ''}`, () => patchMeta(row, { pinned: !row.pinned })),
+    action('archive', row.archived ? tr('取消归档') : tr('归档'), `archive${row.archived ? ' on' : ''}`, () => patchMeta(row, { archived: !row.archived })),
+    action('rename', tr('重命名'), 'rename', () => startRename(row.sid), { restore: false }),
+  );
+  if (moveRow(row) && typeof st.ctx?.moveSession === 'function') {
+    panel.append(action('move', tr('更改归属'), 'move', () => openSessionMove(row, trigger), { restore: false }));
+  }
+  panel.append(action('trash', tr('删除会话'), 'danger', () => confirmDeleteRow(row)));
+  panel.addEventListener('keydown', event => {
+    // Menu focus owns ordinary keys; reader shortcuts (for example R and
+    // PageDown) must not act on the PDF behind it. Keep native button defaults.
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) event.stopPropagation();
+    if (event.key === 'Tab') { closeHistoryMenu({ focus: true }); return; }
+    if (!['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const items = [...panel.querySelectorAll('[role="menuitem"]')];
+    const active = items.indexOf(document.activeElement);
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? items.length - 1
+      : (active + (event.key === 'ArrowDown' ? 1 : -1) + items.length) % items.length;
+    items[next]?.focus({ preventScroll: true });
+    items[next]?.scrollIntoView({ block: 'nearest' });
+  });
+  // A body portal keeps the menu outside the history scroller. Match its CSS
+  // zoom so a scaled full-screen workspace retains both size and anchor position.
+  let scale = 1;
+  for (let node = trigger; node && node !== document.body; node = node.parentElement) {
+    const zoom = Number.parseFloat(getComputedStyle(node).zoom);
+    if (Number.isFinite(zoom) && zoom > 0) scale *= zoom;
+  }
+  panel.style.zoom = String(scale);
+  panel.style.maxHeight = `${Math.max(64, window.innerHeight - 16) / scale}px`;
+  panel.style.maxWidth = `${Math.max(64, window.innerWidth - 16) / scale}px`;
+  document.body.append(panel);
+  const anchor = trigger.getBoundingClientRect(), bounds = panel.getBoundingClientRect();
+  const left = Math.max(8, Math.min(anchor.right - bounds.width, window.innerWidth - bounds.width - 8));
+  const below = anchor.bottom + 5;
+  const top = below + bounds.height <= window.innerHeight - 8 ? below : Math.max(8, anchor.top - bounds.height - 5);
+  panel.style.left = `${left / scale}px`;
+  panel.style.top = `${top / scale}px`;
+  st.historyMenu = { panel, trigger, row };
+  trigger.setAttribute('aria-expanded', 'true');
+  trigger.setAttribute('aria-controls', panel.id);
+  panel.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
+}
+
+function historyRow(row, { group = null, renameShown = null, currentShown = null } = {}) {
   // 按文件排列时同一会话可能出现在多个论文分组里；「当前」徽标只标第一次，
   // 否则同一个会话会同时有好几行写「当前」，看起来像有好几个当前会话。
   // 还要防历史数据过期（切换论文/归属模式后旧列表没刷新）：只有这一行确实有当前
   // 归属键下的副本、且（按文件时）就在当前论文分组里，才允许标「当前」。
-  const scopeKeyNow = listScopeKey();
   const copies = Array.isArray(row._copies) ? row._copies : [];
   const hasScopeCopy = !row.fileKey && !copies.length
     ? true
@@ -1153,21 +1198,7 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
   const on = canMarkCurrent;
   if (on && currentShown) currentShown.add(row.sid);
   const title = row.title || (row.count ? tr("（无标题会话）") : tr("新会话"));
-  const docCount = Array.from(new Set((row.docIds || []).map(String).filter(Boolean))).length;
-  const metaParts = [
-    row.count ? tr("{0} 条", row.count) : tr("空会话"),
-    relTime(row.updatedAt),
-  ];
-  if (st.histMode === 'time') {
-    metaParts.push(row.folderPath ? `📁 papers / ${row.folderPath.replace(/\//g, ' / ')}` : '📁 papers/');
-  } else if (group?.folder && row.folderPath && group.folder !== row.folderPath) {
-    metaParts.push(`📁 ${row.folderPath.replace(/\//g, ' / ')}`);
-  }
-  const meta = metaParts.filter(Boolean).join(' · ');
-
-  const badges = [];
-  if (on) badges.push(el('span', { class: 'sess-badge on', text: tr("当前") }));
-  if (st.histMode === 'time' && row.pinned) badges.push(el('span', { class: 'sess-badge', text: tr("置顶") }));
+  const meta = relTime(row.updatedAt || row.lastOpenedAt || row.createdAt);
 
   const wrap = el('div', { class: `sess-hrow${on ? ' on' : ''}${row.archived ? ' archived' : ''}`, dataset: { sid: row.sid, fileKey: row.fileKey || '' } });
 
@@ -1181,13 +1212,14 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
       done = true;
       const next = input.value.trim();
       st.renameSid = null;
-      if (!next || next === row.title) { renderHistoryList(); return; }
+      if (!next || next === row.title) { renderHistoryList(); focusHistoryRow(row); return; }
       await patchMeta(row, { title: next });
       renderHistoryList();
+      focusHistoryRow(row);
     };
     input.addEventListener('keydown', (e) => {
       if (e.key === 'Enter') { e.preventDefault(); commit(); }
-      else if (e.key === 'Escape') { e.preventDefault(); done = true; st.renameSid = null; renderHistoryList(); }
+      else if (e.key === 'Escape') { e.preventDefault(); done = true; st.renameSid = null; renderHistoryList(); focusHistoryRow(row); }
     });
     input.addEventListener('blur', commit);
     wrap.append(el('div', { class: 'sess-hgo' }, input));
@@ -1195,26 +1227,28 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
     return wrap;
   }
 
-  const trailEl = (trail || docCount > 1) ? historyTrail(row) : null;
   wrap.append(
     el('button', {
-      type: 'button', class: 'sess-hgo', title,
+      type: 'button', class: 'sess-hgo', title, 'aria-current': on ? 'true' : null,
       onclick: () => chooseSession(row, group?.id || ''),
-      ondblclick: (e) => { e.preventDefault(); startRename(row.sid); },
     },
     el('span', { class: 'sess-htop' },
       el('span', { class: 'sess-htitle', text: title }),
-      ...badges),
-    el('span', { class: 'sess-hmeta', text: meta }),
-    trailEl),
-    el('span', { class: 'sess-hacts' },
-      sessButton('pin', row.pinned ? tr("取消置顶") : tr("置顶"), `sess-hact pin${row.pinned ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { pinned: !row.pinned }); }),
-      sessButton('archive', row.archived ? tr("取消归档") : tr("归档"), `sess-hact archive${row.archived ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { archived: !row.archived }); }),
-      sessButton('rename', tr("重命名（F2）"), 'sess-hact rename', (e) => { e.stopPropagation(); startRename(row.sid); }),
-      moveRow(row) && typeof st.ctx?.moveSession === 'function'
-        ? sessButton('move', tr('更改归属'), 'sess-hact move', (e) => { e.stopPropagation(); openSessionMove(row, e.currentTarget); }) : null,
-      sessButton('trash', tr("删除会话"), 'sess-hact danger', (e) => { e.stopPropagation(); confirmDeleteRow(row); }),
-    ),
+      row.pinned && st.histMode === 'file' && scopeMode() !== 'global'
+        ? el('span', { class: 'sess-hpin', title: tr('置顶'), 'aria-label': tr('置顶'), html: ICONS.pin }) : null),
+    meta ? el('span', { class: 'sess-hmeta', text: meta }) : null),
+    el('button', {
+      type: 'button', class: 'sess-hmore', title: tr('更多操作'), 'aria-label': tr('更多操作'),
+      'aria-haspopup': 'menu', 'aria-expanded': 'false',
+      onclick: event => { event.stopPropagation(); openHistoryMenu(row, event.currentTarget); },
+      onkeydown: event => {
+        if (event.key !== 'ArrowDown' && event.key !== 'ArrowUp') return;
+        event.preventDefault();
+        event.stopPropagation();
+        openHistoryMenu(row, event.currentTarget);
+        if (event.key === 'ArrowUp') st.historyMenu?.panel.querySelector('[role="menuitem"]:last-child')?.focus({ preventScroll: true });
+      },
+    }, el('span', { html: ICONS.more }), el('span', { text: tr('更多') })),
   );
   return wrap;
 }
@@ -1371,6 +1405,10 @@ function isTypingTarget(t) {
 }
 
 function onKeydownCapture(e) {
+  if (st.historyMenu && (e.ctrlKey || e.metaKey) && ['+', '=', '-', '_', '0'].includes(e.key)) {
+    // Let the workspace handle its zoom shortcut after dismissing this anchored menu.
+    closeHistoryMenu({ focus: true });
+  }
   // 确认框优先
   if (st.confirmResolve) {
     if (e.key === 'Escape') { e.preventDefault(); e.stopPropagation(); resolveConfirm(false); }
@@ -1378,12 +1416,17 @@ function onKeydownCapture(e) {
     return;
   }
   if (e.key === 'Escape') {
+    if (st.historyMenu) { e.preventDefault(); e.stopPropagation(); closeHistoryMenu({ focus: true }); return; }
+    if (st.renameSid !== null && e.target?.matches?.('.sess-rename-input')) return;
     if (st.moveUi?.isOpen()) { e.preventDefault(); e.stopPropagation(); st.moveUi.close(); return; }
     if (st.quickOpen) { e.preventDefault(); e.stopPropagation(); closeQuick(); return; }
     if (st.historyOpen) { e.preventDefault(); e.stopPropagation(); closeHistory(); return; }
   }
-  if (st.historyOpen && e.key === 'F2' && st.renameSid == null) {
+  if (st.historyOpen && e.key === 'F2' && st.renameSid == null && !isTypingTarget(e.target)) {
+    const row = e.target?.closest?.('.sess-hrow') || st.historyMenu?.trigger.closest('.sess-hrow');
+    if (!row) return;
     e.preventDefault(); e.stopPropagation();
+    startRename(row.dataset.sid);
     return;
   }
 }
@@ -1452,6 +1495,19 @@ export function initSessions(ctx) {
   ui.bar.addEventListener('click', (e) => e.stopPropagation());
 
   document.addEventListener('click', () => { if (st.quickOpen) closeQuick(); });
+  document.addEventListener('pointerdown', event => {
+    const menu = st.historyMenu;
+    if (menu && !menu.panel.contains(event.target) && !menu.trigger.contains(event.target)) closeHistoryMenu();
+  }, true);
+  document.addEventListener('focusin', event => {
+    const menu = st.historyMenu;
+    if (menu && !menu.panel.contains(event.target) && !menu.trigger.contains(event.target)) closeHistoryMenu();
+  });
+  document.addEventListener('scroll', event => {
+    if (st.historyMenu && !st.historyMenu.panel.contains(event.target)) closeHistoryMenu();
+  }, true);
+  window.addEventListener('resize', () => closeHistoryMenu());
+  if (ui.rightSide) new ResizeObserver(() => closeHistoryMenu()).observe(ui.rightSide);
   document.addEventListener('keydown', onKeydownCapture, true);
   document.addEventListener('keydown', onGlobalShortcut);
 
