@@ -36,8 +36,8 @@ import {
 } from './ai.js';
 import { readingIntent, resolveReadingRequest, resolvePageRole, snapshotReadingRequest, snapshotHistory, readingTurn,
   restoreReadingHistory, replaceReadingTurn, citedSources, stripPageLabels } from './reading-context.js';
-import { validateCitations, collectAvailablePages, planFor, pagesFromText, formatPageList } from './citation-validator.js';
-import { compactCitationDisplay } from './citation-display.js';
+import { validateCitations, collectAvailablePages, planFor, pagesFromText, formatPageList, CITATION_RE } from './citation-validator.js';
+import { compactCitationDisplay, transformCitationHtml } from './citation-display.js';
 import { runAgentLoop, agentStats, AGENT_TOOL_SPECS, AGENT_SYSTEM_NOTE, toolStepLabel, stripAgentMarkup } from './agent.js';
 import { lastPromptDebug as __promptDebug } from './prompts/index.js';
 import {
@@ -1892,6 +1892,7 @@ function bindSplitter(node, cssVar, min, max, collapseBelow) {
     if (!dragFrame) dragFrame = requestAnimationFrame(() => {
       dragFrame = 0;
       if (pendingW !== null) { setW(pendingW); pendingW = null; }
+      if (viewer?._fitMode && viewer.container.clientWidth !== viewer._fitViewportWidth) viewer.fitWidth();
     });
     node.classList.toggle('will-collapse', w < collapseBelow);
   };
@@ -1903,12 +1904,15 @@ function bindSplitter(node, cssVar, min, max, collapseBelow) {
     document.body.classList.remove('dragging');
     window.removeEventListener('pointermove', move);
     window.removeEventListener('pointerup', up);
+    window.removeEventListener('pointercancel', up);
+    window.removeEventListener('blur', up);
     const finalW = cssPx(cssVar, startW);
     if (finalW < collapseBelow) {
       // 拖到阈值以下 = 用户主动把这一侧拖没了：等同手动收起，要写进 reader.ui；
       // 宽度恢复成这一侧的记忆宽度（这次拖动开始前的宽度），下次展开还是这么宽
       setW(startW);
       setSideCollapsed(side, true);
+      viewer?.setViewportResizing(false);
       return;
     }
     const settled = clamp(finalW, min, maxOf());
@@ -1917,6 +1921,7 @@ function bindSplitter(node, cssVar, min, max, collapseBelow) {
     saveUi();
     // 只有「从收起判定区夹回 min」这种宽度真的在动的情况才需要等过渡结束
     refitViewer(Math.abs(settled - finalW) > .5 ? REFIT_AFTER_MS : 0);
+    viewer?.setViewportResizing(false);
   };
   node.addEventListener('pointerdown', (e) => {
     e.preventDefault();
@@ -1933,8 +1938,11 @@ function bindSplitter(node, cssVar, min, max, collapseBelow) {
     startW = parseInt(getComputedStyle(document.documentElement).getPropertyValue(cssVar), 10) || 240;
     node.classList.add('dragging');
     document.body.classList.add('dragging');
+    viewer?.setViewportResizing(true);
     window.addEventListener('pointermove', move);
     window.addEventListener('pointerup', up);
+    window.addEventListener('pointercancel', up);
+    window.addEventListener('blur', up);
   });
   // 原生 dblclick 兜底（pointerdown 上 preventDefault 之后，各浏览器行为不完全一致）
   node.addEventListener('dblclick', (e) => { e.preventDefault(); toggleSide(); });
@@ -10019,7 +10027,7 @@ function quoteFragmentParts(html) {
   const text = (visible.textContent || '').replace(/\s+/g, ' ').trim();
   const blocky = /<(?:p|div|ul|ol|li|pre|blockquote|h[1-6]|table|thead|tbody|tr|td|th|section)\b/i.test(raw);
   // 行内片段正常保留 HTML（公式/粗体仍能显示）；块级结构或有异常长文本时退回纯文本
-  if (blocky || text.length > 600) return { text: text.slice(0, 600), html: escapeHtml(text.slice(0, 600)) };
+  if (blocky || text.length > 8000) return { text: text.slice(0, 8000), html: escapeHtml(text.slice(0, 8000)) };
   return { text, html: raw.trim() };
 }
 
@@ -10534,6 +10542,10 @@ async function auditForRenderedAnswer(answer, { docCtx = null, context = '', ref
 }
 
 function decoratePageRefs(html) {
+  return transformCitationHtml(html, decorateProsePageRefs);
+}
+
+function decorateProsePageRefs(html, restoreMarkup = value => value) {
   const pages = Number((renderingChatJob?.reader || viewer)?.numPages) || 0;
   const plan = renderingChatJob ? renderingChatJob.citationPlan : activeCitationPlan;
   // 组合引用〔p.21–26, p.23, p.37〕：逐项渲染成页码按钮；任何一项越界/被核验拦截时整段保持原文，
@@ -10554,10 +10566,10 @@ function decoratePageRefs(html) {
       const label = b !== null ? `p.${a}–${b}` : `p.${a}`;
       if (decision && decision.level === 'page-only') {
         const title = tr("跳到第 {0} 页（原文片段未核对，不画高亮）", a);
-        buttons.push(`<button type="button" class="page-ref page-ref-unverified" data-page="${a}" data-unverified="1" title="${escapeHtml(title)}">${label}</button>`);
+        buttons.push(`<button type="button" class="page-ref page-ref-unverified" data-page="${a}"${b ? ` data-page-end="${b}"` : ''} data-unverified="1" title="${escapeHtml(title)}">${label}</button>`);
       } else {
         const title = b !== null ? tr("跳到第 {0}–{1} 页", a, b) : tr("跳到第 {0} 页", a);
-        buttons.push(`<button type="button" class="page-ref" data-page="${a}" title="${escapeHtml(title)}">${label}</button>`);
+        buttons.push(`<button type="button" class="page-ref" data-page="${a}"${b ? ` data-page-end="${b}"` : ''} title="${escapeHtml(title)}">${label}</button>`);
       }
     }
     return buttons.length ? buttons.join(' ') : raw;
@@ -10565,31 +10577,33 @@ function decoratePageRefs(html) {
   // 兼容模型的各种写法：p. 前后带空格、半角/全角竖线、长破折号；片段长度按「可见文字」算，
   // HTML 上限放宽（行内公式的 KaTeX 标记可能上千字符），避免「带公式的引用不渲染」
   return combined.replace(
-    /〔\s*p\.\s*(\d{1,4})\s*(?:[–\-—]\s*(\d{1,4}))?\s*(?:\|\||‖|｜)\s*([^〕]{1,8000})〕|〔\s*p\.\s*(\d{1,4})\s*(?:[–\-—]\s*(\d{1,4}))?\s*〕/g,
+    new RegExp(CITATION_RE.source, CITATION_RE.flags),
     (raw, aPipe, bPipe, frag, aPlain, bPlain) => {
       // P1.5：程序核验过的不合法引用不渲染按钮（drop），片段核不上的降级成纯页码（page-only）。
-      const decision = plan ? planFor(plan, raw) : null;
+      const decision = plan ? planFor(plan, restoreMarkup(raw)) : null;
       if (decision && decision.level === 'drop') return raw;
       const a = aPipe || aPlain;
       const b = aPipe ? bPipe : bPlain;
       const p = Number(a);
       if (!Number.isInteger(p) || p < 1 || (pages && p > pages)) return raw;
+      if (b && (Number(b) < p || (pages && Number(b) > pages))) return raw;
+      const rangeAttr = b ? ` data-page-end="${Number(b)}"` : '';
       const label = b ? `p.${a}–${b}` : `p.${a}`;
       if (decision && decision.level === 'page-only') {
         const title = tr("跳到第 {0} 页（原文片段未核对，不画高亮）", p);
-        return `<button type="button" class="page-ref page-ref-unverified" data-page="${p}" data-unverified="1" title="${escapeHtml(title)}">${label}</button>`;
+        return `<button type="button" class="page-ref page-ref-unverified" data-page="${p}"${rangeAttr} data-unverified="1" title="${escapeHtml(title)}">${label}</button>`;
       }
-      const parts = aPipe ? quoteFragmentParts(frag) : null;
+      const parts = aPipe ? quoteFragmentParts(restoreMarkup(frag)) : null;
       const fragment = parts?.text || '';
       if (!fragment) {
         const title = b ? tr("跳到第 {0}–{1} 页", a, b) : tr("跳到第 {0} 页", a);
-        return `<button type="button" class="page-ref" data-page="${p}" title="${escapeHtml(title)}">${label}</button>`;
+        return `<button type="button" class="page-ref" data-page="${p}"${rangeAttr} title="${escapeHtml(title)}">${label}</button>`;
       }
       const title = tr("跳到第 {0} 页并定位原文：{1}", p, fragment.slice(0, 80));
       // 片段必须跟着显示出来：之前只塞进 title，渲染后正文只剩 p.5，引用的原句被「吞掉」了
       //（用户实测：老师手写答案变成连续四个 p.5）。文字保持可选中复制；
       // 只有前面的页码按钮负责跳页 + 高亮。
-      return `<button type="button" class="page-ref quote-ref" data-page="${p}" data-fragment="${escapeHtml(fragment.slice(0, 600))}" title="${escapeHtml(title)}">${label}</button>`
+      return `<button type="button" class="page-ref quote-ref" data-page="${p}"${rangeAttr} data-fragment="${escapeHtml(fragment)}" title="${escapeHtml(title)}">${label}</button>`
         + ` <span class="quote-inline">${parts.html}</span>`;
     });
 }
@@ -10597,21 +10611,22 @@ function decoratePageRefs(html) {
 /** 其它论文的引用：〔《文件名》p.N‖原文片段〕 → 可点击标签。
  *  点击会自动打开那篇论文（没打开过就先打开）、跳到第 N 页，有原文片段就画高亮。
  *  注意：必须在 decoratePageRefs 之后跑 —— 当前论文的 〔p.N〕 已经先被处理掉，两边不会互相抢。 */
-const OTHER_PAPER_REF_RE = /〔\s*《([^》]{1,160})》\s*p\.\s*(\d{1,4})(?:\s*(?:\|\||‖|｜)\s*([^〕]{1,8000}))?\s*〕/g;
+const OTHER_PAPER_REF_RE = /〔\s*《([^》]{1,160})》\s*(?:p\s*[.．]\s*|第\s*)(\d{1,4})(?:\s*[–\-—−－~～至到]\s*(?:p\s*[.．]\s*|第\s*)?(\d{1,4}))?\s*页?(?:\s*(?:\|\||‖|｜)\s*([^〕]{1,8000}))?\s*〕/gi;
 function decorateOtherPaperRefs(html) {
-  return String(html || '').replace(OTHER_PAPER_REF_RE, (raw, name, page, frag) => {
+  return transformCitationHtml(html, (markup, restoreMarkup) => markup.replace(OTHER_PAPER_REF_RE, (raw, name, page, pageEnd, frag) => {
     const p = Number(page);
+    const end = pageEnd ? Number(pageEnd) : null;
     const paper = String(name || '').trim();
-    if (!paper || !Number.isInteger(p) || p < 1) return raw;
-    const parts = frag ? quoteFragmentParts(frag) : null;
+    if (!paper || !Number.isInteger(p) || p < 1 || (end !== null && end < p)) return raw;
+    const parts = frag ? quoteFragmentParts(restoreMarkup(frag)) : null;
     const fragment = parts?.text || '';
     const short = escapeHtml(paper.replace(/\.pdf$/i, '').slice(0, 28));
     const title = tr("打开《{0}》并跳到第 {1} 页{2}", paper, p, fragment ? tr("，定位原文：{0}", fragment.slice(0, 80)) : '');
-    return `<button type="button" class="page-ref other-paper-ref" data-paper="${escapeHtml(paper)}" data-page="${p}"`
-      + `${fragment ? ` data-fragment="${escapeHtml(fragment.slice(0, 600))}"` : ''}`
-      + ` title="${escapeHtml(title)}">《${short}》p.${p}</button>`
+    return `<button type="button" class="page-ref other-paper-ref" data-paper="${escapeHtml(paper)}" data-page="${p}"${end !== null ? ` data-page-end="${end}"` : ''}`
+      + `${fragment ? ` data-fragment="${escapeHtml(fragment)}"` : ''}`
+      + ` title="${escapeHtml(title)}">《${short}》p.${p}${end !== null ? `–${end}` : ''}</button>`
       + (fragment ? ` <span class="quote-inline">${parts.html}</span>` : '');
-  });
+  }));
 }
 
 function renderStreamingMarkdown(text) {
@@ -10699,7 +10714,7 @@ async function jumpToQuote(page, fragment, btn) {
 function jumpAndHighlight(page, text) {
   const p = Number(page);
   if (!p) return;
-  const fragment = stripPageLabels(String(text || '')).replace(/\s+/g, ' ').trim().slice(0, 200);
+  const fragment = stripPageLabels(String(text || '')).replace(/\s+/g, ' ').trim().slice(0, 8000);
   if (fragment) jumpToQuote(p, fragment, null);
   else jumpToPageWithHistory(p, { smooth: true });
 }

@@ -12,7 +12,7 @@
 import { stripPageLabels } from './reading-context.js';
 
 /** 与 app.js 的 decoratePageRefs 完全一致的引用语法（片段上限 8000，按可见文字另截断） */
-export const CITATION_RE = /〔\s*p\.\s*(\d{1,4})\s*(?:[–\-—]\s*(\d{1,4}))?\s*(?:\|\||‖|｜)\s*([^〕]{1,8000})〕|〔\s*p\.\s*(\d{1,4})\s*(?:[–\-—]\s*(\d{1,4}))?\s*〕/g;
+export const CITATION_RE = /〔\s*(?:p\s*[.．]\s*|第\s*)(\d{1,4})\s*(?:[–\-—−－~～至到]\s*(?:p\s*[.．]\s*|第\s*)?(\d{1,4}))?\s*页?\s*(?:\|\||‖|｜)\s*([^〕]{1,8000})〕|〔\s*(?:p\s*[.．]\s*|第\s*)(\d{1,4})\s*(?:[–\-—−－~～至到]\s*(?:p\s*[.．]\s*|第\s*)?(\d{1,4}))?\s*页?\s*〕/gi;
 
 /** 组合引用：一个括号里用逗号/顿号/分号分隔多个页码（可带范围），如〔p.21–26, p.23, p.37〕 */
 export const CITATION_LIST_RE = /〔\s*p\s*\.\s*\d{1,4}(?:\s*[–\-—]\s*\d{1,4})?(?:\s*[,，、;；]\s*p\s*\.\s*\d{1,4}(?:\s*[–\-—]\s*\d{1,4})?)+\s*〕/g;
@@ -24,7 +24,7 @@ const citationKey = (s) => String(s || '').replace(/\s+/g, '');
 export function parseCitations(text) {
   const out = [];
   const s = String(text || '');
-  const re = new RegExp(CITATION_RE.source, 'g');
+  const re = new RegExp(CITATION_RE.source, CITATION_RE.flags);
   let m;
   let guard = 0;
   while ((m = re.exec(s)) && guard++ < 500) {
@@ -66,6 +66,11 @@ export function parseCitations(text) {
 /** 片段的比对口径：去掉空白与页码标签，统一引号大小写；只做「是否逐字出现」的判断 */
 export function normalizeMatchText(text) {
   return stripPageLabels(String(text || ''))
+    .normalize('NFKC')
+    .replace(/\u00ad/g, '')
+    // PDF word breaks and printed compounds share the same glyph. Match their
+    // readable forms while retaining single-letter subtraction and numbers.
+    .replace(/(?<=[A-Za-z]{2})[-\u2010\u2011]\s*(?=[a-z])|(?<=[A-Za-z])[-\u2010\u2011]\s*(?=[a-z]{2})/g, '')
     .replace(/[\s\u00a0\u3000]+/g, '')
     .replace(/[“”„‟]/g, '"')
     .replace(/[‘’‚‛]/g, "'")
@@ -132,11 +137,7 @@ function fragmentFoundIn(text, fragment) {
   const hay = normalizeMatchText(text);
   const needle = normalizeMatchText(fragment);
   if (!needle || !hay) return false;
-  if (hay.includes(needle)) return true;
-  // 片段可能被模型截断在中间：至少命中前 80% 才算（避免「找到一半就画假高亮」）
-  const cut = Math.floor(needle.length * 0.8);
-  if (cut >= 8 && hay.includes(needle.slice(0, cut))) return true;
-  return false;
+  return hay.includes(needle);
 }
 
 /**
@@ -169,9 +170,11 @@ export async function validateCitations(answer, {
   for (const citation of citations) {
     const pages = [citation.page];
     if (citation.pageEnd) {
-      for (let p = citation.page + 1; p <= Math.min(citation.pageEnd, citation.page + 50); p++) pages.push(p);
+      for (let p = citation.page + 1; p <= citation.pageEnd; p++) pages.push(p);
     }
-    const outOfRange = pages.some((p) => !Number.isInteger(p) || p < 1 || (totalPages && p > totalPages));
+    const invalidEnd = citation.pageEnd != null && (citation.pageEnd < citation.page
+      || (totalPages && citation.pageEnd > totalPages));
+    const outOfRange = invalidEnd || pages.some((p) => !Number.isInteger(p) || p < 1 || (totalPages && p > totalPages));
     const notAllowed = allowed ? pages.some((p) => !allowed.has(p)) : false;
     if (outOfRange || notAllowed) {
       items.push({ ...citation, level: 'drop', reason: outOfRange ? 'out-of-range' : 'not-available' });
@@ -196,11 +199,14 @@ export async function validateCitations(answer, {
       }
     }
     if (!found) {
-      // 跨页续画：本页 + 下一页拼起来再找一次
-      const next = first + 1;
-      if (!(totalPages && next > totalPages)) {
-        const joined = `${own}\n${await getText(next)}`;
+      // Match the same bounded continuation that the viewer can highlight.
+      let joined = own;
+      for (let next = first + 1; next <= first + 3 && (!totalPages || next <= totalPages); next++) {
+        const text = await getText(next);
+        if (!text) break;
+        joined += `\n${text}`;
         found = fragmentFoundIn(joined, citation.fragment);
+        if (found) break;
       }
     }
     items.push(found

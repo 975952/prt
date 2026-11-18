@@ -2419,7 +2419,7 @@ body.window-maximized .win-resize { display: none; }
 
 /* 分割栏拖动：短促的追随缓动，避免文字和页面跟着指针一格一格跳。 */
 .side { transition: width .11s cubic-bezier(.22, .72, .28, 1); }
-body.dragging .side { transition: width .07s linear; }
+body.dragging .side { transition: none; }
 
 /* AI 结果的阅读节奏：段落之间收紧，避免回答像被空行切成很多块。 */
 .ai-body > .msg {
@@ -3419,6 +3419,9 @@ body.reading:not(.agent-full) .main-row .side {
 body.reading:not(.agent-full) .viewer {
   z-index: 1;
   background: transparent;
+  /* PDF pixels belong to this scroll clip. The separate sibling shadow layer
+     can extend naturally behind the sidebars without carrying paper content. */
+  contain: paint;
 }
 .paper-shadow-layer {
   display: none;

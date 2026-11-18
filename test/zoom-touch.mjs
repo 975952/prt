@@ -641,7 +641,8 @@ const inflated = await page.evaluate(async () => {
 check('容器被撑大时，提交仍然落在预览那一帧（不被浏览器夹到别处）',
   Math.abs(inflated.dx) <= 3 && Math.abs(inflated.dy) <= 3
   && !!inflated.planned && inflated.committed.left === inflated.planned.sx
-  && inflated.natMaxX > inflated.maxSX + 100 && inflated.want > inflated.maxSX + 10,
+  && inflated.natMaxX > inflated.maxSX + 100 && inflated.want > inflated.maxSX
+  && inflated.planned.sx === inflated.maxSX,
   `容器被人为撑到 ${inflated.natMaxX}px（真实上限只有 ${inflated.maxSX}px）；`
   + `未夹取的 want=${inflated.want} → 预览夹到 sx=${inflated.planned?.sx}，提交后 scrollLeft=${inflated.committed.left}，`
   + `画面位移 ${inflated.dx}×${inflated.dy}px（修复前这里会落成 want，横跳几十到几千像素）`);

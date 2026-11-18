@@ -2,7 +2,7 @@
  * node test/citation-display.mjs
  */
 import assert from 'node:assert/strict';
-import { citationAlreadyVisible } from '../public/js/citation-display.js';
+import { citationAlreadyVisible, transformCitationHtml } from '../public/js/citation-display.js';
 
 const resnet = 'with the network depth increasing, accuracy gets saturated (which might be unsurprising) and then degrades rapidly';
 const cases = [
@@ -38,3 +38,12 @@ for (const [label, before, fragment, expected] of cases) {
   console.log(`PASS ${label}`);
 }
 console.log(`citation-display: ${cases.length}/${cases.length} passed`);
+
+const decorate = html => transformCitationHtml(html, prose => prose.replaceAll('〔p.1〕', '<button>p.1</button>'));
+const protectedMarkup = '<p>Text 〔p.1〕 <code>〔p.1〕</code></p><pre><code class="language-js">〔p.1〕</code></pre>'
+  + '<a href="https://example.com" title="〔p.1〕">〔p.1〕</a><button title="〔p.1〕">〔p.1〕</button>';
+const expectedMarkup = protectedMarkup.replace('Text 〔p.1〕', 'Text <button>p.1</button>');
+assert.equal(decorate(protectedMarkup), expectedMarkup, 'only prose is transformed; code, links and their attributes remain literal');
+assert.equal(decorate('\uE100citation0\uE101 <code>〔p.1〕</code> 〔p.1〕'),
+  '\uE100citation0\uE101 <code>〔p.1〕</code> <button>p.1</button>', 'literal text cannot collide with parked markup placeholders');
+console.log('PASS citation syntax remains literal inside code and existing interactive elements');

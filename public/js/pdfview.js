@@ -386,6 +386,8 @@ export class PdfViewer {
     // 缩放手势期间只做一次合成层变换；停止后再提交真实页面尺寸。
     // 这样触摸板/滑块不会在每个 input 上触发全量布局和 PDF 重绘。
     this._zoomPreview = null;
+    this._viewportResizing = false;
+    this._fitViewportWidth = 0;
     // 背景预渲染（不想「翻到了才加载」）：见 _schedulePrefetch / _runPrefetchPass
     this._prefetchTimer = 0;
     this._prefetchRunning = false;
@@ -395,9 +397,12 @@ export class PdfViewer {
 
     this._onScroll = throttle(() => this._handleScroll(), 60);
     this.container.addEventListener('scroll', this._onScroll, { passive: true });
-    this._onResize = throttle(() => {
-      if (this._fitMode) this.fitWidth();
-    }, 200);
+    // Geometry must follow the resized viewport before the next paint. Bitmap
+    // work is deferred separately; throttling the fit itself leaves the old
+    // paper width visible for 200 ms and makes release visibly snap into place.
+    this._onResize = () => {
+      if (this._fitMode && this.container.clientWidth !== this._fitViewportWidth) this.fitWidth();
+    };
     window.addEventListener('resize', this._onResize);
     // Opening a side panel changes the reader width without resizing the window.
     this._resizeObserver = new ResizeObserver(this._onResize);
@@ -1402,7 +1407,7 @@ export class PdfViewer {
 
   _scheduleRerender(delay = 140) {
     this._rerenderWanted = true;
-    if (this._rerenderRunning) return;
+    if (this._rerenderRunning || this._viewportResizing) return;
     clearTimeout(this._rerenderTimer);
     this._rerenderTimer = setTimeout(() => {
       this._rerenderTimer = 0;
@@ -1411,13 +1416,13 @@ export class PdfViewer {
   }
 
   async _runRerenderPass() {
-    if (this._rerenderRunning) return;
+    if (this._rerenderRunning || this._viewportResizing) return;
     this._rerenderRunning = true;
     let didWork = false;
     try {
       for (let round = 0; round < 8; round++) {
         this._rerenderWanted = false;
-        if (this._destroyed || !this.pdf || !this.offsets.length) return;
+        if (this._destroyed || !this.pdf || !this.offsets.length || this._viewportResizing) return;
         const gen = this._gen;
         const [first, last] = this._visibleRange();
         const center = this.container.scrollTop + this.container.clientHeight / 2;
@@ -1436,7 +1441,7 @@ export class PdfViewer {
           // 新的手势/换文档一来就放弃剩下的 —— 跟手比清晰度重要。
           // ⚠️ 这里不能直接 return 了事：这一次请求（_rerenderWanted）还没被消费，
           // 由 finally 负责补一趟（见下面的说明）。
-          if (this._destroyed || gen !== this._gen || this._zoomPreview) return;
+          if (this._destroyed || gen !== this._gen || this._zoomPreview || this._viewportResizing) return;
           const entry = this.rendered.get(i);
           try {
             if (entry?.dirty) await this._renderPage(i, { gen, soft: true });
@@ -1449,7 +1454,7 @@ export class PdfViewer {
     } finally {
       this._rerenderRunning = false;
       this._schedulePrefetch(140);
-      if (didWork && this._rerenderWanted && !this._destroyed) {
+      if (didWork && this._rerenderWanted && !this._destroyed && !this._viewportResizing) {
         clearTimeout(this._rerenderTimer);
         this._rerenderTimer = setTimeout(() => {
           this._rerenderTimer = 0;
@@ -1480,7 +1485,7 @@ export class PdfViewer {
 
   /** 安排一次后台预渲染（合并短时间内的多次请求） */
   _schedulePrefetch(delay = 120) {
-    if (this._destroyed) return;
+    if (this._destroyed || this._viewportResizing) return;
     this._cancelPrefetch();
     this._prefetchTimer = setTimeout(() => {
       this._prefetchTimer = 0;
@@ -1496,13 +1501,13 @@ export class PdfViewer {
    * 每画一页都让出一帧，并且每轮都重算一次视口 —— 用户一滚就优先画新位置。
    */
   async _runPrefetchPass() {
-    if (this._prefetchRunning || this._destroyed || !this.pdf || !this.offsets.length || this._zoomPreview) return;
+    if (this._prefetchRunning || this._destroyed || !this.pdf || !this.offsets.length || this._zoomPreview || this._viewportResizing) return;
     // 正文区还没切出来（打开文档的中间态）不预渲染：此时布局尺寸都是 0，会白画一遍
     if (!(this.container?.clientHeight > 0)) return;
     this._prefetchRunning = true;
     try {
       for (let n = 0; n < 64; n++) {
-        if (this._destroyed || this._zoomPreview || !this.pdf) return;
+        if (this._destroyed || this._zoomPreview || this._viewportResizing || !this.pdf) return;
         const gen = this._gen;
         const [first, last] = this._visibleRange();
         let next = 0;
@@ -1581,6 +1586,7 @@ export class PdfViewer {
     if (!this.pdf || !this.baseSizes[1]) return;
     if (!(this.container.clientWidth > 0 && this.container.clientHeight > 0)) return;
     this.commitZoomPreview();
+    this._fitViewportWidth = this.container.clientWidth;
     const anchor = this._captureAnchor();
     this.scale = this._computeFitScale();
     this._fitMode = true;
@@ -1593,6 +1599,21 @@ export class PdfViewer {
     this._scheduleRerender(80);
     this.opts.onScale?.(this.scale);
     this.opts.onStatus?.(tr("适应宽度 {0}%", Math.round(this.scale * 100)));
+  }
+
+  /** Divider drags reuse the current bitmap while page and overlay geometry
+   * follow the pointer. Release schedules one sharp replacement, never a blank. */
+  setViewportResizing(active) {
+    if (active) this.commitZoomPreview();
+    this._viewportResizing = !!active;
+    if (active) {
+      this._cancelPrefetch();
+      clearTimeout(this._rerenderTimer);
+      this._rerenderTimer = 0;
+    } else {
+      this._scheduleRerender(60);
+      this._schedulePrefetch(160);
+    }
   }
 
   /* ------------------------------------------------- 虚拟化渲染 */
@@ -1659,7 +1680,7 @@ export class PdfViewer {
   }
 
   async _renderVisible(force = false, gen = this._gen) {
-    if (!this.pdf || !this.offsets.length || gen !== this._gen || this._zoomPreview) return;
+    if (!this.pdf || !this.offsets.length || gen !== this._gen || this._zoomPreview || this._viewportResizing) return;
     const [first, last] = this._visibleRange();
     const lo = Math.max(1, first - 1);
     const hi = Math.min(this.numPages, last + 1);
@@ -1735,7 +1756,7 @@ export class PdfViewer {
 
   /** 滚动时检查切片是否还够用 */
   _refreshSlices() {
-    if (this._zoomPreview) return;
+    if (this._zoomPreview || this._viewportResizing) return;
     for (const [i, entry] of Array.from(this.rendered.entries())) {
       if (!entry.cssW) continue;
       /* dirty 的页（刚被软缩放拉伸过）已经排在重画队列里了，这里再点一次就是
@@ -2364,16 +2385,19 @@ export class PdfViewer {
   async highlightQuote(pageNum, fragment) {
     const target = clamp(Math.round(Number(pageNum) || 1), 1, this.numPages || 1);
     // 片段可能是一整句（比按钮 title 里显示的更长），高亮时尽量覆盖整句，不能只画开头几个字
-    const text = String(fragment || '').replace(/\s+/g, ' ').trim().slice(0, 600);
-    this._quote = { page: target, fragment: text };
+    const text = String(fragment || '').replace(/\s+/g, ' ').trim().slice(0, 8000);
+    const quote = this._quote = { page: target, fragment: text };
     // 即时跳页（behavior:auto），目标页没渲染好就等它的渲染任务；已渲染就直接用
     await this.goToPage(target);
-    if (!this.rendered.get(target)?.textDiv) {
-      await this.renderTasks.get(target)?.catch?.(() => {});
-    }
+    if (this._quote !== quote) return false;
+    // The textDiv exists before PDF.js has filled it; wait for its active render
+    // rather than mistaking that empty host for a ready text layer.
+    await this.renderTasks.get(target)?.catch?.(() => {});
+    if (this._quote !== quote) return false;
     if (!this.rendered.get(target)?.textDiv) {
       // 兜底：仍没有文本层（极少见）才重建这一页
       await this.refreshPage(target);
+      if (this._quote !== quote) return false;
     }
     const start = this._matchQuote(this._quoteSpans(target), text);
     let ok = false;
@@ -2382,8 +2406,9 @@ export class PdfViewer {
       ok = true;
       // 跨页片段：这一页没放完的部分，从下一页开头接着找
       const extra = await this._quoteExtraPages(target, start.consumed);
+      if (this._quote !== quote) return false;
       if (Object.keys(extra).length) {
-        this._quote.extra = extra;
+        quote.extra = extra;
         for (const p of Object.keys(extra)) {
           if (this.rendered.get(Number(p))?.textDiv) this._paintQuote(Number(p));
         }
@@ -2411,19 +2436,59 @@ export class PdfViewer {
   _quoteSpans(i) {
     const entry = this.rendered.get(i);
     if (!entry?.textDiv) return [];
-    return Array.from(entry.textDiv.querySelectorAll('span:not(.markedContent)'));
+    const ordered = this._selectionRunsForPage(i).map(run => run.span);
+    return ordered.length ? ordered : Array.from(entry.textDiv.querySelectorAll('span:not(.markedContent)'));
   }
 
-  /** 把一页文本压成「去空白小写串」，并记住每个字在原文里的下标 */
+  /** Match readable text while retaining each normalized glyph's original range. */
   _normPageText(text) {
-    const map = [];
+    text = String(text || '');
+    const map = [], ends = [];
     let norm = '';
-    for (let i = 0; i < text.length; i++) {
-      if (/\s/.test(text[i])) continue;
-      map.push(i);
-      norm += text[i];
+    for (let i = 0; i < text.length;) {
+      const char = String.fromCodePoint(text.codePointAt(i)), end = i + char.length;
+      const beforeWord = /[-\u2010\u2011]/.test(char)
+        ? /[A-Za-z]+$/.exec(text.slice(0, i).normalize('NFKC'))?.[0] : '';
+      const afterWord = beforeWord ? /^\s*([a-z]+)/.exec(text.slice(end).normalize('NFKC'))?.[1] : '';
+      // A PDF cannot distinguish a printed compound's hyphen from an inserted
+      // line-break hyphen. Normalize both forms, but retain single-letter x-y.
+      const wordBreak = !!afterWord && (beforeWord.length > 1 || afterWord.length > 1);
+      if (!/\s|\u00ad/.test(char) && !wordBreak) {
+        const normalized = char.normalize('NFKC').replace(/[“”„‟]/g, '"').replace(/[‘’‚‛]/g, "'").toLowerCase();
+        for (const glyph of normalized) {
+          if (/\s/.test(glyph)) continue;
+          norm += glyph;
+          for (let unit = 0; unit < glyph.length; unit++) { map.push(i); ends.push(end); }
+        }
+      }
+      i = end;
     }
-    return { lower: norm.toLowerCase(), map };
+    return { lower: norm, map, ends };
+  }
+
+  /** A quotation is continuous: never jump across unrelated text to its tail. */
+  _quoteMatchRange(lower, fragment) {
+    const exact = lower.indexOf(fragment);
+    if (exact >= 0) return { at: exact, end: exact + fragment.length, consumed: fragment.length };
+    let best = null;
+    for (const length of [...new Set([Math.min(16, fragment.length), Math.min(6, fragment.length)])]) {
+      if (length < 2) continue;
+      let from = 0, at;
+      while ((at = lower.indexOf(fragment.slice(0, length), from)) >= 0) {
+        let consumed = length;
+        while (consumed < fragment.length && lower[at + consumed] === fragment[consumed]) consumed++;
+        // A prefix may genuinely continue on the next page. A line-end hyphen
+        // is harmless; unmatched words or numbers must not be treated as footer.
+        const tail = lower.slice(at + consumed);
+        const boundary = !tail || /^[|·.()[\]–—-]{1,24}$/.test(tail);
+        if (boundary && (!best || consumed > best.consumed)) {
+          best = { at, end: at + consumed, consumed };
+        }
+        from = at + 1;
+      }
+      if (best) break;
+    }
+    return best;
   }
 
   /**
@@ -2432,24 +2497,21 @@ export class PdfViewer {
    */
   async _quoteExtraPages(target, consumed) {
     const extra = {};
-    const fNorm = String(this._quote?.fragment || '').replace(/\s+/g, '').toLowerCase();
+    const quote = this._quote;
+    const fNorm = this._normPageText(quote?.fragment).lower;
     let remain = fNorm.slice(Math.max(0, consumed));
-    if (remain.length < 6) return extra;
-    for (let page = target + 1; page <= this.numPages && page <= target + 3 && remain.length >= 6; page += 1) {
+    if (remain.length < 2) return extra;
+    for (let page = target + 1; page <= this.numPages && page <= target + 3 && remain.length >= 2; page += 1) {
       let pageText = '';
       try { pageText = await this.getPageText(page); } catch { break; }
+      if (this._quote !== quote) break;
       if (!pageText) break;
-      const { lower, map } = this._normPageText(String(pageText));
-      let matched = 0;
-      let idx = -1;
-      for (const len of [...new Set([Math.min(remain.length, 80), 60, 40, 24, 14, 8])]) {
-        if (len > remain.length || len < 6) continue;
-        const at = lower.indexOf(remain.slice(0, len));
-        if (at >= 0) { matched = len; idx = at; break; }
-      }
-      if (idx < 0 || matched < 6) break;
-      extra[page] = String(pageText).slice(map[idx], map[idx + matched - 1] + 1);
-      remain = remain.slice(matched);
+      const { lower, map, ends } = this._normPageText(pageText);
+      const match = this._quoteMatchRange(lower, remain);
+      if (!match || match.consumed < Math.min(6, remain.length)
+        || (remain.length < 6 && match.at !== 0)) break;
+      extra[page] = String(pageText).slice(map[match.at], ends[match.end - 1]);
+      remain = remain.slice(match.consumed);
     }
     return extra;
   }
@@ -2495,65 +2557,42 @@ export class PdfViewer {
   }
 
   /**
-   * 片段匹配：把页面 span 文本压成「去掉空白的小写串」再定位起点，
-   * 然后尽量延伸到整句结束（用句尾回找 + 贪心延伸容忍连字符/换行/个别字差）。
+   * Match normalized continuous text, including PDF line-end word breaks and
+   * ligatures, then map the complete range back onto the original text spans.
    * @returns {{hits: Array, consumed: number}} hits 覆盖完整片段的 span 区间；
    *          consumed 是这一页「吃掉」了多少个去掉空白的片段字符（跨页时接着找下一页）。
    */
   _matchQuote(spans, fragment) {
     const raw = String(fragment || '').trim();
     if (!raw || !spans.length) return { hits: [], consumed: 0 };
-    const fNorm = raw.replace(/\s+/g, '').toLowerCase();
+    const fNorm = this._normPageText(raw).lower;
     if (fNorm.length < 2) return { hits: [], consumed: 0 };
-    // norm = 页面文本去掉空白；pos[i] 记住第 i 个字对应哪个 span 的哪个字符
+    // A span boundary can be a PDF line break. Retaining it during normalization
+    // allows a printed "repre-" / "sentation" to match the intact quoted word.
     const pos = [];
-    let norm = '';
+    let pageText = '';
     spans.forEach((span, spanIndex) => {
       const text = span.textContent || '';
       for (let i = 0; i < text.length; i++) {
-        if (/\s/.test(text[i])) continue;
         pos.push({ spanIndex, charIndex: i });
-        norm += text[i];
+        pageText += text[i];
       }
+      pageText += '\n'; pos.push(null);
     });
-    const lower = norm.toLowerCase();
-    let at = lower.indexOf(fNorm);
-    let end = at < 0 ? -1 : at + fNorm.length;
-    if (at < 0) {
-      // 整句对不上（换行、连字符、个别字差）：先用最长前缀找起点，再靠句尾把终点补回来
-      let startLen = 0;
-      for (const len of [160, 120, 90, 60, 40, 24, 16, 10, 6]) {
-        if (fNorm.length <= len) continue;
-        at = lower.indexOf(fNorm.slice(0, len));
-        if (at >= 0) { startLen = len; break; }
-      }
-      if (at < 0) return { hits: [], consumed: 0 };
-      end = at + startLen;
-      const tailLen = Math.min(24, fNorm.length);
-      if (tailLen >= 6) {
-        const te = lower.indexOf(fNorm.slice(-tailLen), at + 1);
-        if (te > at) end = Math.max(end, te + tailLen);
-      }
-      // 中段最多容忍 2 个字符不一致，逐字向后延伸；一旦连续对不上就停（不跨到下一句）
-      let k = startLen;
-      let miss = 0;
-      while (at + k < lower.length && k < fNorm.length && miss <= 2) {
-        if (lower[at + k] === fNorm[k]) { k += 1; miss = 0; } else { miss += 1; }
-      }
-      if (k > end - at) end = at + k;
-      end = Math.min(end, lower.length);
-    }
-    if (end <= at) return { hits: [], consumed: 0 };
-    const consumed = Math.min(end - at, fNorm.length);
+    const { lower, map, ends } = this._normPageText(pageText);
+    const match = this._quoteMatchRange(lower, fNorm);
+    if (!match) return { hits: [], consumed: 0 };
+    const { at, end, consumed } = match;
     // norm 区间 → span 区间（同一 span 里取首尾，跨 span 逐段拆）
     const out = [];
     let cur = null;
     for (let i = at; i < end; i++) {
-      const p = pos[i];
+      const p = pos[map[i]], last = pos[ends[i] - 1];
       if (!p) continue;
-      if (cur && cur.spanIndex === p.spanIndex) { cur.end = p.charIndex + 1; continue; }
+      const charEnd = last?.spanIndex === p.spanIndex ? last.charIndex + 1 : p.charIndex + 1;
+      if (cur && cur.spanIndex === p.spanIndex) { cur.end = Math.max(cur.end, charEnd); continue; }
       if (cur) out.push(cur);
-      cur = { spanIndex: p.spanIndex, start: p.charIndex, end: p.charIndex + 1 };
+      cur = { spanIndex: p.spanIndex, start: p.charIndex, end: charEnd };
     }
     if (cur) out.push(cur);
     return {

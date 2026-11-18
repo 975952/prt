@@ -36,6 +36,25 @@ export function citationAlreadyVisible(beforeText, fragmentText) {
   return wanted.every((token, index) => token === preceding[start + index]);
 }
 
+/** Keep citation syntax inside code and existing links literal. The Markdown
+ * renderer has already escaped their contents, so complete elements can be
+ * parked while prose citations (including formatted quotations) are decorated.
+ */
+export function transformCitationHtml(html, transform) {
+  const source = String(html || '');
+  const saved = [];
+  let prefix = '\uE100citation';
+  while (source.includes(prefix)) prefix += '_';
+  const parked = source.replace(/<(pre|code|a|button)\b[^>]*>[\s\S]*?<\/\1\s*>/gi, raw => {
+    const token = `${prefix}${saved.length}\uE101`;
+    saved.push(raw); return token;
+  });
+  const restore = text => String(text || '').replace(new RegExp(`${prefix}(\\d+)\uE101`, 'g'), (raw, index) => saved[Number(index)] ?? raw);
+  // A real prose citation may itself quote an inline code word. Its renderer
+  // restores that fragment before deriving plain-text navigation attributes.
+  return restore(transform(parked, restore));
+}
+
 function visibleText(node) {
   const copy = node.cloneNode(true);
   copy.querySelectorAll?.('.katex-mathml, .page-ref').forEach(element => element.remove());
@@ -46,7 +65,7 @@ function quoteLink(reference, content) {
   const button = reference.ownerDocument.createElement('button');
   button.type = 'button';
   button.className = 'citation-quote-link';
-  for (const name of ['data-page', 'data-paper', 'data-fragment', 'data-unverified', 'title']) {
+  for (const name of ['data-page', 'data-page-end', 'data-paper', 'data-fragment', 'data-unverified', 'title']) {
     if (reference.hasAttribute(name)) button.setAttribute(name, reference.getAttribute(name));
   }
   button.append(...content);
@@ -92,7 +111,7 @@ export function compactCitationDisplay(html, { label = 'Sources' } = {}) {
       }
       // A range remains one target; references to another paper never collapse
       // into the current paper even when their page numbers happen to agree.
-      const end = /p\.\d+[–-](\d+)/.exec(reference.textContent || '')?.[1] || reference.dataset.page;
+      const end = reference.dataset.pageEnd || /p\.\d+[–-](\d+)/.exec(reference.textContent || '')?.[1] || reference.dataset.page;
       const key = JSON.stringify([reference.dataset.paper || '', reference.dataset.page, end]);
       let source = sources.get(key);
       if (!source) {

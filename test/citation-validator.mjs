@@ -33,6 +33,8 @@ console.log('▶ 引用解析');
   check('第四条：半角 || 也认', list[3].fragment === '半角竖线');
   check('普通文字不含引用时返回空', parseCitations('没有引用的一段话。').length === 0);
   check('raw 能精确回指原文', text.includes(list[0].raw));
+  const varied = parseCitations('〔第1至2页〕〔P.3－p.4〕〔p.5～6‖连续原句〕');
+  check('中英文范围均保留起止页', varied.length === 3 && varied.every((c, i) => c.page === i * 2 + 1 && c.pageEnd === i * 2 + 2));
 
   const comboText = '多处依据〔p.21–26, p.23, p.37〕。';
   const combo = parseCitations(comboText);
@@ -49,6 +51,10 @@ console.log('\n▶ 归一化与可用页码');
   check('中文全角空格被忽略', normalizeMatchText('注意　力') === normalizeMatchText('注意力'));
   check('页码标签被剥离', normalizeMatchText('[第5页] 原文') === normalizeMatchText('原文'));
   check('大小写不敏感', normalizeMatchText('Attention') === normalizeMatchText('attention'));
+  check('PDF 连字和软连字符归一化', normalizeMatchText('classiﬁcation repre\u00adsentations') === normalizeMatchText('classification representations'));
+  check('PDF 多处断词归一化', normalizeMatchText('repre-\nsentations classifi-\ncation lay-\ners') === normalizeMatchText('representations classification layers'));
+  check('单字母减法保留运算符', normalizeMatchText('x-y') !== normalizeMatchText('xy'));
+  check('数字范围保留连接符', normalizeMatchText('12-34') !== normalizeMatchText('1234'));
   check('页码切成区间', formatPageList([1, 2, 3, 5, 7, 8]) === 'p.1–p.3、p.5、p.7–p.8', formatPageList([1, 2, 3, 5, 7, 8]));
   check('单页', formatPageList([4]) === 'p.4');
   check('空集合', formatPageList([]) === '');
@@ -96,6 +102,26 @@ const run = (answer, opts = {}) => validateCitations(answer, {
   const fakeFragment = await run('伪造原句〔p.5‖这句话论文里根本没有出现过xyz〕。');
   check('编造原文片段 → page-only（不画假高亮）', fakeFragment.items[0].level === 'page-only');
 
+  const normalized = await run('〔p.1‖The network learns rich representations and improves classification performance with additional layers.〕', {
+    totalPages: 1, availablePages: [1],
+    pageTextFor: () => 'The network learns rich repre-\nsentations and improves classiﬁ-\ncation performance with additional lay-\ners.',
+  });
+  check('多处断词和连字原句仍通过核验', normalized.items[0].level === 'ok', JSON.stringify(normalized.items[0]));
+  const softHyphen = await run('〔p.1‖learned representations〕', {
+    totalPages: 1, availablePages: [1], pageTextFor: () => 'learned repre\u00adsentations',
+  });
+  check('软连字符原句通过核验', softHyphen.items[0].level === 'ok');
+  const mismatches = [
+    ['x-y', 'xy'], ['12-34', '1234'],
+    ['The model learns unrelated inserted content useful representations.', 'The model learns useful representations.'],
+    ['The architecture uses attention and learns robust visual representations with labels.',
+      'The architecture uses attention and learns robust visual representations with apples.'],
+  ];
+  for (const [source, fragment] of mismatches) {
+    const mismatch = await run(`〔p.1‖${fragment}〕`, { totalPages: 1, availablePages: [1], pageTextFor: () => source });
+    check(`不同内容不误判命中：${fragment}`, mismatch.items[0].level === 'page-only');
+  }
+
   const whitespace = await run('换行差异〔p.5‖Multi-head   attention\nallows the model〕。');
   check('空白差异仍算命中', whitespace.items[0].level === 'ok');
 
@@ -104,6 +130,11 @@ const run = (answer, opts = {}) => validateCitations(answer, {
 
   const crossPage = await run('跨页〔p.6‖跨页第一段：attention 的计算方式如下。跨页第二段：继续到这里的句子。〕。');
   check('跨页续画：本页+下一页拼起来能命中 → ok', crossPage.items[0].level === 'ok');
+  const threePage = await run('〔p.1–3‖The first section introduces the network. The second section describes the training procedure. The third section reports the measured results.〕', {
+    totalPages: 3, availablePages: [1, 2, 3],
+    pageTextFor: (p) => ({ 1: 'The first section introduces the network.', 2: 'The second section describes the training procedure.', 3: 'The third section reports the measured results.' })[p] || '',
+  });
+  check('三页连续原句与高亮器保持一致', threePage.items[0].level === 'ok');
 
   const scan = await validateCitations('扫描件〔p.4‖看不清的手写内容〕。', {
     totalPages: 9, availablePages: [4], pageTextFor: () => '', scanned: true,
@@ -120,6 +151,12 @@ const run = (answer, opts = {}) => validateCitations(answer, {
   check('范围引用逐页检查白名单', range.items[0].level === 'page-only' || range.items[0].level === 'ok');
   const rangeOut = await run('范围越界〔p.2–9〕。');
   check('范围内有页不在白名单 → drop', rangeOut.items[0].level === 'drop');
+  const reversed = await run('〔p.3–2〕');
+  check('倒置范围被拦截', reversed.items[0].level === 'drop');
+  const farEnd = await run('〔p.1–999〕', { totalPages: 60, availablePages: null });
+  check('长范围终页越界仍被拦截', farEnd.items[0].level === 'drop');
+  const incompleteRange = await run('〔p.1–60〕', { totalPages: 60, availablePages: Array.from({ length: 59 }, (_, i) => i + 1) });
+  check('长范围也检查末页白名单', incompleteRange.items[0].level === 'drop');
 
   const comboOk = await validateCitations('见〔p.3, p.5–6, p.7〕。', {
     totalPages: 9, availablePages: [1, 2, 3, 5, 6, 7], pageTextFor,
