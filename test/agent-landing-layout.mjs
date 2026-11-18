@@ -43,10 +43,41 @@ try {
   await page.click('#homeAgent');
   await page.waitForFunction(() => document.body.classList.contains('agent-landing') && document.querySelector('#rightSide').getAttribute('aria-busy') !== 'true');
   for (const theme of ['glass', 'dark']) {
+    await page.setViewport({ width: 1400, height: 940 });
     // Use the real settings control so the inline palette and theme token agree.
     await page.select('#uiTheme', theme);
     await page.waitForFunction(theme => document.documentElement.dataset.theme === theme
       && JSON.parse(localStorage.getItem('reader.ui')).style.theme === theme, {}, theme);
+    // The settings state updates before the 180 ms surface-color transition ends.
+    await wait(220);
+    if (theme === 'dark') {
+      const palette = await page.evaluate(() => {
+        const css = selector => getComputedStyle(document.querySelector(selector));
+        return {
+          bg: getComputedStyle(document.body).getPropertyValue('--bg').trim(),
+          fg: getComputedStyle(document.body).getPropertyValue('--fg').trim(),
+          canvas: css('#main').backgroundColor,
+          topbar: css('#topbar').backgroundColor,
+          nav: css('#agentNav').backgroundColor,
+          panel: css('#rightSide').backgroundColor,
+          composer: css('#composer .composer-row').backgroundImage,
+          launch: css('.agent-launch').backgroundColor,
+          navRadius: css('#agentNav').borderTopLeftRadius,
+          panelRadius: css('#rightSide').borderTopLeftRadius,
+        };
+      });
+      assert.equal(palette.bg, '#0b0c0e');
+      assert.equal(palette.fg, '#d8dade');
+      assert.equal(palette.canvas, 'rgb(11, 12, 14)');
+      assert.equal(palette.topbar, 'rgb(11, 12, 14)');
+      assert.equal(palette.nav, 'rgb(16, 17, 19)');
+      assert.equal(palette.panel, 'rgb(11, 12, 14)');
+      assert.match(palette.composer, /25, 26, 29/);
+      assert.equal(palette.launch, 'rgb(17, 18, 20)');
+      assert.equal(palette.navRadius, '0px');
+      assert.equal(palette.panelRadius, '0px');
+      pass('Alina dark theme uses the charcoal palette and continuous desktop canvas');
+    }
     for (const [width, scale] of [[1920, 1], [1400, 1], [900, 1], [320, 1], [1920, 1.6], [320, 1.6]]) {
       await page.setViewport({ width, height: 940 });
       await page.evaluate(scale => {

@@ -351,3 +351,87 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
   .agent-choice { transition: none; }
   .agent-choice:hover { transform: none; }
 }
+
+/* Alina uses a restrained charcoal canvas in the dark theme. Keep this palette
+   local to the full-screen workspace so the reader's dark appearance is unchanged. */
+:root[data-theme="dark"] body.agent-full {
+  --bg: #0b0c0e;
+  --bg-elev: #111214;
+  --bg-sunken: #08090b;
+  --fg: #d8dade;
+  --fg-dim: #8c9098;
+  --fg-faint: #666b74;
+  --border: #25272c;
+  --border-strong: #3b3e44;
+  --accent: #b9bec7;
+  --accent-soft: #191a1d;
+  --accent-fg: #101215;
+  --btn: #b9bec7;
+  --btn-fg: #101215;
+  --surface-rgb: 17, 18, 20;
+  --sel: rgba(185, 190, 199, .28);
+  --scroll-thumb: #2b2e32;
+  --scroll-thumb-hover: #42464d;
+  --agent-glass-edge: rgba(216, 218, 222, .10);
+  --agent-glass-highlight: rgba(216, 218, 222, .05);
+  --agent-glass-shadow: rgba(0, 0, 0, .32);
+  color-scheme: dark;
+  background: var(--bg);
+}
+:root[data-theme="dark"] body.agent-full #topbar {
+  background: #0b0c0e;
+  border-bottom: 1px solid #25272c;
+  box-shadow: none;
+}
+:root[data-theme="dark"] body.agent-full #main {
+  background: #0b0c0e;
+}
+:root[data-theme="dark"] body.agent-full #agentNav {
+  border-color: #25272c;
+  background: #101113;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+:root[data-theme="dark"] body.agent-full #rightCols > #rightSide {
+  border-color: #25272c;
+  background: #0b0c0e;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+:root[data-theme="dark"] body.agent-full #composer .composer-row {
+  border-color: #25272c;
+  background: linear-gradient(140deg, #191a1d, #141518);
+  box-shadow: inset 0 1px 0 rgba(216, 218, 222, .045), 0 12px 36px rgba(0, 0, 0, .30);
+  backdrop-filter: none;
+}
+:root[data-theme="dark"] body.agent-full #composer .composer-row:focus-within {
+  border-color: #444850 !important;
+  background: linear-gradient(140deg, #1d1e22, #17181b);
+  box-shadow: inset 0 1px 0 rgba(216, 218, 222, .07), 0 12px 36px rgba(0, 0, 0, .32);
+}
+:root[data-theme="dark"] body.agent-full .agent-launch {
+  border-color: #25272c;
+  background: #111214;
+  box-shadow: inset 0 1px 0 rgba(216, 218, 222, .035);
+  backdrop-filter: none;
+}
+:root[data-theme="dark"] body.agent-full .agent-launch:hover {
+  border-color: #3b3e44;
+  background-color: #191a1d;
+  box-shadow: 0 8px 22px rgba(0, 0, 0, .24);
+}
+@media (min-width: 701px) {
+  :root[data-theme="dark"] body.agent-full #main > .main-row { padding: 0; }
+  :root[data-theme="dark"] body.agent-full #main #rightCols { gap: 0; }
+  :root[data-theme="dark"] body.agent-full #agentNav {
+    border: 0;
+    border-right: 1px solid #25272c;
+    border-radius: 0;
+    padding: 20px 12px 14px;
+    gap: 24px;
+  }
+  :root[data-theme="dark"] body.agent-full #rightCols > #rightSide {
+    border: 0;
+    border-radius: 0;
+  }
+}
