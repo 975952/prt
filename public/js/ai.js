@@ -4,6 +4,7 @@ import { resolveReadingRequest, historyMessages, stripPageLabels } from './readi
 import { nowContext, buildProfileBlock } from './profile.js';
 import { CONDENSE_SYS } from './teaching.js';
 import { abortError, runWithDeadline } from './task-deadline.js';
+import { buildAgentProfilePrompt } from './agent-profile.js';
 
 export const PRESETS = {
   deepseek: { baseURL: 'https://api.deepseek.com/v1', model: 'deepseek-flash', visionModel: '' },
@@ -112,11 +113,18 @@ export async function streamChat(opts) {
     tools,
     rawResponse = false,
   } = opts;
-  // Add the language preference to the actual request, including agent follow-ups.
-  // Translation directions, structured keys, and quotations keep their own contracts.
-  const messages = originalMessages.map((message) => message.role === 'system'
-    ? { ...message, content: `${message.content}\n\n${responseLanguageRule()}` } : message);
-  if (!messages.some((message) => message.role === 'system')) messages.unshift({ role: 'system', content: responseLanguageRule() });
+  // Read shared preferences on every request, including tool follow-ups. Keep
+  // task-specific rules in their original system message and never mutate callers.
+  const profilePrompt = buildAgentProfilePrompt();
+  const languageRule = responseLanguageRule();
+  let hasSystem = false;
+  const messages = originalMessages.map((message) => {
+    if (message.role !== 'system') return message;
+    const prefix = hasSystem ? '' : `${profilePrompt}\n\n`;
+    hasSystem = true;
+    return { ...message, content: `${prefix}${message.content}\n\n${languageRule}` };
+  });
+  if (!hasSystem) messages.unshift({ role: 'system', content: `${profilePrompt}\n\n${languageRule}` });
 
   // 自己的 controller：既能被调用方 abort，也能被看门狗 abort
   const ctl = new AbortController();

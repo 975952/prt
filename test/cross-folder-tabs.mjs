@@ -17,6 +17,7 @@ await withChatHarness({ tag: 'cross-folder-tabs', papers }, async h => {
   // Runs after the harness fixture on every reload. Each matrix cell begins with
   // a fresh workspace, session map, fake backend and the requested preferences.
   await page.evaluateOnNewDocument(() => {
+    localStorage.setItem('reader.locale', 'zh-CN');
     const cell = JSON.parse(sessionStorage.getItem('test.crossFolderCell') || '{}');
     for (const key of ['reader.workspace.v1', 'reader.activeSession', 'reader.currentFolder.v1']) localStorage.removeItem(key);
     localStorage.setItem('reader.session.scopeMode', cell.scope || 'folder');

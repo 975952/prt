@@ -130,6 +130,12 @@ try {
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: profile, defaultViewport: { width: 1400, height: 940 } });
   const boot = async (target, { windowId = '', setup = true } = {}) => {
     target.on('pageerror', (error) => errors.push(String(error)));
+    await target.evaluateOnNewDocument((id) => {
+      localStorage.setItem('reader.locale', 'zh-CN');
+      // This suite explicitly verifies shared A/B history inside one folder.
+      const scopeKey = id ? `reader.window.${id}.reader.session.scopeMode` : 'reader.session.scopeMode';
+      localStorage.setItem(scopeKey, 'folder');
+    }, windowId);
     await target.bringToFront();
     await target.goto(`${base}/?open=draft-a.pdf&topbar=static${windowId ? `&readerWindow=${windowId}` : ''}`, { waitUntil: 'domcontentloaded' });
     await target.waitForFunction(() => window.__viewer?.pdf && window.__ctx && window.__state.viewerDocId === window.__state.doc?.docId);

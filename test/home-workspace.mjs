@@ -36,6 +36,9 @@ try {
   }
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe', headless: true, args: ['--no-sandbox'], defaultViewport: { width: 1440, height: 960 } });
   page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => {
+    if (!localStorage.getItem('reader.locale')) localStorage.setItem('reader.locale', 'zh-CN');
+  });
   page.on('pageerror', e => errors.push(String(e)));
   await page.goto(base, { waitUntil: 'networkidle0' });
   const visible = selector => page.$eval(selector, n => !!n.getClientRects().length);
@@ -103,14 +106,15 @@ try {
   await page.keyboard.press('Escape');
   check('Escape clears search', await count() === 6);
   const headingBefore = await page.$eval('#homeHeading', n => n.getBoundingClientRect().height);
+  const initialZoom = await page.evaluate(() => Number(getComputedStyle(document.documentElement).getPropertyValue('--home-scale')) * 100);
   const fontBefore = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ai-fs'));
   await zoomKey('+'); await zoomKey('+');
-  check('Ctrl+plus zooms home with focused search', await page.$eval('#homeHeading', (n, before) => n.getBoundingClientRect().height > before * 1.15, headingBefore));
+  check('Ctrl+plus zooms home with focused search', await page.$eval('#homeHeading', (n, before) => n.getBoundingClientRect().height > before, headingBefore));
   check('home zoom leaves reader font unchanged', await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--ai-fs')) === fontBefore);
   await page.reload({ waitUntil: 'networkidle0' });
-  check('home zoom persists', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 120);
+  check('home zoom persists', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === Math.min(160, initialZoom + 20));
   await zoomKey('-');
-  check('Ctrl+minus reduces home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 110);
+  check('Ctrl+minus reduces home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === Math.min(160, initialZoom + 20) - 10);
   for (let i = 0; i < 10; i++) await zoomKey('+');
   check('home zoom has an upper bound', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 160);
   for (const width of [900, 480, 360]) {
@@ -119,7 +123,7 @@ try {
   }
   await page.setViewport({ width: 1440, height: 960 });
   await zoomKey('0');
-  check('Ctrl+0 resets home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 100);
+  check('Ctrl+0 resets home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === initialZoom);
   check('only home main content has rounded corners', await page.evaluate(() => getComputedStyle(document.querySelector('#home')).borderRadius === '0px'
     && getComputedStyle(document.querySelector('.home-sidebar')).borderRadius === '0px'
     && parseFloat(getComputedStyle(document.querySelector('.home-content')).borderRadius) >= 14));

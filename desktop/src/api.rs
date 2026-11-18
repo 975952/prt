@@ -2089,6 +2089,152 @@ fn session_write_lock() -> &'static Mutex<()> {
     LOCK.get_or_init(|| Mutex::new(()))
 }
 
+type SessionMoveError = (u16, &'static str, &'static str);
+const SESSION_MOVE_FAILED: SessionMoveError = (500, "SESSION_MOVE_FAILED", "转换会话失败，原会话已保留，请重试");
+
+fn move_attachment_file(doc: &str, sid: &str, id: &str) -> Result<Option<PathBuf>, SessionMoveError> {
+    for ext in ATTACHMENT_EXTS {
+        let file = attachment_dir(doc, sid).join(format!("{}.{}", id, ext));
+        match std::fs::metadata(&file) {
+            Ok(meta) if meta.is_file() => return Ok(Some(file)),
+            Ok(_) => {},
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {},
+            Err(_) => return Err(SESSION_MOVE_FAILED),
+        }
+    }
+    Ok(None)
+}
+
+// Preserve evidence docId/page while making old implicit image ownership explicit.
+fn relocate_session_images(owner: &mut Value, ids: Vec<String>, fallback_doc: &str, fallback_sid: &str,
+    from_doc: &str, from_sid: &str, to_doc: &str, to_sid: &str,
+    copies: &mut HashMap<String, PathBuf>) -> Result<(), SessionMoveError> {
+    if !owner.is_object() { return Ok(()); }
+    let explicit = owner.get("attachmentDoc").and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+    let mut doc = explicit.clone().unwrap_or_else(|| if fallback_doc.is_empty() { from_doc } else { fallback_doc }.to_string());
+    let mut sid = owner.get("attachmentSid").and_then(Value::as_str).unwrap_or(fallback_sid).to_string();
+    let refs: HashSet<String> = ids.into_iter().filter(|id| valid_attachment_id(id)).collect();
+    let mut files: Vec<Option<PathBuf>> = refs.iter().map(|id| move_attachment_file(&doc, &sid, id)).collect::<Result<_, _>>()?;
+    if explicit.is_none() && files.iter().any(Option::is_none) {
+        let scoped: Vec<Option<PathBuf>> = refs.iter().map(|id| move_attachment_file(from_doc, from_sid, id)).collect::<Result<_, _>>()?;
+        if scoped.iter().all(Option::is_some) { doc = from_doc.to_string(); sid = from_sid.to_string(); files = scoped; }
+    }
+    if files.iter().any(Option::is_none) {
+        return Err((409, "SESSION_ATTACHMENT_MISSING", "原会话的截图附件不完整，暂时无法转换"));
+    }
+    let is_source = doc_id_of(&doc) == doc_id_of(from_doc) && sid == from_sid;
+    if is_source {
+        for file in files.into_iter().flatten() {
+            if let Some(name) = file.file_name().and_then(|s| s.to_str()) { copies.insert(name.to_string(), file); }
+        }
+        if explicit.is_some() || !refs.is_empty() {
+            owner["attachmentDoc"] = json!(to_doc); owner["attachmentSid"] = json!(to_sid);
+        }
+    } else if !refs.is_empty() {
+        owner["attachmentDoc"] = json!(doc); owner["attachmentSid"] = json!(sid);
+    }
+    Ok(())
+}
+
+fn move_one_session(body: &Value) -> Result<Value, SessionMoveError> {
+    let from_doc = body.get("fromDoc").and_then(Value::as_str).unwrap_or("").trim();
+    let to_doc = body.get("toDoc").and_then(Value::as_str).unwrap_or("").trim();
+    let from_sid = body.get("fromSid").and_then(Value::as_str);
+    let to_sid = body.get("toSid").and_then(Value::as_str);
+    let folder = body.get("folderPath").and_then(Value::as_str);
+    let valid_sid = |sid: &str| sid.len() <= 40 && sid.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-');
+    if from_doc.is_empty() || to_doc.is_empty() || from_doc.encode_utf16().count() > 240 || to_doc.encode_utf16().count() > 240
+        || !from_sid.map(valid_sid).unwrap_or(false) || !to_sid.map(|s| !s.is_empty() && valid_sid(s)).unwrap_or(false)
+        || from_sid == Some("__translate") || to_sid == Some("__translate")
+        || !folder.map(|s| s.encode_utf16().count() <= 400).unwrap_or(false) || doc_id_of(from_doc) == doc_id_of(to_doc) {
+        return Err((400, "SESSION_MOVE_INVALID", "会话转换参数不合法"));
+    }
+    let (from_sid, to_sid, folder) = (from_sid.unwrap(), to_sid.unwrap(), folder.unwrap());
+    // This existing lock covers both keys and all ordinary session writes/deletes.
+    let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
+    let from_file = session_file_resolved(from_doc, from_sid);
+    let to_file = session_file_resolved(to_doc, to_sid);
+    if session_was_deleted(&from_file) { return Err((409, "SESSION_DELETED", "原会话已删除或已转换")); }
+    let mut next = store::read_json_opt(&from_file).filter(Value::is_object)
+        .ok_or((404, "SESSION_NOT_FOUND", "原会话不存在"))?;
+    // Inspect the latest snapshot while holding the same lock as streaming saves.
+    if next.get("entries").and_then(Value::as_array).map(|entries| entries.iter().any(|entry|
+        entry.get("kind").and_then(Value::as_str) != Some("user")
+            && entry.get("status").and_then(Value::as_str) == Some("pending"))).unwrap_or(false) {
+        return Err((409, "SESSION_GENERATING", "会话仍有未完成的回答，请等待完成；若上次已中断，请先恢复并重试，再完成或停止后移动。"));
+    }
+    let target_dir = attachment_dir(to_doc, to_sid);
+    if session_was_deleted(&to_file) || store::data_path(&to_file).exists() || target_dir.exists() {
+        return Err((409, "SESSION_TARGET_EXISTS", "目标会话已存在，请重新转换"));
+    }
+    next["folderPath"] = json!(folder);
+    let draft_owner = json!({"docId": format!("session:{}:{}", doc_id_of(to_doc), to_sid), "mode":"chat"});
+    next["draftOwner"] = draft_owner.clone();
+    let mut copies = HashMap::new();
+    if let Some(entries) = next.get_mut("entries").and_then(Value::as_array_mut) {
+        for entry in entries {
+            let retry = entry.get("retry").cloned().unwrap_or(Value::Null);
+            let nonempty = |value: Option<&Value>| value.and_then(Value::as_str).filter(|s| !s.is_empty()).map(str::to_string);
+            let retry_doc = nonempty(retry.get("attachmentDoc")).or_else(|| nonempty(retry.get("docId")))
+                .or_else(|| nonempty(entry.get("docId"))).unwrap_or_else(|| from_doc.to_string());
+            let retry_sid = retry.get("attachmentSid").and_then(Value::as_str).unwrap_or(from_sid).to_string();
+            let row_doc = nonempty(retry.get("attachmentDoc")).or_else(|| nonempty(entry.get("docId")))
+                .or_else(|| nonempty(retry.get("docId"))).unwrap_or_else(|| from_doc.to_string());
+            let shot_ids = entry.get("shots").and_then(Value::as_array).map(|shots| shots.iter()
+                .filter_map(|s| s.get("id").and_then(Value::as_str).map(str::to_string)).collect()).unwrap_or_default();
+            relocate_session_images(entry, shot_ids, &row_doc, &retry_sid, from_doc, from_sid, to_doc, to_sid, &mut copies)?;
+            if let Some(retry) = entry.get_mut("retry").filter(|r| r.is_object()) {
+                let ids = retry.get("attachments").and_then(Value::as_array).map(|attachments| attachments.iter()
+                    .filter(|a| a.get("kind").and_then(Value::as_str) == Some("image") || a.get("screenshot").and_then(Value::as_bool) == Some(true))
+                    .filter_map(|a| a.get("id").and_then(Value::as_str).map(str::to_string)).collect()).unwrap_or_default();
+                relocate_session_images(retry, ids, &retry_doc, &retry_sid, from_doc, from_sid, to_doc, to_sid, &mut copies)?;
+                if retry.get("kind").and_then(Value::as_str).unwrap_or("chat") == "chat" { retry["composerOwner"] = draft_owner.clone(); }
+            }
+        }
+    }
+    let stage_dir = target_dir.with_file_name(format!("{}.moving-{}", target_dir.file_name().unwrap().to_string_lossy(), new_attachment_id()));
+    let mut published_images = false;
+    let mut published_session = false;
+    let mut committed = false;
+    let result = (|| -> Result<Value, SessionMoveError> {
+        if !copies.is_empty() {
+            std::fs::create_dir_all(&stage_dir).map_err(|_| SESSION_MOVE_FAILED)?;
+            for (name, source) in copies {
+                let destination = stage_dir.join(name);
+                let size = std::fs::copy(&source, &destination).map_err(|_| SESSION_MOVE_FAILED)?;
+                if std::fs::metadata(&source).map_err(|_| SESSION_MOVE_FAILED)?.len() != size {
+                    return Err(SESSION_MOVE_FAILED);
+                }
+            }
+            std::fs::rename(&stage_dir, &target_dir).map_err(|_| SESSION_MOVE_FAILED)?;
+            published_images = true;
+        }
+        if !store::write_json(&to_file, &next) { return Err(SESSION_MOVE_FAILED); }
+        published_session = true;
+        if !store::write_json(&deleted_session_file(&from_file), &json!({"v":1,"deletedAt":now_ms(),"movedTo":{"doc":to_doc,"sid":to_sid}})) {
+            return Err(SESSION_MOVE_FAILED);
+        }
+        committed = true;
+        let _ = store::remove_file(&from_file); // a leftover backup is hidden by its tombstone
+        Ok(json!({"ok":true,"doc":to_doc,"sid":to_sid,"draftOwner":draft_owner}))
+    })();
+    if !committed && published_session { let _ = store::remove_file(&to_file); }
+    if !committed && published_images { let _ = std::fs::remove_dir_all(&target_dir); }
+    let _ = std::fs::remove_dir_all(&stage_dir);
+    result
+}
+
+pub fn sessions_move(rq: Request, body: &[u8]) {
+    let payload = match parse_json(body) {
+        Ok(value) => value,
+        Err(error) => return send_json(rq, 400, &err_json(&error)),
+    };
+    match move_one_session(&payload) {
+        Ok(result) => send_json(rq, 200, &result),
+        Err((status, code, message)) => send_json(rq, status, &json!({"code":code,"error":{"code":code,"message":message}})),
+    }
+}
+
 pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     let doc = query_get(raw_query, "doc").unwrap_or_else(|| "default".to_string());
     let sid = query_get(raw_query, "sid")

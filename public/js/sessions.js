@@ -15,6 +15,7 @@ import { windowStorage as localStorage } from './window-storage.js';
  */
 
 import { $, el, toast } from './util.js';
+import { createSessionMove } from './session-move.js';
 
 const ON_ENTER_KEY = 'reader.session.onEnter';     // choose（默认，用户拍板 B）/ resume / new
 const ACTIVE_SESSION_KEY = 'reader.activeSession'; // 与 app.js 的 SESSION_KEY 同一个存档
@@ -24,6 +25,7 @@ const ALL_LIST_LIMIT = 500;
 const DAY = 24 * 60 * 60 * 1000;
 
 const ICONS = {
+  move: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M13 5H5v14h8M10 12h11m-4-4 4 4-4 4"/></svg>',
   plus: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true"><path d="M12 5.2v13.6M5.2 12h13.6"/></svg>',
   list: '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true"><path d="M4 6.4h16M4 12h16M4 17.6h16"/></svg>',
   back: '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.6 5.4 8 12l6.6 6.6"/></svg>',
@@ -63,6 +65,7 @@ const st = {
   renameSid: null,
   confirmResolve: null,
   ui: null,
+  moveUi: null,
 };
 
 /* ───────────────────────────── 基础工具 ───────────────────────────── */
@@ -181,7 +184,22 @@ function isScopeFileKey(fileKey) {
   return key === listScopeKey();
 }
 
+async function fetchAgentWorkspaceList(limit) {
+  // Query both global storage families before applying their limits. Fetching
+  // scope=all first could bury global conversations under unrelated local rows.
+  const groups = await Promise.all(['default', '__global__'].map(async (doc) => {
+    const q = new URLSearchParams({ doc, scope: 'folder', archived: 'all', limit: String(limit) });
+    const r = await fetch(`/api/sessions?${q}`);
+    const j = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error(errorOf(j, r));
+    return normalizeRows(j.sessions);
+  }));
+  // Preserve fileKey: adopting a legacy global conversation needs its real owner.
+  return groups.flat().filter((row) => !st.ctx?.acceptSessionRow || st.ctx.acceptSessionRow(row));
+}
+
 async function fetchFolderList() {
+  if (st.ctx?.isAgentWorkspace?.()) return fetchAgentWorkspaceList(LIST_LIMIT);
   const q = new URLSearchParams({
     doc: listScopeKey(),
     folderPath: st.folderPath,
@@ -192,10 +210,11 @@ async function fetchFolderList() {
   const r = await fetch(`/api/sessions?${q}`);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(errorOf(j, r));
-  return normalizeRows(j.sessions);
+  return normalizeRows(j.sessions).filter((row) => !st.ctx?.acceptSessionRow || st.ctx.acceptSessionRow(row));
 }
 
 async function fetchAllList() {
+  if (st.ctx?.isAgentWorkspace?.()) return fetchAgentWorkspaceList(ALL_LIST_LIMIT);
   const q = new URLSearchParams({
     doc: listScopeKey(),
     folderPath: st.folderPath,
@@ -206,7 +225,7 @@ async function fetchAllList() {
   const r = await fetch(`/api/sessions?${q}`);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(errorOf(j, r));
-  return normalizeRows(j.sessions);
+  return normalizeRows(j.sessions).filter((row) => !st.ctx?.acceptSessionRow || st.ctx.acceptSessionRow(row));
 }
 
 /** 行所属文件夹的 session key：优先用服务端给的 fileKey（任意归属模式/旧文件夹的行都能
@@ -287,8 +306,8 @@ let allListRequest = 0;
 let docOpenRequest = 0;
 const contextKey = () => JSON.stringify([st.ctx?.doc?.()?.docId || '', listScopeKey(), st.ctx?.currentSid?.() || '']);
 
-async function refreshList({ force = false } = {}) {
-  if (!st.ctx?.hasDoc?.()) return st.list;
+async function refreshList({ force = false, allowWithoutDoc = false } = {}) {
+  if (!st.ctx || (!allowWithoutDoc && !st.ctx.hasDoc?.())) return st.list;
   st.folderPath = st.ctx.folderPath();
   st.folderKey = st.ctx.folderKey();
   st.docId = st.ctx.doc()?.docId || '';
@@ -413,6 +432,43 @@ function scopeMode() {
   return st.ctx?.scopeMode?.() || 'folder';
 }
 
+/** Enter a conversation workspace independently of the visible PDF. The caller
+ * has already selected its scope; lists and entry state must follow that scope. */
+export async function sessionsOpenWorkspace({ choose = true } = {}) {
+  if (!st.ctx || !st.ui) return;
+  const request = ++docOpenRequest, owner = contextKey();
+  sessionsCloseOverlays();
+  hideEntryCard({ render: false });
+  // Do not briefly expose the previous workspace's cached history while loading.
+  ++allListRequest;
+  st.allLoading = false;
+  st.allList = [];
+  st.list = [];
+  st.listLoaded = false;
+  st.docId = st.ctx.doc?.()?.docId || '';
+  st.currentSid = st.ctx.currentSid?.() || '';
+  await refreshList({ force: true, allowWithoutDoc: true });
+  if (request !== docOpenRequest || owner !== contextKey()) return;
+  st.currentSid = st.ctx.currentSid?.() || '';
+  if (choose) {
+    const recent = activeRows().filter((row) => (row.count || 0) > 0);
+    showEntryCard(recent.find((row) => row.sid === st.currentSid) || recent[0] || null);
+  } else {
+    st.ctx.showChatAndRender?.();
+    await st.ctx.followCurrentSession?.();
+    if (request !== docOpenRequest || owner !== contextKey()) return;
+    renderHeader();
+  }
+}
+
+/** Close transient session controls before a workspace or reader handoff. */
+export function sessionsCloseOverlays() {
+  st.moveUi?.close({ focus: false, force: true });
+  closeQuick();
+  closeHistory();
+  if (st.confirmResolve) resolveConfirm(false);
+}
+
 /** app.js 刚打开一篇文档：决定「接上哪段对话」或「按打开文件夹时的策略执行」 */
 export async function sessionsOnDocOpened(docId) {
   const request = ++docOpenRequest, openedDoc = String(docId || '');
@@ -520,6 +576,28 @@ function hideEntryCard({ render = true } = {}) {
 function renderEntryCard(lastRow) {
   const ui = st.ui;
   if (!ui?.entry) return;
+  const agentWorkspace = !!st.ctx?.isAgentWorkspace?.();
+  ui.entry.classList.toggle('agent-entry', agentWorkspace);
+  if (agentWorkspace) {
+    const recent = activeRows().filter((row) => (row.count || 0) > 0)
+      .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 3);
+    ui.entry.replaceChildren(
+      el('div', { class: 'entry-heading' },
+        el('h3', { class: 'entry-title', text: tr("全局助手") }),
+        el('button', { type: 'button', class: 'entry-link', text: tr("全部会话"), onclick: openHistory })),
+      el('button', { type: 'button', class: 'entry-new', text: tr("新建会话"), onclick: doNewSession }),
+      ...(recent.length ? [el('div', { class: 'agent-entry-recent' },
+        ...recent.map((row) => {
+          const name = row.title || tr("未命名会话");
+          return el('button', { type: 'button', class: 'entry-primary',
+            title: tr("继续「{0}」", name), onclick: () => chooseSession(row) },
+          el('span', { class: 'entry-primary-main', text: name }),
+          el('span', { class: 'entry-primary-meta', text: tr("{0} 条消息 · {1}", row.count, relTime(row.updatedAt)) }),
+          el('span', { class: 'entry-continue', text: tr("继续对话 →") }));
+        }))] : []),
+    );
+    return;
+  }
   if (!lastRow) {
     ui.entry.replaceChildren(st.ctx.createReadingWelcome('chat'));
     return;
@@ -544,6 +622,7 @@ async function chooseSession(sidOrRow, docIdHint = '') {
   const row = typeof sidOrRow === 'string'
     ? (st.allList.find((r) => r.sid === sidOrRow) || st.list.find((r) => r.sid === sidOrRow) || null)
     : (sidOrRow || null);
+  if (row && st.ctx?.acceptSessionRow && !st.ctx.acceptSessionRow(row)) return;
   const sid = row?.sid ?? (typeof sidOrRow === 'string' ? sidOrRow : '');
   closeQuick();
   closeHistory();
@@ -563,6 +642,28 @@ async function doNewSession() {
 }
 
 /* ───────────────────────────── 快速切换浮层 ───────────────────────────── */
+
+function moveRow(row) {
+  if (!row?.fileKey) return null;
+  const actual = [...st.allList, ...st.list].find(value => value.sid === row.sid && value.fileKey === row.fileKey) || row;
+  return Number(actual.count) > 0 ? { ...row, ...actual } : null;
+}
+
+function currentMoveRow() {
+  if (st.entryVisible) return null;
+  const sid = st.ctx?.currentSid?.() ?? st.currentSid;
+  const live = st.ctx?.currentSessionMeta?.();
+  if (live && live.sid === sid && live.fileKey && isScopeFileKey(live.fileKey)) return Number(live.count) > 0 ? { ...live } : null;
+  if (!sid) return null;
+  return moveRow(st.list.find(row => row.sid === sid && isScopeFileKey(row.fileKey)));
+}
+
+function openSessionMove(row, trigger, { current = false } = {}) {
+  const source = current ? currentMoveRow() : moveRow(row);
+  if (!source) return;
+  closeQuick();
+  void st.moveUi?.open(source, trigger);
+}
 
 function buildQuick() {
   const quick = st.ui.quick;
@@ -586,6 +687,9 @@ function buildQuick() {
         onclick: () => { closeQuick(); openHistory(); },
       }),
       el('button', { type: 'button', class: 'sess-quick-new', text: tr("＋ 新建会话"), onclick: doNewSession })),
+    el('button', { type: 'button', class: 'sess-quick-move', id: 'sessQuickMove', hidden: true,
+      onclick: event => openSessionMove(null, event.currentTarget, { current: true }) },
+      el('span', { html: ICONS.move }), el('span', { text: tr('更改当前会话归属') })),
   );
 }
 
@@ -614,6 +718,8 @@ function toggleQuick() {
 function renderQuickList() {
   const box = st.ui?.quick?.querySelector('.sess-quick-list');
   if (!box) return;
+  const move = st.ui.quick.querySelector('#sessQuickMove');
+  if (move) move.hidden = !currentMoveRow() || typeof st.ctx?.moveSession !== 'function';
   const q = st.quickQuery.trim().toLowerCase();
   const actives = activeRows()
     .filter((r) => (r.count || 0) > 0)
@@ -1063,7 +1169,7 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
   if (on) badges.push(el('span', { class: 'sess-badge on', text: tr("当前") }));
   if (st.histMode === 'time' && row.pinned) badges.push(el('span', { class: 'sess-badge', text: tr("置顶") }));
 
-  const wrap = el('div', { class: `sess-hrow${on ? ' on' : ''}${row.archived ? ' archived' : ''}`, dataset: { sid: row.sid } });
+  const wrap = el('div', { class: `sess-hrow${on ? ' on' : ''}${row.archived ? ' archived' : ''}`, dataset: { sid: row.sid, fileKey: row.fileKey || '' } });
 
   const canRenameHere = st.renameSid === row.sid && (st.histMode !== 'file' || !renameShown?.has(row.sid));
   if (canRenameHere) {
@@ -1105,6 +1211,8 @@ function historyRow(row, { trail = false, group = null, renameShown = null, curr
       sessButton('pin', row.pinned ? tr("取消置顶") : tr("置顶"), `sess-hact pin${row.pinned ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { pinned: !row.pinned }); }),
       sessButton('archive', row.archived ? tr("取消归档") : tr("归档"), `sess-hact archive${row.archived ? ' on' : ''}`, (e) => { e.stopPropagation(); patchMeta(row, { archived: !row.archived }); }),
       sessButton('rename', tr("重命名（F2）"), 'sess-hact rename', (e) => { e.stopPropagation(); startRename(row.sid); }),
+      moveRow(row) && typeof st.ctx?.moveSession === 'function'
+        ? sessButton('move', tr('更改归属'), 'sess-hact move', (e) => { e.stopPropagation(); openSessionMove(row, e.currentTarget); }) : null,
       sessButton('trash', tr("删除会话"), 'sess-hact danger', (e) => { e.stopPropagation(); confirmDeleteRow(row); }),
     ),
   );
@@ -1270,6 +1378,7 @@ function onKeydownCapture(e) {
     return;
   }
   if (e.key === 'Escape') {
+    if (st.moveUi?.isOpen()) { e.preventDefault(); e.stopPropagation(); st.moveUi.close(); return; }
     if (st.quickOpen) { e.preventDefault(); e.stopPropagation(); closeQuick(); return; }
     if (st.historyOpen) { e.preventDefault(); e.stopPropagation(); closeHistory(); return; }
   }
@@ -1316,6 +1425,15 @@ export function initSessions(ctx) {
     confirmMask: null,
   };
   if (!ui.bar) return;
+  st.moveUi = createSessionMove({
+    host: ui.rightSide,
+    getContext: () => st.ctx,
+    canMove: () => guardBusy(tr('移动会话')),
+    onMoved: async () => {
+      await refreshList({ force: true, allowWithoutDoc: true });
+      if (!st.historyOpen) st.allList = [];
+    },
+  });
 
   // 进文件夹选择卡片：由本模块创建，app.js 的 renderCol 在 chat 栏优先挂它
   ui.entry = el('section', {
@@ -1426,6 +1544,7 @@ export function sessionsGetList() {
 
 /** app.js 在文件夹改名/移动后调：更新缓存中的文件夹路径 */
 export function sessionsOnFolderEntered(path) {
+  st.moveUi?.close({ focus: false, force: true });
   st.folderPath = String(path || '');
   st.folderKey = st.ctx?.folderKeyOf ? st.ctx.folderKeyOf(st.folderPath) : '';
   st.docId = '';

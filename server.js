@@ -176,6 +176,17 @@ function queueSessionWrite(file, operation) {
   task.then(release, release);
   return task;
 }
+// Reserve both slots synchronously: nested one-key locks could deadlock when
+// two windows move conversations in opposite directions.
+function queueSessionWrites(files, operation) {
+  const keys = [...new Set(files)].sort();
+  const prior = keys.map(key => (sessionWriteChains.get(key) || Promise.resolve()).catch(() => {}));
+  const task = Promise.all(prior).then(operation);
+  for (const key of keys) sessionWriteChains.set(key, task);
+  const release = () => { for (const key of keys) if (sessionWriteChains.get(key) === task) sessionWriteChains.delete(key); };
+  task.then(release, release);
+  return task;
+}
 const SESSION_DELETED = Symbol('session deleted');
 const deletedSessionFile = file => `deleted-${file}`;
 async function sessionWasDeleted(file) {
@@ -271,6 +282,118 @@ async function pruneAttachments(doc, sid, payload) {
 /** 删掉一个会话的整个附件目录（删除会话时用） */
 async function removeAttachmentDir(doc, sid) {
   try { await fsp.rm(attachmentDir(doc, sid), { recursive: true, force: true }); } catch { /* 忽略 */ }
+}
+
+function sessionMoveError(status, code, message) { return Object.assign(new Error(message), { status, code }); }
+async function existingPath(file) {
+  try { await fsp.access(file); return true; }
+  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+}
+async function attachmentFile(doc, sid, id) {
+  for (const ext of ATTACHMENT_EXTS) {
+    const file = path.join(attachmentDir(doc, sid), `${id}.${ext}`);
+    try { if ((await fsp.stat(file)).isFile()) return file; }
+    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  }
+  return null;
+}
+
+/** Single-conversation transfer. Evidence doc/page fields are never rewritten.
+ * Old paper-owned images retain their original owner; source-owned images are
+ * copied before publishing the destination. Source files stay recoverable until
+ * the final tombstone commits, and source images remain for pre-existing refs. */
+async function moveSession(body) {
+  const fromDoc = typeof body?.fromDoc === 'string' ? body.fromDoc.trim() : '';
+  const toDoc = typeof body?.toDoc === 'string' ? body.toDoc.trim() : '';
+  const fromSid = body?.fromSid, toSid = body?.toSid;
+  if (!fromDoc || !toDoc || fromDoc.length > 240 || toDoc.length > 240
+    || typeof fromSid !== 'string' || !/^[A-Za-z0-9_-]{0,40}$/.test(fromSid)
+    || typeof toSid !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(toSid)
+    || fromSid === '__translate' || toSid === '__translate'
+    || typeof body.folderPath !== 'string' || body.folderPath.length > 400
+    || docIdOf(fromDoc) === docIdOf(toDoc)) {
+    throw sessionMoveError(400, 'SESSION_MOVE_INVALID', '会话转换参数不合法');
+  }
+  const fromFile = await resolveSessionFileName(fromDoc, fromSid);
+  const toFile = await resolveSessionFileName(toDoc, toSid);
+  return queueSessionWrites([fromFile, toFile], async () => {
+    if (await sessionWasDeleted(fromFile)) throw sessionMoveError(409, 'SESSION_DELETED', '原会话已删除或已转换');
+    const saved = await readDataFile(fromFile, null);
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw sessionMoveError(404, 'SESSION_NOT_FOUND', '原会话不存在');
+    // Check the locked, latest snapshot: another window may still be streaming.
+    if ((Array.isArray(saved.entries) ? saved.entries : []).some(entry => entry?.kind !== 'user' && entry?.status === 'pending')) {
+      throw sessionMoveError(409, 'SESSION_GENERATING', '会话仍有未完成的回答，请等待完成；若上次已中断，请先恢复并重试，再完成或停止后移动。');
+    }
+    const targetDir = attachmentDir(toDoc, toSid);
+    if (await sessionWasDeleted(toFile) || await existingPath(path.join(DATA_DIR, toFile)) || await existingPath(targetDir)) {
+      throw sessionMoveError(409, 'SESSION_TARGET_EXISTS', '目标会话已存在，请重新转换');
+    }
+    const next = JSON.parse(JSON.stringify(saved));
+    next.folderPath = body.folderPath;
+    const draftOwner = { docId: `session:${docIdOf(toDoc)}:${toSid}`, mode: 'chat' };
+    next.draftOwner = draftOwner;
+    const copies = new Map();
+    const isSource = (doc, sid) => docIdOf(doc) === docIdOf(fromDoc) && sid === fromSid;
+    async function relocate(owner, ids, fallbackDoc, fallbackSid) {
+      if (!owner || typeof owner !== 'object') return;
+      const explicit = typeof owner.attachmentDoc === 'string' && owner.attachmentDoc;
+      let doc = explicit || fallbackDoc || fromDoc;
+      let sid = typeof owner.attachmentSid === 'string' ? owner.attachmentSid : fallbackSid;
+      const refs = [...new Set(ids.filter(id => typeof id === 'string' && ATTACHMENT_ID_RE.test(id)))];
+      let files = await Promise.all(refs.map(id => attachmentFile(doc, sid, id)));
+      // Some old user rows carry the evidence paper but stored images under the
+      // conversation scope. Fall back only when the entire group is available.
+      if (!explicit && files.some(file => !file)) {
+        const scoped = await Promise.all(refs.map(id => attachmentFile(fromDoc, fromSid, id)));
+        if (scoped.every(Boolean)) { doc = fromDoc; sid = fromSid; files = scoped; }
+      }
+      if (files.some(file => !file)) throw sessionMoveError(409, 'SESSION_ATTACHMENT_MISSING', '原会话的截图附件不完整，暂时无法转换');
+      if (isSource(doc, sid)) {
+        for (const file of files) copies.set(path.basename(file), file);
+        if (explicit || refs.length) { owner.attachmentDoc = toDoc; owner.attachmentSid = toSid; }
+      } else if (refs.length) {
+        owner.attachmentDoc = doc; owner.attachmentSid = sid;
+      }
+    }
+    for (const entry of Array.isArray(next.entries) ? next.entries : []) {
+      const retry = entry?.retry;
+      const originalRetryDoc = retry?.attachmentDoc || retry?.docId || entry?.docId || fromDoc;
+      const originalRetrySid = typeof retry?.attachmentSid === 'string' ? retry.attachmentSid : fromSid;
+      await relocate(entry, (Array.isArray(entry?.shots) ? entry.shots : []).map(shot => shot?.id),
+        retry?.attachmentDoc || entry?.docId || retry?.docId || fromDoc, originalRetrySid);
+      if (retry && typeof retry === 'object') {
+        await relocate(retry, (Array.isArray(retry.attachments) ? retry.attachments : [])
+          .filter(attachment => attachment?.kind === 'image' || attachment?.screenshot).map(attachment => attachment?.id),
+        originalRetryDoc, originalRetrySid);
+        if ((retry.kind || 'chat') === 'chat') retry.composerOwner = { ...draftOwner };
+      }
+    }
+    const stageDir = `${targetDir}.moving-${crypto.randomBytes(8).toString('hex')}`;
+    let publishedImages = false, publishedSession = false, committed = false;
+    try {
+      if (copies.size) {
+        await fsp.mkdir(stageDir, { recursive: true });
+        for (const [name, source] of copies) {
+          const target = path.join(stageDir, name);
+          await fsp.copyFile(source, target, fs.constants.COPYFILE_EXCL);
+          if ((await fsp.stat(source)).size !== (await fsp.stat(target)).size) throw new Error('Incomplete attachment copy');
+        }
+        await fsp.rename(stageDir, targetDir);
+        publishedImages = true;
+      }
+      await writeDataFile(toFile, next);
+      publishedSession = true;
+      await writeDataFile(deletedSessionFile(fromFile), { v: 1, deletedAt: Date.now(), movedTo: { doc: toDoc, sid: toSid } });
+      committed = true;
+      // Failure to remove a hidden backup must not undo a committed transfer.
+      try { await fsp.rm(path.join(DATA_DIR, fromFile), { force: true }); } catch { /* tombstone hides it */ }
+      return { ok: true, doc: toDoc, sid: toSid, draftOwner };
+    } finally {
+      if (!committed && publishedSession) await fsp.rm(path.join(DATA_DIR, toFile), { force: true }).catch(() => {});
+      if (!committed && publishedImages) await fsp.rm(targetDir, { recursive: true, force: true }).catch(() => {});
+      await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 }
 
 async function handleAttachment(req, res, url) {
@@ -2436,6 +2559,19 @@ async function handle(req, res) {
       return sendJson(res, 200, { ok: true });
     }
     return send(res, 405, 'Method Not Allowed');
+  }
+
+  if (pathname === '/api/sessions/move') {
+    if (req.method !== 'POST') return send(res, 405, 'Method Not Allowed');
+    const body = await readJsonBodyOrReq(req, res, sec.BODY_LIMITS.sessionPatch);
+    if (body === null) return undefined;
+    try { return sendJson(res, 200, await moveSession(body)); }
+    catch (error) {
+      sec.diag(`转换会话失败: ${error && error.message}`);
+      const code = error.status ? error.code : 'SESSION_MOVE_FAILED';
+      return sendJson(res, error.status || 500, { code, error: { code,
+        message: error.status ? error.message : '转换会话失败，原会话已保留，请重试' } });
+    }
   }
 
   /**

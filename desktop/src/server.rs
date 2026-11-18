@@ -33,7 +33,7 @@ fn body_limit(path: &str) -> usize {
         "/api/notes" => limits::BODY_NOTES,
         "/api/session" => limits::BODY_SESSION,
         // 会话 meta 的 PATCH 与文件夹迁移：只改标题/置顶/归档/复制会话文件，不需要 16MB
-        "/api/sessions/move-folder" => limits::BODY_SESSION_PATCH,
+        "/api/sessions/move-folder" | "/api/sessions/move" => limits::BODY_SESSION_PATCH,
         // 截图附件（单独存，不进会话 JSON）：与 server.js 的 ATTACHMENT_LIMIT 一致
         "/api/attachment" => limits::BODY_ATTACHMENT,
         // 学习档案：正常几 KB，上限与 server.js 的 BODY_LIMITS.profile 一致
@@ -201,6 +201,10 @@ fn handle(mut rq: Request, ctx: &Ctx) {
         // 「开发时能用、exe 里新建会话后列表是空的」（实测踩过：请求落到 SPA 回落，
         // 返回的是 index.html，前端 JSON.parse 失败后当成"没有会话"）。
         "/api/sessions" => return api::sessions(rq, &method, &raw_query),
+        "/api/sessions/move" => {
+            if method != Method::Post { return send_text(rq, 405, "Method Not Allowed"); }
+            return api::sessions_move(rq, &body);
+        }
         // P0 会话系统：文件夹改名/移动后把会话复制到新键（与 Node 版一致）
         "/api/sessions/move-folder" => {
             if method != Method::Post {

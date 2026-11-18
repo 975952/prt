@@ -125,7 +125,10 @@ try {
   page = await browser.newPage();
   page.on('pageerror', (error) => pageErrors.push(String(error)));
   await page.evaluateOnNewDocument(installReadGate, paper.docId);
-  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.session.onEnter', 'resume'));
+  await page.evaluateOnNewDocument(() => {
+    localStorage.setItem('reader.locale', 'zh-CN');
+    localStorage.setItem('reader.session.onEnter', 'resume');
+  });
   const readyPage = async () => {
     await page.waitForFunction(() => window.__viewer?.pdf && window.__ctx
       && window.__state.viewerDocId === window.__state.doc?.docId);

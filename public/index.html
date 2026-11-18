@@ -6,6 +6,8 @@
 <title>prt</title>
 <link rel="stylesheet" href="/style.css" />
 <link rel="stylesheet" href="/tabs.css" />
+<link rel="stylesheet" href="/agent-workspace.css" />
+<link rel="stylesheet" href="/session-move.css" />
 <!-- 公式渲染：本地内置 KaTeX，不联网 -->
 <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
 <link rel="icon" type="image/svg+xml" href="/icon.svg" />
@@ -22,6 +24,7 @@
   <span class="spacer"></span>
 
   <button class="tbtn" id="homeBtn" type="button" title="回到首页（书架）" aria-label="回到首页（书架）"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3.6 10.4 12 3.6l8.4 6.8"/><path d="M5.6 9.6v9.2a1.6 1.6 0 0 0 1.6 1.6h9.6a1.6 1.6 0 0 0 1.6-1.6V9.6"/><path d="M10.2 20.4v-5.2h3.6v5.2"/></svg><span>首页</span></button>
+  <button class="tbtn agent-open" id="agentBtn" type="button" title="打开小林" aria-label="打开小林" aria-expanded="false"><span class="agent-icon" data-agent-icon="chat" aria-hidden="true"></span><span data-agent-name>小林</span></button>
   <button class="tbtn" id="opsBtn" title="读懂论文：先给我讲明白 / 我需要先懂什么 / 带我一步步读 / 讲懂图表与公式"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9.6 3.4 1.6 4.2 4.2 1.6-4.2 1.6-1.6 4.2-1.6-4.2L3.8 9.2l4.2-1.6z"/><path d="m17.4 13.4.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg></button>
   <button class="tbtn" id="searchBtn" title="全文搜索　Ctrl+F"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="10.8" cy="10.8" r="6.4"/><path d="M15.6 15.6 20.8 20.8"/></svg></button>
   <div class="topbar-side-controls" role="group" aria-label="侧栏控制">
@@ -141,6 +144,7 @@
           <div><strong>prt</strong><span>论文阅读工作台</span></div>
         </div>
         <nav class="home-nav" aria-label="论文筛选">
+          <button type="button" class="home-nav-btn home-agent" id="homeAgent" aria-label="打开小林"><span class="home-nav-icon" data-agent-icon="chat" aria-hidden="true"></span><span data-agent-name>小林</span><span class="home-agent-arrow" data-agent-icon="chevron-right" aria-hidden="true"></span></button>
           <button type="button" class="home-nav-btn" data-home-filter="all" aria-pressed="true"><span class="home-nav-icon" data-home-icon="book"></span><span>全部论文</span><span class="home-nav-count" id="homeAllCount">0</span></button>
           <button type="button" class="home-nav-btn" data-home-filter="recent" aria-pressed="false"><span class="home-nav-icon" data-home-icon="history"></span><span>最近阅读</span><span class="home-nav-count" id="homeReadCount">0</span></button>
           <button type="button" class="home-nav-btn" data-home-filter="unread" aria-pressed="false"><span class="home-nav-icon" data-home-icon="note"></span><span>未读论文</span><span class="home-nav-count" id="homeUnreadCount">0</span></button>
@@ -186,6 +190,42 @@
   <div class="splitter" id="splitRight" title="拖动调整宽度"></div>
 
   <aside class="side right" id="rightSide">
+    <header class="agent-identity" id="agentIdentity" hidden>
+      <div class="agent-heading">
+        <span class="agent-mark" data-agent-icon="chat" aria-hidden="true"></span>
+        <button class="agent-name-edit" id="agentNameEdit" type="button" aria-label="编辑名字与交流方式" title="编辑名字与交流方式"><span data-agent-name>小林</span><span data-agent-icon="pencil" aria-hidden="true"></span></button>
+      </div>
+      <div class="agent-identity-actions">
+        <button class="agent-action" id="agentPapersToggle" type="button" aria-expanded="false" aria-controls="agentPaperPicker"><span data-agent-icon="book" aria-hidden="true"></span><span>打开论文</span></button>
+        <button class="agent-action agent-back" id="agentBack" type="button"><span data-agent-icon="chevron-left" aria-hidden="true"></span><span>返回书架</span></button>
+        <button class="agent-action agent-expand" id="agentExpand" type="button" title="展开助手" aria-label="展开助手"><span data-agent-icon="popout" aria-hidden="true"></span></button>
+      </div>
+    </header>
+    <form class="agent-name-form" id="agentNameForm" hidden>
+      <label for="agentNameInput">助手的名字</label>
+      <div class="agent-name-controls"><input id="agentNameInput" type="text" maxlength="32" autocomplete="off" /><button class="agent-action agent-action-primary" id="agentNameSave" type="submit">保存</button><button class="agent-action" id="agentNameCancel" type="button">取消</button></div>
+      <p class="agent-name-alias agent-profile-hint" id="agentNameAlias" hidden>中文称呼：小林</p>
+      <details class="agent-profile-details" id="agentProfileDetails">
+        <summary>性格与交流方式</summary>
+        <div class="agent-profile-fields">
+          <label class="agent-profile-field" for="agentPersonalityInput"><span>性格</span><input id="agentPersonalityInput" type="text" maxlength="180" autocomplete="off" placeholder="例如：温和、敏锐、表达清楚" /></label>
+          <label class="agent-profile-field" for="agentGenderSelect"><span>性别（可选）</span><select id="agentGenderSelect">
+            <option value="">不设定</option>
+            <option value="女">女</option>
+            <option value="男">男</option>
+            <option value="custom">自定义</option>
+          </select></label>
+          <label class="agent-profile-field agent-gender-custom" id="agentGenderCustomField" for="agentGenderCustom" hidden><span>自定义性别</span><input id="agentGenderCustom" type="text" maxlength="40" autocomplete="off" /></label>
+          <label class="agent-profile-field agent-profile-habits" for="agentHabitsInput"><span>交流习惯</span><textarea id="agentHabitsInput" maxlength="600" rows="3" placeholder="例如：先直接回答，再按需要展开"></textarea></label>
+          <p class="agent-profile-hint">这些设定用于所有对话，之后随时可以调整。</p>
+        </div>
+      </details>
+    </form>
+    <section class="agent-paper-picker" id="agentPaperPicker" aria-label="选择论文" hidden>
+      <div class="agent-picker-heading"><label for="agentPaperSearch">从书架打开</label><button class="agent-action agent-icon-button" id="agentPapersClose" type="button" title="收起论文列表" aria-label="收起论文列表"><span data-agent-icon="close" aria-hidden="true"></span></button></div>
+      <input id="agentPaperSearch" type="search" placeholder="搜索论文名称或文件夹…" aria-label="搜索论文名称或文件夹" autocomplete="off" />
+      <div class="agent-paper-list" id="agentPaperList"></div>
+    </section>
     <div class="aibar" id="aiBar" role="tablist" aria-label="译文 / 问答切换"></div>
     <!-- 会话系统 P0（2026-11）：会话从「小胶囊」升级为会话头（标题 / 运行状态点 / 新建 / 历史）。
          只在问答块开着时出现（会话 = 一个文件夹的对话，跟译文无关）。
@@ -209,7 +249,28 @@
     <!-- 全高会话历史面板：作为 #rightSide 的 flex 兄弟插入（打开时隐藏结果区与输入区，
          由 .side.right[data-sess-view="history"] 控制），内容由 public/js/sessions.js 渲染。 -->
     <div class="sess-history hidden" id="sessHistory" role="dialog" aria-label="会话历史"></div>
+    <div class="agent-status" id="agentStatus" role="status" aria-live="polite" hidden></div>
     <div class="ai" id="aiArea"></div>
+    <div class="agent-handoff-layer" id="agentHandoffLayer" hidden>
+      <section class="agent-handoff" id="agentHandoff" hidden role="region" aria-labelledby="agentHandoffTitle" aria-live="polite">
+        <div class="agent-handoff-context" id="agentHandoffContext"></div>
+        <h2 id="agentHandoffTitle">接下来怎样聊？</h2>
+        <div class="agent-handoff-actions">
+          <button class="agent-choice agent-choice-primary" id="agentContinue" type="button">
+            <span class="agent-choice-icon" data-agent-icon="chat" aria-hidden="true"></span>
+            <span class="agent-choice-copy"><span class="agent-choice-title">继续这段对话</span><span class="agent-choice-detail">保留当前话题，接着聊这篇论文</span></span>
+          </button>
+          <button class="agent-choice" id="agentRestore" type="button">
+            <span class="agent-choice-icon" data-agent-icon="history" aria-hidden="true"></span>
+            <span class="agent-choice-copy"><span class="agent-choice-title">恢复此前对话</span><span class="agent-choice-detail">接着此论文或文件夹的记录聊</span></span>
+          </button>
+          <button class="agent-choice" id="agentNew" type="button">
+            <span class="agent-choice-icon" data-agent-icon="chat-add" aria-hidden="true"></span>
+            <span class="agent-choice-copy"><span class="agent-choice-title">开启新对话</span><span class="agent-choice-detail">从当前阅读范围，重新开始</span></span>
+          </button>
+        </div>
+      </section>
+    </div>
     <form class="composer" id="composer">
       <div class="draft-storage hidden" id="draftStorage" data-status="saved">
         <span id="draftStorageText" role="status" aria-live="polite"></span>
