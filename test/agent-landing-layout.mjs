@@ -60,6 +60,7 @@ try {
         const r = id => { const box = document.getElementById(id).getBoundingClientRect(); return { left: box.left, right: box.right, top: box.top, bottom: box.bottom, width: box.width, height: box.height }; };
         const panel = document.getElementById('rightSide');
         return { width: innerWidth, height: innerHeight, documentWidth: document.documentElement.scrollWidth,
+          bottomInset: parseFloat(getComputedStyle(document.querySelector('#main > .main-row')).paddingBottom),
           panel: r('rightSide'), hero: r('agentLanding'), composer: r('composer'), actions: r('agentLaunchActions'),
           input: r('chatInput'), send: r('sendBtn'), scrollHeight: panel.scrollHeight, clientHeight: panel.clientHeight,
           hidden: ['aiArea', 'sessBar', 'agentIdentity', 'agentPaperPicker', 'agentHandoffLayer'].every(id => !document.getElementById(id).getClientRects().length),
@@ -68,7 +69,7 @@ try {
       const label = `${theme}-${width}-${scale}`;
       assert.ok(geometry.documentWidth <= width + 1, `${label} page overflow ${JSON.stringify(geometry)}`);
       assert.ok(geometry.panel.left >= -1 && geometry.panel.right <= width + 1, `${label} panel overflow ${JSON.stringify(geometry)}`);
-      assert.ok(Math.abs(geometry.panel.bottom - geometry.height) <= 1, `${label} panel does not fill available height ${JSON.stringify(geometry)}`);
+      assert.ok(Math.abs(geometry.panel.bottom + geometry.bottomInset - geometry.height) <= 1, `${label} panel does not fill the inset work surface ${JSON.stringify(geometry)}`);
       assert.ok(geometry.hero.left >= -1 && geometry.actions.right <= width + 1 && geometry.send.right <= width + 1, `${label} composition overflow ${JSON.stringify(geometry)}`);
       assert.ok(geometry.input.width > 80 && geometry.send.width > 20 && geometry.hidden && !geometry.cardOverflow, `${label} readability ${JSON.stringify(geometry)}`);
       if (geometry.scrollHeight <= geometry.clientHeight + 1) assert.ok(Math.abs((geometry.hero.top + geometry.actions.bottom) / 2 - (geometry.panel.top + geometry.panel.bottom) / 2) <= 3, `${label} not centered ${JSON.stringify(geometry)}`);
@@ -146,6 +147,10 @@ try {
     const r = node.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height };
   });
   await page.evaluate(() => {
+    // This assertion samples the element animation's first physical bounds.
+    // View Transition snapshots are covered by agent-spatial-motion.mjs.
+    window.__nativeViewTransition = document.startViewTransition;
+    document.startViewTransition = undefined;
     const panel = document.getElementById('rightSide'), animate = panel.animate.bind(panel);
     window.__zoomPanel = panel; window.__zoomPanelTransitions = [];
     panel.animate = (frames, options) => {
@@ -163,6 +168,7 @@ try {
   for (const key of ['left', 'top', 'width', 'height']) assert.ok(Math.abs(dockTransition.start[key] - fullBeforeDock[key]) <= 1,
     `zoomed full-to-dock transition jumps at ${key}: ${JSON.stringify({ fullBeforeDock, dockTransition })}`);
   pass('zoomed agent docks from the same physical bounds and restores normal sidebar scale');
+  await page.evaluate(() => { document.startViewTransition = window.__nativeViewTransition; });
   const beforeReading = await preferences();
   await shortcut('Equal');
   const afterReading = await preferences();

@@ -502,6 +502,8 @@ export function summarizeToolResult(call, result) {
  * @param {object} opts.runtime 工具实现
  * @param {(req:{messages:Array, tools:Array, timeoutMs:number, signal?:AbortSignal})=>Promise<object>} opts.callModel
  *        返回 **原始上游 JSON**（内部用 parseModelResponse 解析）
+ * @param {boolean} [opts.callManagesIdleTimeout] callModel enforces timeoutMs as an idle timeout;
+ *        active streams may exceed it, but remain bounded by the task's total deadline.
  * @param {(ev:object)=>void} [opts.onStep] 过程回调（给界面逐条展示「正在干什么 / 干完了什么」；抛错不影响循环）
  * @param {AbortSignal} [opts.signal]
  * @returns {Promise<{ok:boolean, messages:Array, calls:Array, rounds:number, pages:number[], imagePages:number[], reason:string}>}
@@ -512,6 +514,7 @@ export async function runAgentLoop({
   maxCallsPerRound = AGENT_MAX_CALLS_PER_ROUND,
   totalTimeoutMs = AGENT_TOTAL_TIMEOUT_MS,
   callTimeoutMs = AGENT_CALL_TIMEOUT_MS,
+  callManagesIdleTimeout = false,
   tools = AGENT_TOOL_SPECS,
 } = {}) {
   const emit = (ev) => { try { onStep?.(ev); } catch { /* 界面异常不影响 Agent */ } };
@@ -535,7 +538,7 @@ export async function runAgentLoop({
         tools,
         timeoutMs: Math.max(1, Math.min(callTimeoutMs, left)),
         signal: callSignal,
-      }), { signal, timeoutMs: Math.max(1, Math.min(callTimeoutMs, left)) });
+      }), { signal, timeoutMs: Math.max(1, callManagesIdleTimeout ? left : Math.min(callTimeoutMs, left)) });
     } catch (e) {
       return { ok: false, messages: work, calls, rounds, pages: [...pages], imagePages: [...imagePages], reason: signal?.aborted ? 'aborted' : e?.name === 'TimeoutError' ? 'timeout' : `error:${e?.name || 'Error'}` };
     }

@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="/tabs.css" />
 <link rel="stylesheet" href="/agent-workspace.css" />
 <link rel="stylesheet" href="/agent-motion.css" />
+<link rel="stylesheet" href="/workspace-nav.css" />
 <link rel="stylesheet" href="/paper-discovery.css" />
 <link rel="stylesheet" href="/session-move.css" />
 <link rel="stylesheet" href="/session-history.css" />
@@ -23,11 +24,6 @@
   <div class="app-title-region" data-wry-drag-region title="拖动窗口；双击切换最大化">
     <span class="brand" title="prt"><img src="/icon.svg" alt="P" /></span>
   </div>
-  <nav class="workspace-nav" id="workspaceNav" aria-label="工作区切换" data-no-drag>
-    <button class="tbtn" id="homeBtn" type="button" title="Library" aria-label="Library"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.2V5.2A2.2 2.2 0 0 1 6.2 3H20v14.6H6.2A2.2 2.2 0 0 0 4 19.8z"/><path d="M4 19.2a2.2 2.2 0 0 0 2.2 2.2H20v-3.8"/></svg><span>Library</span></button>
-    <button class="tbtn agent-open" id="homeAgent" type="button" title="打开小林" aria-label="打开小林"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>小林</span></button>
-    <button class="tbtn agent-open" id="agentBtn" type="button" title="打开小林" aria-label="打开小林" aria-expanded="false"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>小林</span></button>
-  </nav>
   <span class="doc-name" id="docName" data-wry-drag-region>Library</span>
   <span class="spacer"></span>
   <button class="tbtn" id="opsBtn" title="读懂论文：先给我讲明白 / 我需要先懂什么 / 带我一步步读 / 讲懂图表与公式"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9.6 3.4 1.6 4.2 4.2 1.6-4.2 1.6-1.6 4.2-1.6-4.2L3.8 9.2l4.2-1.6z"/><path d="m17.4 13.4.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg></button>
@@ -36,6 +32,11 @@
     <button class="tbtn topbar-side-toggle" id="topbarLeftToggle" type="button" aria-label="收起左栏" aria-pressed="true"></button>
     <button class="tbtn topbar-side-toggle" id="topbarRightToggle" type="button" aria-label="收起右栏" aria-pressed="true"></button>
   </div>
+  <nav class="workspace-nav" id="workspaceNav" aria-label="工作区切换" data-no-drag>
+    <button class="tbtn" id="homeBtn" type="button" title="Library" aria-label="Library"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.2V5.2A2.2 2.2 0 0 1 6.2 3H20v14.6H6.2A2.2 2.2 0 0 0 4 19.8z"/><path d="M4 19.2a2.2 2.2 0 0 0 2.2 2.2H20v-3.8"/></svg><span>Library</span></button>
+    <button class="tbtn agent-open" id="homeAgent" type="button" title="打开小林" aria-label="打开小林"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>小林</span></button>
+    <button class="tbtn agent-open" id="agentBtn" type="button" title="打开小林" aria-label="打开小林" aria-expanded="false"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>小林</span></button>
+  </nav>
   <button class="tbtn" id="settingsBtn" title="设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="6.4"/><path d="M12 2.2v3.4"/><path d="M12 18.4v3.4"/><path d="M2.2 12h3.4"/><path d="M18.4 12h3.4"/><path d="m5.1 5.1 2.4 2.4"/><path d="m16.5 16.5 2.4 2.4"/><path d="m18.9 5.1-2.4 2.4"/><path d="m7.5 16.5-2.4 2.4"/></svg></button>
   <!-- 全屏：有桌面壳时走 IPC 让窗口真正无边框全屏（盖住任务栏）；浏览器里降级用 Fullscreen API。
        进入后保留标签栏、首页与阅读控件；Esc 退出（快捷键与 Esc 的优先级见 app.js initShortcuts）。 -->
@@ -200,9 +201,6 @@
       <h2 id="agentNavRecentHeading">最近会话</h2>
       <div id="agentNavRecent"><p class="agent-nav-empty">对话会出现在这里</p></div>
     </section>
-    <nav class="agent-nav-foot" aria-label="工作区选项">
-      <button type="button" class="agent-nav-button" id="agentNavSettings" title="个性与偏好" aria-label="个性与偏好"><span data-agent-icon="settings" aria-hidden="true"></span><span>个性与偏好</span></button>
-    </nav>
   </aside>
   <div class="splitter" id="splitRight" title="拖动调整宽度"></div>
 

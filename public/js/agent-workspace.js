@@ -4,6 +4,7 @@ import { iconEl } from './icons.js';
 import { DEFAULT_AGENT_PROFILE, normalizeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { createAgentSettings } from './agent-settings.js';
 import { createAgentMotion } from './agent-motion.js';
+import { windowStorage } from './window-storage.js';
 
 /** UI only: the caller owns conversation scope, persistence, and document navigation. */
 export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
@@ -14,8 +15,22 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     'agentLanding', 'agentLaunchActions', 'agentStartSearch', 'agentResume', 'agentHistory', 'agentRecentTitle', 'chatInput',
     'agentPaperPicker', 'agentPaperSearch', 'agentPaperList', 'agentPapersClose', 'agentHandoff', 'agentHandoffLayer',
     'agentHandoffContext', 'agentContinue', 'agentRestore', 'agentNew', 'agentStatus', 'rightSide', 'aiArea', 'sessHistory',
-    'homeBtn', 'agentNavNew', 'agentNavSettings', 'agentNavRecent']
+    'homeBtn', 'agentNavNew', 'agentNavRecent']
     .map(id => [id, byId(id)]));
+  const paperActionHome = ui.agentPapersToggle.parentElement;
+  const paperActionNext = ui.agentPapersToggle.nextSibling;
+  const primaryNav = ui.agentNavNew.parentElement;
+  const sidebarKey = 'reader.agent.sidebarCollapsed';
+  let sidebarCollapsed = false;
+  try { sidebarCollapsed = windowStorage.getItem(sidebarKey) === '1'; } catch { /* Private storage is optional. */ }
+  const sidebarToggle = el('button', { type: 'button', id: 'agentSidebarToggle', class: 'agent-sidebar-toggle',
+    'aria-controls': 'agentNav', onclick: () => {
+      if (transitioning) return;
+      sidebarCollapsed = !sidebarCollapsed;
+      try { windowStorage.setItem(sidebarKey, sidebarCollapsed ? '1' : '0'); } catch { /* Keep the in-memory preference. */ }
+      updateSidebar();
+    } });
+  primaryNav.before(sidebarToggle);
   const defaultProfile = DEFAULT_AGENT_PROFILE;
   const limitText = (value, limit) => [...String(value ?? '').trim()].slice(0, limit).join('');
   let profile = { ...defaultProfile };
@@ -29,6 +44,21 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     profile = normalizeAgentProfile(next); setName(profile.name);
   } });
 
+  function updateSidebar() {
+    const label = tr(sidebarCollapsed ? '展开侧栏' : '收起侧栏');
+    document.body.classList.toggle('agent-nav-collapsed', sidebarCollapsed);
+    sidebarToggle.title = label;
+    sidebarToggle.setAttribute('aria-label', label);
+    sidebarToggle.setAttribute('aria-expanded', String(!sidebarCollapsed));
+    sidebarToggle.replaceChildren(iconEl(sidebarCollapsed ? 'panel-expand-left' : 'panel-collapse-left'),
+      el('span', { text: label }));
+  }
+  updateSidebar();
+  for (const button of [ui.agentNavNew, ui.agentHistory]) {
+    const label = button.textContent.trim();
+    button.title = label; button.setAttribute('aria-label', label);
+  }
+
   for (const host of document.querySelectorAll('[data-agent-icon]')) {
     if (!host.firstElementChild) host.append(iconEl(host.dataset.agentIcon));
   }
@@ -39,7 +69,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   }
   function disabled() {
     for (const id of ['agentBtn', 'homeAgent', 'agentExpand', 'agentContinue', 'agentRestore', 'agentNew', 'agentLandingBack',
-      'agentStartSearch', 'agentResume', 'agentHistory', 'homeBtn', 'agentNavNew', 'agentNavSettings']) {
+      'agentStartSearch', 'agentResume', 'agentHistory', 'homeBtn', 'agentNavNew', 'agentPapersToggle']) {
       ui[id].disabled = busy || transitioning;
     }
     ui.agentResume.disabled ||= !hasRecent;
@@ -124,6 +154,14 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
     view = next;
     document.body.classList.toggle('agent-full', next === 'full');
     document.body.classList.toggle('agent-docked', next === 'docked');
+    // One action follows the workspace: a named navigation entry in full view,
+    // then the same control returns to the compact reader header when docked.
+    if (next === 'full') primaryNav.insertBefore(ui.agentPapersToggle, ui.agentHistory);
+    else paperActionHome.insertBefore(ui.agentPapersToggle, paperActionNext);
+    ui.agentPapersToggle.classList.toggle('agent-nav-button', next === 'full');
+    ui.agentPapersToggle.classList.toggle('agent-action', next !== 'full');
+    ui.agentPapersToggle.title = tr('打开论文');
+    ui.agentPapersToggle.setAttribute('aria-label', tr('打开论文'));
     ui.agentIdentity.hidden = next === 'closed';
     ui.agentBtn.setAttribute('aria-expanded', String(next === 'full'));
     ui.agentBtn.setAttribute('aria-current', next === 'full' ? 'page' : 'false');
@@ -296,8 +334,8 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   ui.agentResume.addEventListener('click', () => act(onResume));
   ui.agentHistory.addEventListener('click', () => act(onHistory));
   ui.agentNavNew.addEventListener('click', () => act(onLanding));
-  ui.agentNavSettings.addEventListener('click', () => act(onSettings));
   ui.agentPapersToggle.addEventListener('click', () => {
+    if (busy || transitioning) return;
     const open = ui.agentPaperPicker.hidden;
     closeName(); ui.agentPaperPicker.hidden = !open;
     ui.agentPapersToggle.setAttribute('aria-expanded', String(open));

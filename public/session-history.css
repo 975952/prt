@@ -41,3 +41,29 @@
 .sess-row-menu-icon { flex: 0 0 16px; display: inline-flex; align-items: center; justify-content: center; }
 @keyframes sess-row-menu-in { from { opacity: 0; transform: translateY(-3px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .sess-row-menu { animation: none; } }
+
+/* Quick switching is a short title list. Current-session actions stay in More. */
+.sess-quick { right: auto; width: min(360px, calc(100% - 16px)); gap: 6px; padding: 8px; }
+.sess-quick-search { min-height: 32px; padding: 6px 9px; }
+.sess-quick-list { max-height: min(240px, 36vh); gap: 2px; }
+.sess-quick-row { flex-direction: row; align-items: center; min-height: 34px; gap: 7px; padding: 7px 9px; }
+.sess-quick-name { flex: 1 1 auto; min-width: 0; line-height: 1.4; }
+.sess-quick-status { display: inline-flex; align-items: center; flex: 0 0 14px; color: var(--fg-faint); }
+.sess-quick-row.on .sess-quick-status { color: var(--accent); }
+.sess-quick-foot { position: relative; align-items: center; gap: 3px; padding-top: 6px; }
+.sess-quick-all, .sess-quick-new, .sess-quick-more {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  min-height: 30px; padding: 5px 7px; line-height: 1.3; white-space: nowrap;
+}
+.sess-quick-foot button > span:first-child { display: inline-flex; }
+.sess-quick-more { flex: 0 0 30px; border: 0; border-radius: 6px; background: transparent; color: var(--fg-dim); cursor: pointer; }
+.sess-quick-more:hover, .sess-quick-more[aria-expanded="true"] { background: var(--bg-sunken); color: var(--fg); }
+.sess-quick-more[hidden], .sess-quick-menu[hidden] { display: none; }
+.sess-quick-menu {
+  position: absolute; bottom: calc(100% + 5px); right: 0; z-index: 2; padding: 4px;
+  border: 1px solid var(--border-strong); border-radius: 8px; background: var(--reader-popover, var(--bg-elev)); box-shadow: var(--shadow);
+}
+.sess-quick-menu .sess-quick-move { min-height: 32px; border: 0; border-radius: 5px; padding: 6px 9px; white-space: nowrap; }
+.sess-quick-row:focus-visible, .sess-quick-foot button:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+/* Keep underlying messages from showing through nested conversation menus. */
+:root :is(#sessQuickPop, .sess-quick-menu, .sess-row-menu) { background: var(--bg-elev); }

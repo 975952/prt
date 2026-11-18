@@ -254,7 +254,8 @@ async function reviewMoveCases({ paperA, paperB }) {
       await page.waitForSelector('.sess-row-menu .sess-hact.move', { visible: true });
       await page.click('.sess-row-menu .sess-hact.move');
     } else {
-      await page.click('#sessBtn'); await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
+      await page.click('#sessBtn'); await page.waitForSelector('#sessQuickMore', { visible: true }); await page.click('#sessQuickMore');
+      await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
     }
     await page.waitForSelector('#sessMovePanel', { visible: true });
     await page.waitForFunction(() => !document.querySelector('#sessMoveMode').disabled);
@@ -402,7 +403,8 @@ try {
   const env = { PORT: String(port), PRT_DATA_DIR: dataDir, PRT_PAPERS_DIR: papersDir,
     PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1', NO_OPEN: '1', PRT_QUIET_TOKEN: '1' };
   reader = desktop ? spawnReader(stageExe('agent-workspace').exe, { args: ['--port', String(port)], env })
-    : spawn(process.execPath, [path.join(ROOT, 'server.js')], { windowsHide: true, stdio: 'ignore', env: { ...process.env, ...env } });
+    : spawn(process.execPath, [path.join(ROOT, 'server.js')], { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...process.env, ...env } });
+  for (const stream of [reader.stdout, reader.stderr]) stream?.on('data', chunk => fs.appendFileSync(path.join(scratch, 'server.log'), chunk));
   let ready = false;
   for (let attempt = 0; attempt < 150 && !ready; attempt++) {
     try { ready = (await fetch(`${base}/api/health`)).ok; } catch { /* service starting */ }
@@ -445,13 +447,15 @@ try {
     && await visible('#agentLanding') && await visible('#chatInput') && !await visible('#aiArea'));
   check('landing gives find, resume and history one visible entrance each', await page.evaluate(() =>
     ['agentStartSearch', 'agentResume', 'agentHistory'].every(id => document.getElementById(id).getClientRects().length)
-    && ['agentIdentity', 'sessBar', 'agentPapersToggle'].every(id => !document.getElementById(id).getClientRects().length)
+    && ['agentIdentity', 'sessBar'].every(id => !document.getElementById(id).getClientRects().length)
+    && document.querySelector('#agentNav .agent-nav-primary #agentPapersToggle')?.getClientRects().length
     && document.querySelector('#workspaceNav #agentBtn')?.getClientRects().length
     && !document.querySelector('#agentLanding [data-agent-icon]')
     && !document.getElementById('agentNameEdit') && !document.getElementById('agentNameForm')));
-  check('Library return stays in the top bar while Alina keeps Settings in her sidebar', await page.evaluate(() =>
+  check('Library and Alina share workspace navigation with only the application Settings entrance', await page.evaluate(() =>
     !document.getElementById('agentNavLibrary')
-    && document.getElementById('agentNavSettings')?.getClientRects().length
+    && !document.getElementById('agentNavSettings')
+    && document.getElementById('settingsBtn')?.getClientRects().length
     && document.querySelector('#workspaceNav #homeBtn')?.textContent.includes('Library')));
   await page.click('#agentStartSearch');
   check('find papers focuses the shared composer without an extra dialog', await page.evaluate(() =>
@@ -641,6 +645,7 @@ try {
     !genericContext.docId && !genericContext.sourceDoc && !genericContext.page && !genericContext.screenPage);
   const movesBeforeBusy = apiRequests.filter(request => request.path === '/api/sessions/move').length;
   await page.click('#sessBtn');
+  await page.waitForSelector('#sessQuickMore', { visible: true }); await page.click('#sessQuickMore');
   await page.waitForSelector('#sessQuickMove', { visible: true });
   await page.click('#sessQuickMove');
   check('a generating conversation cannot open the ownership editor or send a move request',
@@ -769,6 +774,7 @@ try {
       await page.click('.sess-row-menu .sess-hact.move');
     } else {
       await page.click('#sessBtn');
+      await page.waitForSelector('#sessQuickMore', { visible: true }); await page.click('#sessQuickMore');
       await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
     }
     await page.waitForSelector('#sessMovePanel', { visible: true });

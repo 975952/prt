@@ -1605,6 +1605,7 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .page-ref-unverified::after { content: '?'; font-size: 9px; margin-left: 2px; vertical-align: super; opacity: .7; }
 
 .modal { position: fixed; inset: 0; z-index: 100; background: rgba(74, 64, 38, .38); display: flex; align-items: flex-start; justify-content: center; padding-top: 12vh; }
+#settingsModal { align-items: center; padding: 12px; }
 .modal-box { width: min(520px, 94vw); max-height: 86vh; overflow: auto; background: var(--bg-elev); border: 1px solid var(--border); border-radius: 12px; box-shadow: var(--shadow); padding: 16px 18px 18px; }
 .settings-divider { margin: 16px 0 12px; border-top: 1px solid var(--border); }
 .settings-section-title { color: var(--fg); font-size: var(--ui-fs-md); font-weight: 650; margin-bottom: 9px; }
@@ -1649,6 +1650,9 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 .settings-box { display: flex; flex-direction: column; width: min(760px, 94vw); overflow: hidden; padding-bottom: 12px; }
 .settings-box .modal-head { flex: 0 0 auto; }
 .settings-body { display: flex; align-items: stretch; min-height: 300px; max-height: min(64vh, 520px); }
+@media (max-height: 600px) {
+  #settingsModal .settings-body { min-height: 0; }
+}
 .settings-nav {
   flex: 0 0 140px; display: flex; flex-direction: column; gap: 2px;
   padding: 1px 10px 12px 0; border-right: 1px solid var(--border);

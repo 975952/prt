@@ -11,12 +11,22 @@ body:is(.reading, .agent-full) #homeAgent, body:not(.reading):not(.agent-full) #
 body:not(.reading) #docName, body.agent-full #docName { display: none; }
 #topbar > #docName { margin-left: 4px; }
 .agent-nav { display: none; }
-body.agent-full #agentNav { display: flex; flex-direction: column; gap: 27px; flex: 0 0 clamp(190px, 16vw, 236px); width: clamp(190px, 16vw, 236px); min-width: 0; height: 100%; padding: 30px 16px 18px; zoom: var(--agent-scale, 1); background: color-mix(in srgb, var(--bg-elev) 24%, transparent); border-right: 1px solid color-mix(in srgb, var(--border) 65%, transparent); }
+body.agent-full #agentNav { display: flex; flex-direction: column; gap: 22px; flex: 0 0 clamp(190px, 16vw, 236px); width: clamp(190px, 16vw, 236px); min-width: 0; min-height: 0; padding: 14px 12px 18px; zoom: var(--agent-scale, 1); border: 1px solid color-mix(in srgb, var(--border-strong) 50%, transparent); border-radius: 18px; background: color-mix(in srgb, var(--bg-elev) 48%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg-elev) 86%, transparent), 0 5px 16px color-mix(in srgb, var(--fg) 4%, transparent); backdrop-filter: blur(var(--glass-frost, 24px)); transition: flex-basis .22s ease, width .22s ease, padding .22s ease; }
+.agent-sidebar-toggle { display: flex; align-items: center; gap: 9px; align-self: stretch; flex: 0 0 auto; min-height: 34px; padding: 7px 11px; border: 0; border-radius: 9px; background: transparent; color: var(--fg-faint); font: inherit; font-size: 12px; text-align: left; cursor: pointer; }
+.agent-sidebar-toggle:hover { color: var(--fg); background: color-mix(in srgb, var(--bg-elev) 70%, transparent); }
+.agent-sidebar-toggle:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.agent-sidebar-toggle svg { flex: 0 0 auto; width: 17px; height: 17px; }
+.agent-sidebar-toggle span { overflow: hidden; white-space: nowrap; }
+body.agent-full.agent-nav-collapsed #agentNav { flex-basis: 60px; width: 60px; padding-inline: 9px; }
+body.agent-full.agent-nav-collapsed #agentNav .agent-nav-recents { display: none; }
+body.agent-full.agent-nav-collapsed #agentNav :is(.agent-sidebar-toggle, .agent-nav-button) { justify-content: center; gap: 0; padding-inline: 6px; }
+body.agent-full.agent-nav-collapsed #agentNav .agent-sidebar-toggle > span,
+body.agent-full.agent-nav-collapsed #agentNav .agent-nav-button > span:last-child { display: none; }
 .agent-nav-primary, .agent-nav-foot { display: flex; flex-direction: column; gap: 6px; flex: 0 0 auto; }
 .agent-nav-foot { margin-top: auto; padding-top: 12px; }
 .agent-nav-button { display: flex; align-items: center; gap: 10px; min-height: 39px; width: 100%; min-width: 0; padding: 10px 11px; border: 1px solid transparent; border-radius: 10px; background: transparent; color: var(--fg-dim); font: inherit; font-size: 13px; line-height: 1.35; text-align: left; cursor: pointer; }
 .agent-nav-button > span:last-child { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.agent-nav-button:hover, .agent-nav-button[aria-current="page"] { color: var(--fg); background: color-mix(in srgb, var(--bg-elev) 74%, transparent); }
+.agent-nav-button:hover, .agent-nav-button[aria-current="page"], .agent-nav-button[aria-expanded="true"] { color: var(--fg); background: color-mix(in srgb, var(--bg-elev) 74%, transparent); }
 .agent-nav-button:focus-visible, .agent-nav-session:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .agent-nav-button:disabled, .agent-nav-session:disabled { opacity: .48; cursor: wait; }
 .agent-nav-new { color: var(--fg); background: color-mix(in srgb, var(--bg-elev) 65%, transparent); border-color: color-mix(in srgb, var(--border-strong) 58%, transparent); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg-elev) 75%, transparent); }
@@ -109,16 +119,16 @@ body.agent-full #tabBarMount,
 body.agent-full #main :is(#leftSide, #splitLeft, #railLeft, #railRight, .viewer-wrap, #splitRight, .viewer-foot),
 body.agent-full #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { display: none !important; }
 :root body.agent-full #main { height: calc(100vh - var(--topbar-h)); grid-template-rows: minmax(0, 1fr); }
-:root body.agent-full #main > .main-row { padding: 0; overflow: hidden; }
-:root body.agent-full #main #rightCols { display: flex; flex: 1 1 auto; width: 100%; min-width: 0; }
-body.agent-full #rightCols > #rightSide { flex: 1 1 0; width: 0; min-width: 0; height: 100%; zoom: var(--agent-scale, 1); container: agent / inline-size; border: 0; border-radius: 0; box-shadow: none; transition: none; background: transparent; backdrop-filter: none; --ai-fs: 16px; --ai-code-fs: 14px; --ai-lh: 1.75; --ai-max-width: 100%; --ai-pad: 0px; --font-reading: var(--font); }
+:root body.agent-full #main > .main-row { padding: 12px; overflow: hidden; }
+:root body.agent-full #main #rightCols { display: flex; flex: 1 1 auto; width: 100%; min-width: 0; gap: 12px; }
+body.agent-full #rightCols > #rightSide { flex: 1 1 0; width: 0; min-width: 0; zoom: var(--agent-scale, 1); container: agent / inline-size; border: 1px solid color-mix(in srgb, var(--border-strong) 50%, transparent); border-radius: 22px; box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg-elev) 92%, transparent), 0 8px 26px color-mix(in srgb, var(--fg) 5%, transparent); transition: none; background: linear-gradient(145deg, color-mix(in srgb, var(--bg-elev) 66%, transparent), color-mix(in srgb, var(--bg-elev) 34%, transparent)); backdrop-filter: blur(var(--glass-frost, 24px)); --ai-fs: 16px; --ai-code-fs: 14px; --ai-lh: 1.75; --ai-max-width: 100%; --ai-pad: 0px; --font-reading: var(--font); }
 body.agent-full #aiBar { display: none; }
 body.agent-full #rightSide > :is(.sessbar, .ai, .composer, .sess-history) { width: min(100%, 1080px); margin-inline: auto; }
-body.agent-full #rightSide > .agent-identity { position: absolute; top: 18px; right: 24px; z-index: 6; width: auto; padding: 0; }
+body.agent-full #rightSide > .agent-identity { display: none; }
 body.agent-full #agentIdentity .agent-heading, body.agent-full :is(#agentLandingBack, #sessNew, #sessHist) { display: none; }
-body.agent-full #agentPapersToggle { font-size: 12px; }
 body.agent-full #rightSide > .agent-paper-picker { width: min(calc(100% - 48px), 1032px); margin: 12px auto; }
-body.agent-full #rightSide > .sessbar { width: 100%; min-height: 63px; padding: 18px 164px 14px 28px; border-bottom: 1px solid color-mix(in srgb, var(--border) 44%, transparent); }
+/* Keep the session title ahead of the picker; its close control owns its own row. */
+body.agent-full #rightSide > .sessbar { order: -1; width: 100%; min-height: 63px; padding: 18px 28px 14px; border-bottom: 1px solid color-mix(in srgb, var(--border) 44%, transparent); }
 body.agent-full .sess-label { font-size: 13px; font-weight: 500; }
 body.agent-full #rightSide > .ai { padding: 16px 24px 0; }
 body.agent-full #rightSide > .composer { width: min(100%, 1000px); padding: 14px 24px 26px; }
@@ -169,10 +179,10 @@ body.agent-transitioning #rightSide { background: var(--bg); }
 .agent-launch-arrow { display: inline-flex; flex: 0 0 auto; color: var(--fg-faint); }
 .agent-launch-arrow svg { width: 14px; height: 14px; }
 .agent-launch-recent[hidden] { display: none; }
-:root body.agent-full.agent-landing #rightSide { justify-content: flex-start; padding-block: 46px; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable both-edges; background: color-mix(in srgb, var(--bg-elev) 12%, transparent); }
+:root body.agent-full.agent-landing #rightSide { justify-content: flex-start; padding-block: 46px; overflow-y: auto; overscroll-behavior-y: contain; scrollbar-gutter: stable both-edges; }
 body.agent-full.agent-landing #rightSide > #agentLanding { margin-top: auto; }
 body.agent-full.agent-landing #rightSide > #agentLaunchActions { margin-bottom: auto; }
-body.agent-full.agent-landing #rightSide > :is(#agentIdentity, #agentPaperPicker, #sessBar, #sessHistory, #aiArea, #agentHandoffLayer) { display: none !important; }
+body.agent-full.agent-landing #rightSide > :is(#agentIdentity, #sessBar, #sessHistory, #aiArea, #agentHandoffLayer) { display: none !important; }
 body.agent-full.agent-landing :is(.reading-welcome, #sessEntryCard, .ai-follow-btn, .text-edge-hint) { display: none !important; }
 :root body.agent-full.agent-landing #rightSide > #composer { display: block; width: min(100%, 940px); flex: 0 0 auto; padding: 0 32px 20px; border: 0; background: transparent; }
 :root body.agent-full.agent-landing #composer .composer-row { min-height: 146px; padding: 21px; border: 1px solid color-mix(in srgb, var(--border-strong) 66%, transparent); border-radius: 23px; background: linear-gradient(135deg, color-mix(in srgb, var(--bg-elev) 76%, transparent), color-mix(in srgb, var(--bg-elev) 38%, transparent)); box-shadow: inset 0 1px 0 color-mix(in srgb, var(--bg-elev) 88%, transparent), 0 12px 42px color-mix(in srgb, var(--fg) 5%, transparent); }
@@ -181,7 +191,7 @@ body.agent-full.agent-landing #composer #draftStorage:not([data-status="error"])
 body.agent-full.agent-landing #composerHint, body.agent-full.agent-landing .composer-opts { display: none; }
 body.agent-full.agent-landing #agentStatus { margin-bottom: 12px; }
 :root body.agent-full #rightSide[data-sess-view="history"] { padding-top: 24px; padding-bottom: 0; scrollbar-gutter: auto; }
-body.agent-full #rightSide[data-sess-view="history"] > :is(#agentIdentity, #sessBar, #agentPaperPicker) { display: none !important; }
+body.agent-full #rightSide[data-sess-view="history"] > :is(#agentIdentity, #sessBar) { display: none !important; }
 body.agent-full.agent-landing #rightSide[data-sess-view="history"] > :is(#agentLanding, #agentLaunchActions, #composer) { display: none !important; }
 body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistory { display: flex !important; }
 .agent-settings-form .field { margin-top: 15px; }
@@ -212,23 +222,24 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
   body:not(.reading) #home .home-library-toolbar #homeResultCount { grid-row: 2; grid-column: 2; }
   body:not(.reading) #home .home-card-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 156px), 1fr)); gap: 10px; }
 }
-@media (max-width: 760px) {
-  :root body.agent-full #main #rightCols { flex-direction: column; }
-  body.agent-full #agentNav { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 8px; width: 100%; height: auto; padding: 8px 12px; border-right: 0; border-bottom: 1px solid color-mix(in srgb, var(--border) 55%, transparent); }
+@media (max-width: 700px) {
+  :root body.agent-full #main > .main-row { padding: 8px; }
+  :root body.agent-full #main #rightCols { flex-direction: column; gap: 8px; }
+  body.agent-full #agentNav, body.agent-full.agent-nav-collapsed #agentNav { flex: 0 0 auto; flex-direction: row; align-items: center; gap: 6px; width: 100%; height: auto; padding: 6px; border-radius: 13px; }
+  #agentSidebarToggle { display: none; }
   .agent-nav-primary { flex-direction: row; flex: 1 1 auto; min-width: 0; }
   .agent-nav-primary .agent-nav-button { width: auto; flex: 1 1 0; justify-content: center; min-height: 34px; padding: 7px 8px; font-size: 12px; }
+  body.agent-full.agent-nav-collapsed #agentNav .agent-nav-button > span:last-child { display: block; }
+  body.agent-full.agent-nav-collapsed #agentNav .agent-nav-button { gap: 6px; }
   body.agent-full .agent-nav-recents, body.agent-full .agent-nav-foot { display: none; }
-  body.agent-full #rightCols > #rightSide { width: 100%; height: 0; flex: 1 1 auto; }
-  body.agent-full #rightSide > .sessbar { min-height: 53px; padding: 13px 125px 11px 15px; }
-  body.agent-full #rightSide > .agent-identity { top: 12px; right: 12px; }
+  body.agent-full #rightCols > #rightSide { width: 100%; height: 0; flex: 1 1 auto; border-radius: 17px; }
+  body.agent-full #rightSide > .sessbar { min-height: 53px; padding: 13px 15px 11px; }
   body.agent-full #rightSide > .ai { padding: 9px 12px 0; }
 }
 @media (max-width: 440px) {
   .agent-nav-primary [data-agent-icon] { display: none; }
   .workspace-nav .tbtn { padding-inline: 6px; min-width: 28px; }
   .workspace-nav #homeBtn > span { display: none; }
-  body.agent-full #rightSide > .sessbar { padding-right: 55px; }
-  body.agent-full #agentPapersToggle > span:last-child { display: none; }
 }
 @media (max-height: 600px) {
   :root body.agent-full.agent-landing #rightSide { padding-block: 24px; }
@@ -267,6 +278,7 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
   .agent-heading { flex: 1 1 auto; }
 }
 @media (prefers-reduced-motion: reduce) {
+  body.agent-full #agentNav { transition: none; }
   body.agent-transitioning #rightSide { will-change: auto; }
   .agent-handoff { animation: none; }
   .agent-choice { transition: none; }

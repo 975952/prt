@@ -537,6 +537,8 @@ export const en = {
   "回答依据": "Sources used",
   "工作区切换": "Switch workspace", "全局会话导航": "Global conversations", "会话导航": "Conversations",
   "最近会话": "Recent conversations", "对话会出现在这里": "Your conversations will appear here",
+  "收起侧栏": "Collapse sidebar", "展开侧栏": "Expand sidebar",
+  "历史": "History", "新建": "New",
   "工作区选项": "Workspace options", "个性与偏好": "Personality & preferences",
   "题目、作者，或你记得的内容": "A title, an author, or anything you remember",
   "智能体快捷入口": "Assistant shortcuts", "找论文": "Find a paper", "继续上次": "Resume last chat",

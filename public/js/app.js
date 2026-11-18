@@ -10280,47 +10280,6 @@ function createAgentRuntime(pending, { scannedDoc = false, signal = null } = {})
   };
 }
 
-/** Agent 过程列表：在回答正文上方逐条显示「正在思考 / 正在检索 / 读取第 N 页 / 命中结果」。
- *  用户口径：像 agent 工具调用那样把模型干活的过程直接列出来；不想要闪烁的光标。 */
-function createAgentProgress(entry) {
-  if (!entry?.root || !entry?.body) return null;
-  entry.root.querySelectorAll('.agent-steps').forEach((node) => node.remove());
-  const box = el('div', { class: 'agent-steps', 'aria-live': 'polite' });
-  entry.root.insertBefore(box, entry.body);
-  const bodyEl = entry.body.closest('.ai-body');
-  // 用户口径（2026-11-03）：过程不要逐条列细，也不要「已加入图片」这类汇报；
-  // 只保留一条笼统的状态行，回答一出来就整行撤掉。
-  let current = null;
-  const show = (text) => {
-    if (!box.isConnected) return;
-    if (!current) {
-      current = el('div', { class: 'as-item running' },
-        el('span', { class: 'as-ico', 'aria-hidden': 'true' }),
-        el('span', { class: 'as-text', text }));
-      box.append(current);
-      scrollEntryToTop(bodyEl, entry.root);
-    } else {
-      const label = current.querySelector('.as-text');
-      if (label) label.textContent = text;
-    }
-  };
-  return {
-    onStep(ev) {
-      if (!ev) return;
-      if (ev.type === 'round') show(tr("思考中…"));
-      else if (ev.type === 'tool_start') show(tr("正在查阅论文材料…"));
-      else if (ev.type === 'ready') { current?.remove(); current = null; }
-      // tool_done / tools：不更新、不逐条列动作；失败也不在过程里刷细节
-    },
-    finish() {
-      current = null;
-      box.remove();
-    },
-    answerStarted() { current?.remove(); current = null; },
-    remove() { box.remove(); },
-  };
-}
-
 /**
  * 跑一次「AI 自己决定读哪些页」：成功返回 { messages, pages, imagePages, basis, stats }；
  * 不支持 tools / 超时 / 任何异常 → 返回 null（调用方静默回退 P1.5 预装路径）。
@@ -10362,6 +10321,7 @@ async function runAgentReadPath({ pending, reading, context, references, sources
       onStep,
       totalTimeoutMs,
       callTimeoutMs,
+      callManagesIdleTimeout: true,
       tools: AGENT_TOOL_SPECS.filter(spec => (pending.sourcePaper || pending.docId
         || !['read_page', 'search_paper', 'read_scan_page', 'read_page_image'].includes(spec.function.name))
         && (pending.useWeb || spec.function.name !== 'search_web')),
@@ -10897,6 +10857,25 @@ function streamTarget(node) {
     dispose() {
       stopTimers(); pending = null; active = false; hideFollow();
       bodyEl?.removeEventListener('scroll', onBodyScroll);
+    },
+    status(text) {
+      if (!active) return;
+      // Waiting, tool lookup and fallback share the answer's existing slot.
+      // Cancel a queued paint so stale pre-tool text cannot overwrite this status.
+      stopTimers(); pending = null; lastContent = ''; started = false;
+      rawNode = null; paintedText = ''; cardsActive = false;
+      let label = node.querySelector(':scope > .thinking');
+      if (!label) {
+        label = el('span', { class: 'thinking', role: 'status' });
+        node.replaceChildren(label);
+      }
+      label.setAttribute('role', 'status');
+      label.textContent = text;
+      if (entryEl?.__chatJob && entryEl.__sessionRecord?.text) {
+        entryEl.__sessionRecord.text = '';
+        scheduleChatJobSave(entryEl.__chatJob);
+      }
+      if (following) requestAnimationFrame(() => { if (active) scrollFollow(); });
     },
     push(text) {
       if (!active) return;
@@ -12911,7 +12890,10 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   pending.entry.root.__chatJob = job;
   if (pending.userEntry) pending.userEntry.root.__chatJob = job;
   chatJobs.set(job.key, job);
-  const setJobHint = text => { if (chatJobVisible(job)) setHint(text); };
+  const setJobHint = text => {
+    if (text && !received) target.status(text);
+    if (chatJobVisible(job)) setHint('');
+  };
   const taskActive = () => !ctl.signal.aborted && !job.finished && !job.discarded && chatJobs.get(job.key) === job;
   const assertTaskActive = () => { if (!taskActive()) throw new DOMException(tr("已停止"), 'AbortError'); };
   const tickJob = text => { if (taskActive() && chatJobVisible(job)) setBusy(true, text); };
@@ -12940,6 +12922,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   tickJob( '0s');
   const target = streamTarget(pending.entry.body);
   let received = '';
+  target.status(tr("思考中…"));
   let sources = [];
   let meta = '';
   let docCtx = null;
@@ -13122,11 +13105,8 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     const agentAllowed = agentReadEnabled() && !shotOnly
       && ((!pending.docId && !pending.sourcePaper) || !!reader?.pdf);
     let agentRun = null;
-    let agentProgress = null;
     if (agentAllowed) {
-      setJobHint(tr("正在思考…"));
-      // 过程列表：把「正在思考 / 检索 / 读第 N 页 / 命中」一条条列在回答上方（用户要求像 agent 工具一样可见）
-      agentProgress = createAgentProgress(pending.entry);
+      setJobHint(tr("思考中…"));
       agentRun = await runAgentReadPath({
         pending, reading, context, references, sources,
         images, scannedDoc,
@@ -13134,18 +13114,16 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         deferAnswer: !!batch,
         onDelta: (_piece, all) => {
           if (!taskActive()) return;
-          agentProgress?.answerStarted();
           setJobHint('');
           received = all;
           target.push(all);
         },
         onStep: (ev) => {
           if (!taskActive()) return;
-          if ((ev.type === 'tools' || ev.type === 'round') && received) {
+          if (ev.type === 'tools' || ev.type === 'round' || ev.type === 'tool_start') {
             received = '';
-            target.push(tr("正在查找材料…"));
+            target.status(ev.type === 'round' ? tr("思考中…") : tr("正在查阅论文材料…"));
           }
-          agentProgress?.onStep(ev);
         },
         baseMaterials: {
           question: pending.question, selection: reading.selection,
@@ -13158,12 +13136,8 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
         },
       });
       setJobHint('');
-      // 静默回退：模型不支持工具 / 超时 / 出错时，把过程列表整块撤掉，用户只看到正常回答
-      if (agentRun) agentProgress?.finish();
-      else {
-        agentProgress?.remove();
-        if (received) { received = ''; target.push(tr("正在准备回答…")); }
-      }
+      // Unsupported tools fall back in the same status slot until answer text arrives.
+      if (!agentRun && received) { received = ''; target.status(tr("思考中…")); }
       if (!readingRequestCurrent(pending)) return;
     }
     if (pending.discoveryIntent && !pending.entry.root.__sessionRecord.discovery) {
@@ -14389,6 +14363,8 @@ async function openSettings(hint) {
   try { await Settings.load(); } finally { settingsOpening = false; }
   const modal = $('#settingsModal');
   agentWorkspace?.resetProfileDraft();
+  const box = modal.querySelector('.modal-box');
+  for (const property of ['position', 'margin', 'left', 'top', 'right', 'bottom']) box?.style.removeProperty(property);
   modal.classList.remove('hidden');
   fillSettings();
   settingsStatus();

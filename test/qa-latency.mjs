@@ -21,6 +21,8 @@ let active = 0;
 let peak = 0;
 let completed = [];
 let finalEnded = false;
+let heldReplies = [];
+const holdReply = () => new Promise(resolve => heldReplies.push(resolve));
 const chunk = (res, delta, finish_reason = null) => res.write(`data: ${JSON.stringify({ choices: [{ delta, finish_reason }] })}\n\n`);
 const hasImages = (body) => body.messages.some((m) => Array.isArray(m.content) && m.content.some((p) => p.type === 'image_url'));
 const reply = async (res, text, delay = 900) => {
@@ -41,6 +43,26 @@ const upstream = http.createServer(async (req, res) => {
     return;
   }
   logs.push(body);
+  if (mode.startsWith('waiting')) {
+    if (mode === 'waiting-fallback' && body.tools) {
+      res.writeHead(400, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: { message: 'tools unsupported' } }));
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+    chunk(res, { reasoning_content: 'Synthetic reasoning heartbeat.' });
+    await holdReply();
+    if (res.destroyed) return;
+    if (mode === 'waiting-tools' && !body.messages.some(row => row.role === 'tool')) {
+      chunk(res, { tool_calls: [{ index: 0, id: 'status-page', function: { name: 'read_page', arguments: '{"page":3}' } }] });
+      chunk(res, {}, 'tool_calls'); res.end('data: [DONE]\n\n');
+    } else {
+      chunk(res, { content: 'STATUS_FINAL_ANSWER' });
+      await holdReply();
+      if (!res.destroyed) { chunk(res, {}, 'stop'); res.end('data: [DONE]\n\n'); }
+    }
+    return;
+  }
   const last = body.messages.at(-1)?.content;
   const one = typeof last === 'string' && last.startsWith('本次只解答下面这一道题') ? Number(last.match(/PERF_Q(\d)/)?.[1]) : 0;
   if (one) {
@@ -139,6 +161,50 @@ try {
   const attachImage = () => page.evaluate(() => window.__state.attachments.push({ id: crypto.randomUUID(), kind: 'image', label: 'test screenshot', w: 1, h: 1,
     dataUrl: 'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=' }));
 
+  const waitForHeld = async count => {
+    for (let i = 0; i < 200 && heldReplies.length < count; i++) await wait(25);
+    assert.ok(heldReplies.length >= count, `synthetic request ${count} reached the gate`);
+  };
+  const waitingSlots = () => page.evaluate(() => {
+    const last = [...document.querySelectorAll('#aiArea .msg.assistant')].at(-1);
+    return {
+      labels: [...last.querySelectorAll('.thinking,.agent-steps .as-text')].filter(n => n.getClientRects().length).map(n => n.textContent),
+      composer: /Thinking|思考/.test(document.querySelector('#composerHint').textContent),
+      record: last.__sessionRecord.text,
+    };
+  });
+  for (const waitingMode of ['waiting-tools', 'waiting-fallback', 'waiting-stop']) {
+    mode = waitingMode; heldReplies = [];
+    await start('请核对这篇论文的核心方法。');
+    await waitForHeld(1);
+    let view = await waitingSlots();
+    assert.equal(view.labels.length, 1, `${mode}: exactly one waiting label`);
+    assert.equal(view.composer, false, `${mode}: composer does not duplicate thinking`);
+    assert.equal(view.record, '', `${mode}: waiting text is not saved as an answer`);
+    if (mode === 'waiting-stop') {
+      await page.evaluate(() => window.__state.abort.abort());
+      await finish(); heldReplies[0]();
+      assert.equal((await waitingSlots()).labels.length, 0, 'stopping removes the pending state');
+    } else {
+      heldReplies[0]();
+      let finalGate = 2;
+      if (mode === 'waiting-tools') {
+        await waitForHeld(2);
+        view = await waitingSlots();
+        assert.equal(view.labels.length, 1, 'second model round still owns only one waiting label');
+        assert.equal(view.record, '', 'tool status stays out of persisted answer text');
+        heldReplies[1](); finalGate = 3;
+      }
+      await waitForHeld(finalGate);
+      await page.waitForFunction(() => [...document.querySelectorAll('#aiArea .msg.assistant .text')].at(-1)?.textContent.includes('STATUS_FINAL_ANSWER'));
+      assert.equal((await waitingSlots()).labels.length, 0, `${mode}: streaming replaces the waiting label`);
+      heldReplies[finalGate - 1](); await finish();
+      assert.equal((await waitingSlots()).record, 'STATUS_FINAL_ANSWER');
+    }
+  }
+  console.log('PASS: one waiting state across tool rounds, unsupported-tool fallback and stop; streaming replaces it without saving status as prose');
+  mode = 'direct';
+
   await page.evaluate(() => {
     window.__latencyOldProfile = { profile: window.__state.docProfile, doc: window.__state.docProfileDoc, promise: window.__state.docProfilePromise };
     window.__state.docProfile = null; window.__state.docProfileDoc = null;
@@ -225,7 +291,11 @@ try {
 
   mode = 'keepalive';
   await page.evaluate(() => { window.__agentTestLimits = { callTimeoutMs: 1000 }; });
+  const keepaliveStarted = Date.now();
   await start(); await finish();
+  fs.writeFileSync(path.join(scratch, 'keepalive.json'), JSON.stringify({ elapsed: Date.now() - keepaliveStarted,
+    requests: logs.map(body => ({ tools: !!body.tools, hasImages: hasImages(body) })),
+    agent: await page.evaluate(() => window.__lastAgent), text: await lastText() }, null, 2), 'utf8');
   assert.equal(logs.length, 1, 'healthy streams longer than timeout must not restart');
   assert.match(await lastText(), /持续输出4/);
   await page.evaluate(() => { delete window.__agentTestLimits; });
@@ -271,6 +341,7 @@ try {
   assert.deepEqual(errors, []);
   console.log('PASS: stop cancels active questions, preserves partial text and leaves queued questions unstarted');
 } finally {
+  heldReplies.forEach(release => release());
   clearTimeout(watchdog);
   await browser?.close();
   await stopChild(reader);

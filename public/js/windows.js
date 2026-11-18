@@ -10,8 +10,6 @@ const stateKey = (id = windowId) => `reader.window.${id}.progress`;
 const readJSON = (key, fallback = {}) => { try { return JSON.parse(rawStorage.getItem(key) || 'null') || fallback; } catch { return fallback; } };
 const requests = new Map();
 let hooks = {};
-let windowRows = [];
-let menu = null;
 const CLOSE_SAVE_TIMEOUT_MS = 30000;
 let closeAttempt = null;
 let closed = false;
@@ -85,21 +83,6 @@ window.fetch = async (input, init = {}) => {
   }
   return localizeErrorResponse(await serviceFetch(input, init));
 };
-
-function renderWindowMenu() {
-  if (!menu) return;
-  menu.replaceChildren();
-  const add = (text, fn) => {
-    const b = document.createElement('button'); b.type = 'button'; b.className = 'ctx-item'; b.textContent = text;
-    b.onclick = () => { menu.hidden = true; fn(); }; menu.append(b);
-  };
-  if (hooks.current?.()) add(tr("当前论文在新窗口打开"), () => openReaderWindow(hooks.current()));
-  if (desktopWindows) {
-    add(tr("平铺所有窗口"), () => nativePost('windows-tile'));
-    for (const row of windowRows) add(`${row.key === windowId ? '✓ ' : ''}${row.title || 'prt'}`, () => nativePost('window-focus', { key: row.key }));
-    add(tr("保存窗口布局并退出"), () => nativePost('windows-quit'));
-  }
-}
 
 export async function openReaderWindow(doc, { move = false } = {}) {
   if (!doc?.docId) return;
@@ -188,7 +171,6 @@ window.addEventListener('prt-desktop', ({ detail }) => {
   if (detail.type === 'place') { layoutPage = hooks.page?.(); nativePost('window-place', detail); }
   if (detail.type === 'placed') setTimeout(() => { if (layoutPage) hooks.restorePage?.(layoutPage); layoutPage = null; }, 450);
   if (detail.type === 'open-result') completeRequest(detail);
-  if (detail.type === 'windows') { windowRows = detail.windows; renderWindowMenu(); }
   if (detail.type === 'close-request') void closeWindow(detail);
 });
 bus?.addEventListener('message', ({ data }) => {
@@ -211,20 +193,6 @@ export function windowReady() {
 }
 export function startWindows(callbacks) {
   hooks = callbacks;
-  const button = document.createElement('button');
-  button.id = 'windowsBtn'; button.type = 'button'; button.className = 'tbtn';
-  button.textContent = tr("窗口"); button.title = tr("多文档窗口"); button.setAttribute('aria-haspopup', 'menu');
-  document.getElementById('settingsBtn')?.before(button);
-  menu = document.createElement('div'); menu.id = 'windowsMenu'; menu.className = 'ctx-menu'; menu.hidden = true;
-  menu.setAttribute('role', 'menu'); document.body.append(menu);
-  button.onclick = () => {
-    const show = menu.hidden; renderWindowMenu(); menu.hidden = !show;
-    if (desktopWindows) nativePost('windows-list');
-    const r = button.getBoundingClientRect(); menu.style.top = `${r.bottom + 5}px`;
-    menu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 300))}px`;
-  };
-  document.addEventListener('click', (e) => { if (!menu.contains(e.target) && !button.contains(e.target)) menu.hidden = true; });
-  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') menu.hidden = true; });
 }
 export function finishWindowBoot() { ready = true; windowReady(); }
 export const isWindowClosed = () => closed;

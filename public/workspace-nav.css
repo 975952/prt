@@ -1,0 +1,49 @@
+/* The two workspaces live beside Settings, replacing the former Windows menu. */
+:root { --topbar-h: 44px; }
+#topbar { gap: 10px; }
+#topbar .workspace-nav {
+  flex: 0 0 auto;
+  min-width: 0;
+  max-width: 256px;
+  height: 36px;
+  padding: 3px;
+  gap: 3px;
+  border: 1px solid color-mix(in srgb, var(--border-strong) 60%, transparent);
+  border-radius: 10px;
+  background: color-mix(in srgb, var(--bg-elev) 48%, transparent);
+}
+#topbar .workspace-nav .tbtn {
+  min-width: 88px;
+  max-width: 144px;
+  height: 28px;
+  padding-inline: 13px;
+  gap: 8px;
+  font-size: 13px;
+  font-weight: 500;
+  border-radius: 7px;
+}
+#topbar .workspace-nav .tbtn[aria-current="page"] {
+  color: var(--fg);
+  background: color-mix(in srgb, var(--bg-elev) 78%, var(--accent-soft));
+  box-shadow: 0 1px 4px color-mix(in srgb, var(--fg) 8%, transparent);
+}
+#topbar .workspace-nav .tbtn:hover { background: color-mix(in srgb, var(--bg-elev) 90%, var(--accent-soft)); }
+#topbar .workspace-nav #homeBtn > span { display: inline; }
+@media (max-width: 900px) {
+  #topbar { gap: 5px; }
+  #topbar .workspace-nav .tbtn { min-width: 78px; max-width: 120px; padding-inline: 9px; gap: 6px; }
+}
+@media (max-width: 600px) {
+  #topbar { gap: 3px; padding-left: 8px; }
+  #topbar .workspace-nav { padding: 2px; height: 34px; gap: 1px; }
+  #topbar .workspace-nav .tbtn { min-width: 62px; max-width: 90px; padding-inline: 8px; font-size: 12px; }
+  #topbar .workspace-nav .tbtn > :is(svg, .agent-icon) { display: none; }
+}
+@media (max-width: 440px) {
+  #topbar .app-title-region { display: none; }
+  #topbar > .tbtn, #topbar .topbar-side-toggle { min-width: 22px; width: 22px; padding-inline: 0; }
+  #topbar .topbar-side-controls { margin-left: 0; padding-left: 3px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  #topbar .workspace-nav .tbtn { transition: none; }
+}

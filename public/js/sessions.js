@@ -16,6 +16,7 @@ import { windowStorage as localStorage } from './window-storage.js';
 
 import { $, el, toast } from './util.js';
 import { createSessionMove } from './session-move.js';
+import { iconEl } from './icons.js';
 
 const ON_ENTER_KEY = 'reader.session.onEnter';     // choose（默认，用户拍板 B）/ resume / new
 const ACTIVE_SESSION_KEY = 'reader.activeSession'; // 与 app.js 的 SESSION_KEY 同一个存档
@@ -677,22 +678,59 @@ function buildQuick() {
     'aria-label': tr("搜索会话"),
     oninput: (e) => { st.quickQuery = e.target.value; renderQuickList(); },
   });
+  const more = sessButton('more', tr('更多操作'), 'sess-quick-more', () => setQuickMore(), {
+    id: 'sessQuickMore', hidden: true, 'aria-haspopup': 'menu', 'aria-expanded': 'false', 'aria-controls': 'sessQuickMenu',
+  });
+  more.title = tr('更改当前会话归属');
+  more.addEventListener('keydown', event => {
+    if (!['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation(); setQuickMore(true);
+  });
+  const menu = el('div', { id: 'sessQuickMenu', class: 'sess-quick-menu', role: 'menu', hidden: true, 'aria-label': tr('更多操作') },
+    el('button', { type: 'button', role: 'menuitem', tabindex: '-1', class: 'sess-quick-move', id: 'sessQuickMove',
+      onclick: () => openSessionMove(null, st.ui.btn, { current: true }) },
+    el('span', { html: ICONS.move }), el('span', { text: tr('更改归属') })));
+  menu.addEventListener('keydown', event => {
+    if (!event.ctrlKey && !event.metaKey && !event.altKey) event.stopPropagation();
+    if (event.key === 'Tab') { setQuickMore(false, { focus: true }); return; }
+    if (['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) {
+      event.preventDefault(); menu.querySelector('button')?.focus({ preventScroll: true });
+    }
+  });
   quick.replaceChildren(
-    el('div', { class: 'sess-quick-head' },
-      el('span', { class: 'sess-quick-title', text: tr("切换会话") }),
-      el('span', { class: 'sess-quick-hint', text: scopeMode() === 'global' ? tr("全部论文") : scopeMode() === 'paper' ? tr("当前论文") : tr("当前文件夹") })),
     search,
     el('div', { class: 'sess-quick-list', id: 'sessQuickList' }),
     el('div', { class: 'sess-quick-foot' },
       el('button', {
-        type: 'button', class: 'sess-quick-all', text: tr("查看全部会话"),
+        type: 'button', class: 'sess-quick-all', title: tr('查看全部会话'),
         onclick: () => { closeQuick(); openHistory(); },
-      }),
-      el('button', { type: 'button', class: 'sess-quick-new', text: tr("＋ 新建会话"), onclick: doNewSession })),
-    el('button', { type: 'button', class: 'sess-quick-move', id: 'sessQuickMove', hidden: true,
-      onclick: event => openSessionMove(null, event.currentTarget, { current: true }) },
-      el('span', { html: ICONS.move }), el('span', { text: tr('更改当前会话归属') })),
+      }, el('span', { html: ICONS.clock }), el('span', { text: tr('历史') })),
+      el('button', { type: 'button', class: 'sess-quick-new', title: tr('新对话'), onclick: doNewSession },
+        el('span', { html: ICONS.plus }), el('span', { text: tr('新建') })), more, menu),
   );
+  quick.addEventListener('keydown', event => {
+    if (event.target.closest('.sess-quick-menu')) return;
+    const rows = [...quick.querySelectorAll('.sess-quick-row')];
+    const index = rows.indexOf(document.activeElement);
+    if (!rows.length || (index < 0 && event.target !== search) || !['ArrowDown', 'ArrowUp', 'Home', 'End'].includes(event.key)) return;
+    if (event.target === search && !['ArrowDown', 'ArrowUp'].includes(event.key)) return;
+    event.preventDefault(); event.stopPropagation();
+    const next = event.key === 'Home' ? 0 : event.key === 'End' ? rows.length - 1
+      : index < 0 ? (event.key === 'ArrowDown' ? 0 : rows.length - 1) : (index + (event.key === 'ArrowDown' ? 1 : -1) + rows.length) % rows.length;
+    rows[next].focus({ preventScroll: true }); rows[next].scrollIntoView({ block: 'nearest' });
+  });
+  quick.addEventListener('pointerdown', event => {
+    if (!event.target.closest('#sessQuickMore, #sessQuickMenu')) setQuickMore(false);
+  });
+}
+
+function setQuickMore(open, { focus = false } = {}) {
+  const menu = st.ui?.quick?.querySelector('#sessQuickMenu'), trigger = st.ui?.quick?.querySelector('#sessQuickMore');
+  if (!menu || !trigger) return;
+  const show = !trigger.hidden && (open ?? menu.hidden);
+  menu.hidden = !show; trigger.setAttribute('aria-expanded', String(show));
+  if (show) menu.querySelector('button')?.focus({ preventScroll: true });
+  else if (focus) trigger.focus({ preventScroll: true });
 }
 
 function openQuick() {
@@ -705,11 +743,13 @@ function openQuick() {
   setTimeout(() => st.ui.quick?.querySelector('.sess-quick-search')?.focus(), 0);
 }
 
-function closeQuick() {
+function closeQuick({ focus = false } = {}) {
   if (!st.quickOpen) return;
+  setQuickMore(false);
   st.quickOpen = false;
   st.ui.quick?.classList.add('hidden');
   st.ui.btn?.setAttribute('aria-expanded', 'false');
+  if (focus) st.ui.btn?.focus({ preventScroll: true });
 }
 
 function toggleQuick() {
@@ -720,8 +760,8 @@ function toggleQuick() {
 function renderQuickList() {
   const box = st.ui?.quick?.querySelector('.sess-quick-list');
   if (!box) return;
-  const move = st.ui.quick.querySelector('#sessQuickMove');
-  if (move) move.hidden = !currentMoveRow() || typeof st.ctx?.moveSession !== 'function';
+  const more = st.ui.quick.querySelector('#sessQuickMore');
+  if (more) { more.hidden = !currentMoveRow() || typeof st.ctx?.moveSession !== 'function'; if (more.hidden) setQuickMore(false); }
   const q = st.quickQuery.trim().toLowerCase();
   const actives = activeRows()
     .filter((r) => (r.count || 0) > 0)
@@ -733,12 +773,15 @@ function renderQuickList() {
   }
   box.replaceChildren(...actives.map((r) => el('button', {
     type: 'button',
-    class: `sess-quick-row${!!st.currentSid && r.sid === st.currentSid ? ' on' : ''}`,
+    class: `sess-quick-row${r.sid === st.currentSid ? ' on' : ''}`,
+    'aria-current': r.sid === st.currentSid ? 'true' : 'false',
+    dataset: { sid: r.sid },
     title: r.title || tr("（无标题会话）"),
     onclick: () => chooseSession(r.sid),
   },
   el('span', { class: 'sess-quick-name', text: r.title || (r.count ? tr("（无标题会话）") : tr("新会话")) }),
-  el('span', { class: 'sess-quick-meta', text: [r.pinned ? tr("置顶") : '', r.count ? tr("{0} 条", r.count) : '', relTime(r.updatedAt)].filter(Boolean).join(' · ') }))));
+  r.pinned ? el('span', { class: 'sess-quick-status', title: tr('置顶'), 'aria-label': tr('置顶'), html: ICONS.pin }) : null,
+  r.sid === st.currentSid ? el('span', { class: 'sess-quick-status', 'aria-hidden': 'true' }, iconEl('check', { size: 14 })) : null)));
 }
 
 /* ───────────────────────────── 历史面板 ───────────────────────────── */
@@ -1419,7 +1462,12 @@ function onKeydownCapture(e) {
     if (st.historyMenu) { e.preventDefault(); e.stopPropagation(); closeHistoryMenu({ focus: true }); return; }
     if (st.renameSid !== null && e.target?.matches?.('.sess-rename-input')) return;
     if (st.moveUi?.isOpen()) { e.preventDefault(); e.stopPropagation(); st.moveUi.close(); return; }
-    if (st.quickOpen) { e.preventDefault(); e.stopPropagation(); closeQuick(); return; }
+    if (st.quickOpen) {
+      e.preventDefault(); e.stopPropagation();
+      if (st.ui.quick.querySelector('#sessQuickMore')?.getAttribute('aria-expanded') === 'true') setQuickMore(false, { focus: true });
+      else closeQuick({ focus: true });
+      return;
+    }
     if (st.historyOpen) { e.preventDefault(); e.stopPropagation(); closeHistory(); return; }
   }
   if (st.historyOpen && e.key === 'F2' && st.renameSid == null && !isTypingTarget(e.target)) {

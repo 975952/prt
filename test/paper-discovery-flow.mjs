@@ -222,7 +222,8 @@ try {
   await page.waitForSelector('.paper-discovery-card[data-paper-path="2307.08691.pdf"]', { visible: true });
   pass('structured discovery cards survive real session save and page reload');
   const target = listing.papers.find(p => p.name === 'chemistry.pdf');
-  await page.click('#sessBtn'); await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
+  await page.click('#sessBtn'); await page.waitForSelector('#sessQuickMore', { visible: true }); await page.click('#sessQuickMore');
+  await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
   await page.waitForSelector('#sessMovePanel', { visible: true }); await page.waitForFunction(() => !document.querySelector('#sessMoveMode').disabled);
   await page.select('#sessMoveMode', 'paper'); await page.select('#sessMoveTarget', target.docId);
   await page.waitForFunction(() => !document.querySelector('#sessMoveSubmit').disabled); await page.click('#sessMoveSubmit');

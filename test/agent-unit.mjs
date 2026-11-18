@@ -283,6 +283,29 @@ const baseMessages = [{ role: 'system', content: 'sys' }, { role: 'user', conten
 
 /* Providers may ignore cancellation; waiting and late results still stay bounded. */
 {
+  let idleBudget;
+  const run = await runAgentLoop({ messages: baseMessages, callTimeoutMs: 25, totalTimeoutMs: 1000,
+    callManagesIdleTimeout: true,
+    callModel: async ({ timeoutMs }) => {
+      idleBudget = timeoutMs;
+      await new Promise(resolve => setTimeout(resolve, 80));
+      return { choices: [{ message: { content: 'Active streamed answer' } }] };
+    } });
+  check('有独立空闲看门狗的流可以持续超过单次空闲预算', run.ok && run.directContent === 'Active streamed answer');
+  check('流式调用仍收到原空闲预算而非整个任务预算', idleBudget === 25, String(idleBudget));
+}
+{
+  let childSignal, finishLate;
+  const started = Date.now();
+  const run = await runAgentLoop({ messages: baseMessages, callTimeoutMs: 25, totalTimeoutMs: 600,
+    callManagesIdleTimeout: true,
+    callModel: ({ signal }) => { childSignal = signal; return new Promise(resolve => { finishLate = resolve; }); } });
+  const elapsed = Date.now() - started;
+  check('流式调用由整轮总deadline封顶并取消底层任务', !run.ok && run.reason === 'timeout' && childSignal.aborted
+    && elapsed >= 500 && elapsed < 2000, `${elapsed}ms`);
+  finishLate({ choices: [{ message: { content: 'Too late' } }] });
+}
+{
   let finishLate, childSignal, reads = 0;
   const events = [];
   const run = await runAgentLoop({ messages: baseMessages, runtime: { ...runtime, readPage: async () => { reads++; return {}; } },
