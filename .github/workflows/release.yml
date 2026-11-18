@@ -52,6 +52,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           npm --prefix test test
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          node test/pack.mjs
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           cargo test --manifest-path desktop/Cargo.toml --locked
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           # rust-embed must see newly added frontend files on every release build.
@@ -83,8 +85,6 @@ jobs:
         run: |
           $ErrorActionPreference = 'Stop'
           & ./desktop/build-setup.ps1 -SkipBuild -ISCC $env:PRT_ISCC -OutputDir (Join-Path $PWD 'dist')
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          node test/pack.mjs
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           Copy-Item -LiteralPath desktop/target/release/prt.exe -Destination dist/prt.exe -Force
           Copy-Item -LiteralPath test/artifacts/prt-src.zip -Destination dist/prt-src.zip -Force

@@ -164,15 +164,30 @@ for (const f of files) {
 
 /* ── 4. 打 zip ── */
 fs.rmSync(ZIP, { force: true });
-let zipTool = 'tar';
-try {
-  execFileSync('tar', ['-a', '-c', '-f', ZIP, '-C', STAGE, '.'], { stdio: 'inherit' });
-} catch (e) {
-  zipTool = 'Compress-Archive（不跨平台：条目名是反斜杠）';
-  execFileSync('powershell', [
-    '-NoProfile', '-Command',
-    `Compress-Archive -Path '${STAGE}\\*' -DestinationPath '${ZIP}' -CompressionLevel Optimal -Force`,
-  ], { stdio: 'inherit' });
+// Windows tar versions differ in their handling of Unicode ZIP entry names.
+// Use .NET with explicit UTF-8 names and '/' separators, including dotfiles.
+// Paths travel through the environment, never through executable script text.
+const archiveEnv = { ...process.env, PRT_PACKAGE_STAGE: STAGE, PRT_PACKAGE_ZIP: ZIP, PRT_PACKAGE_VERIFY: VERIFY };
+const runArchiveScript = script => execFileSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', `
+  $ErrorActionPreference = 'Stop'
+  [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression')
+  [void][Reflection.Assembly]::LoadWithPartialName('System.IO.Compression.FileSystem')
+  ${script}
+`], { stdio: 'inherit', env: archiveEnv });
+const zipTool = process.platform === 'win32' ? '.NET ZIP (UTF-8)' : 'zip';
+if (process.platform === 'win32') {
+  runArchiveScript(`
+    $stageRoot = [IO.Path]::GetFullPath($env:PRT_PACKAGE_STAGE).TrimEnd([char]92) + [char]92
+    $archive = [IO.Compression.ZipFile]::Open($env:PRT_PACKAGE_ZIP, [IO.Compression.ZipArchiveMode]::Create, [Text.Encoding]::UTF8)
+    try {
+      foreach ($sourceFile in [IO.Directory]::EnumerateFiles($stageRoot, '*', [IO.SearchOption]::AllDirectories)) {
+        $entryName = $sourceFile.Substring($stageRoot.Length).Replace([char]92, [char]47)
+        [void][IO.Compression.ZipFileExtensions]::CreateEntryFromFile($archive, $sourceFile, $entryName, [IO.Compression.CompressionLevel]::Optimal)
+      }
+    } finally { $archive.Dispose() }
+  `);
+} else {
+  execFileSync('zip', ['-q', '-r', ZIP, '.'], { cwd: STAGE, stdio: 'inherit' });
 }
 fs.rmSync(STAGE, { recursive: true, force: true });
 
@@ -180,7 +195,11 @@ let verifyNote = '';
 try {
   fs.rmSync(VERIFY, { recursive: true, force: true });
   fs.mkdirSync(VERIFY, { recursive: true });
-  execFileSync('tar', ['-x', '-f', ZIP, '-C', VERIFY], { stdio: 'ignore' });
+  if (process.platform === 'win32') {
+    runArchiveScript('[IO.Compression.ZipFile]::ExtractToDirectory($env:PRT_PACKAGE_ZIP, $env:PRT_PACKAGE_VERIFY, [Text.Encoding]::UTF8)');
+  } else {
+    execFileSync('unzip', ['-q', ZIP, '-d', VERIFY], { stdio: 'inherit' });
+  }
   execFileSync(process.execPath, [path.join(VERIFY, 'test', 'repository-check.mjs')], { stdio: 'inherit' });
   const dataDir = path.join(VERIFY, '__data__');
   const papersDir = path.join(VERIFY, 'test', 'fixtures');
