@@ -14,6 +14,7 @@ import './capabilities/translate.js';
 import './capabilities/teach.js';
 import './capabilities/ops.js';
 import './capabilities/background.js';
+import './capabilities/organizer.js';
 
 export {
   definePrompt, getPromptDef, hasPromptDef, listPrompts, getManifest,
@@ -49,3 +50,4 @@ export {
   memoryExtractMessages, MEMORY_EXTRACT_SYS,
 } from './capabilities/background.js';
 export { SCREENSHOT_TASK } from './capabilities/qa.js';
+export { paperClassificationMessages } from './capabilities/organizer.js';

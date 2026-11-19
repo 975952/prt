@@ -8,6 +8,9 @@
 .po-description { color: var(--fg-dim); }
 .po-note { color: var(--fg-faint); font-size: 11px; }
 .po-toolbar { display: flex; gap: 9px; align-items: stretch; }
+.po-ai-toolbar { display: flex; gap: 9px; align-items: center; }
+.po-ai-toolbar label { flex: 0 0 auto; color: var(--fg-dim); font-size: 12px; }
+.po-ai-toolbar input { flex: 1 1 auto; width: 0; }
 .paper-organizer input:not([type="checkbox"]), .paper-organizer select { min-width: 0; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg-elev); color: var(--fg); font: inherit; }
 .po-toolbar input { flex: 1 1 auto; width: 0; }
 .paper-organizer input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; margin: 3px 0; flex: 0 0 auto; }
@@ -40,6 +43,9 @@
   .po-toolbar { flex-wrap: wrap; }
   .po-toolbar input { flex-basis: 55%; }
   .po-toolbar .po-button { width: 100%; }
+  .po-ai-toolbar { flex-wrap: wrap; }
+  .po-ai-toolbar label { width: 100%; }
+  .po-ai-toolbar input { flex-basis: 50%; }
   .po-row { grid-template-columns: 18px minmax(0, 1fr); gap: 8px; }
   .po-target { grid-column: 2; }
   .po-list-head { flex-wrap: wrap; gap: 4px; }

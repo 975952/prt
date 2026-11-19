@@ -19,6 +19,7 @@ import { runWithDeadline } from './task-deadline.js';
 import { createLibraryReader } from './chat-source.js';
 import { createPaperTitleIndex } from './paper-titles.js';
 import { createPaperOrganizer } from './paper-organizer.js';
+import { classifyPaperBatch } from './paper-classifier.js';
 import { CARD_MATERIAL_DEFAULTS, updateTranslationMaterial } from './glass-material.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
@@ -3694,6 +3695,12 @@ async function openPaperOrganizer() {
     getFolders: () => state.folders,
     getLabel: paper => paperTitles.label(paper),
     readTitle: readPdfTitle,
+    checkAIReady: () => {
+      if (!Settings.ready) throw new Error(tr("请先在设置中配置 AI 模型，再运行分类。"));
+    },
+    classifyBatch: options => classifyPaperBatch({ ...options,
+      chat: request => streamChat({ idleMs: Number(Settings.data.idleMs) || 60000, ...request }),
+    }),
     movePaper: organizePaperMove,
     onComplete: async () => { await refreshPaperList(); renderHome(); },
   });

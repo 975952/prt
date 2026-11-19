@@ -1,44 +1,9 @@
 import { t as tr } from './i18n.js';
 import { el, debounce } from './util.js';
 import { iconEl } from './icons.js';
-
-const RULES = [
-  ['数学/数值分析', /数值分析|数值计算|数值方法|迭代法|有限元|numerical\s+(?:analysis|methods?|computation)|finite\s+element|conjugate\s+gradient|iterative\s+(?:method|solver)|runge[ -]kutta/ig],
-  ['数学/概率统计', /概率|统计|随机过程|贝叶斯|probabilit\w*|statistics?|stochastic|bayesian|markov\s+chain/ig],
-  ['计算机/计算机视觉', /计算机视觉|图像|目标检测|视觉|残差网络|computer\s+vision|image\s+(?:recognition|classification|segmentation|generation)|object\s+detection|vision\s+transformer|\b(?:resnet|detr|deit|yolo|cifar|imagenet|vit)\b|tokens?[ -]to[ -]tokens?|squeeze[ -]and[ -]excitation/ig],
-  ['计算机/自然语言处理', /自然语言|语言模型|机器翻译|文本分类|分词|natural\s+language|language\s+model|machine\s+translation|text\s+classification|attention\s+is\s+all\s+you\s+need|\b(?:bert|gpt[ -]?\d*|llms?|nlp)\b/ig],
-  ['计算机/深度学习', /深度学习|神经网络|机器学习|强化学习|反向传播|deep\s+learning|neural\s+networks?|machine\s+learning|reinforcement\s+learning|backpropagation|\btransformers?\b/ig],
-  ['数学/线性代数', /线性代数|矩阵|特征值|特征向量|线性方程|linear\s+algebra|matri(?:x|ces)|eigenvalues?|eigenvectors?|singular\s+value|\bAx\s*[=＝]\s*b\b/ig],
-  ['物理/电子与电路', /电子|电路|运算放大器|半导体|晶体管|electronic|circuits?|semiconductor|transistor|operational\s+amplifier|op[ -]?amp/ig],
-  ['物理/物理学', /物理|光学|偏振|量子|电磁|热力学|力学|physics|optics|polarization|quantum|electromagnet|thermodynamics|mechanics/ig],
-  ['数学/数学分析', /数学分析|微积分|复变函数|微分方程|calculus|complex\s+analysis|differential\s+equations?|real\s+analysis/ig],
-];
-export const organizerFolders = RULES.map(([folder]) => folder);
-
-/** Conservative local rules. An unrecognized title always needs a manual choice. */
-export function classifyPaper({ name = '', title = '', label = '' } = {}) {
-  const text = [title, label, String(name || '').replace(/\.pdf$/i, '').replace(/_/g, ' ')].join(' ');
-  for (const [folder, rule] of RULES) {
-    const keywords = [...new Set(text.match(rule) || [])].slice(0, 3);
-    if (keywords.length) return { folder, keywords, reason: tr('匹配标题关键词：{0}', keywords.join('、')) };
-  }
-  return { folder: '', keywords: [], reason: tr('信息不足，请手动选择文件夹') };
-}
-
-/** A relative folder only: no traversal, absolute paths or Windows device names. */
-export function validateTargetFolder(value) {
-  const raw = String(value ?? '');
-  const folder = raw.replace(/\\/g, '/');
-  if (!folder.trim()) return { valid: false, folder: '', error: tr('请选择目标文件夹') };
-  if (folder.length > 1000 || /^[\s/]|[\s/]$/.test(folder) || /[<>:"|?*\u0000-\u001f\u007f-\u009f]/.test(folder)) {
-    return { valid: false, folder, error: tr('请输入有效的相对文件夹路径') };
-  }
-  const bad = folder.split('/').some(part => !part || part.startsWith('.') || part.length > 255
-    || /[.\s]$/.test(part) || /^\s/.test(part)
-    || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part));
-  return bad ? { valid: false, folder, error: tr('文件夹名称包含无效字符或保留名称') }
-    : { valid: true, folder, error: '' };
-}
+import { PAPER_CLASSIFIER_BATCH_SIZE, validateTargetFolder } from './paper-classifier.js';
+import { runWithDeadline } from './task-deadline.js';
+export { validateTargetFolder };
 
 const paperPath = paper => String(paper.path || paper.name || '').replace(/\\/g, '/');
 const parentFolder = path => path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
@@ -48,18 +13,22 @@ const PAGE_SIZE = 40;
 
 /** Preview first; this component never moves a file until Apply is clicked. */
 export function createPaperOrganizer({ getPapers = () => [], getFolders = () => [],
-  getLabel = paper => paper.name, readTitle, movePaper, onComplete = () => {} } = {}) {
+  getLabel = paper => paper.name, readTitle, classifyBatch, checkAIReady = () => {}, movePaper, onComplete = () => {} } = {}) {
   let rows = [], page = 0, opening = 0, loading = false, reading = false, moving = false;
-  let stopped = false, readRun = 0, activeReads = 0, lastFocus = null;
+  let stopped = false, activeReads = 0, lastFocus = null, operation = null;
+  let existingFolders = [];
   const nodes = new Map();
   const heading = el('h2', { id: 'paperOrganizerTitle', text: tr('整理 PDF') });
-  const description = el('p', { class: 'po-description', text: tr('按文件名和本地标题建议文件夹。检查目标后再移动，文件名保持不变。') });
+  const description = el('p', { class: 'po-description', text: tr('由 AI 根据文件名、标题和你的要求建议文件夹。检查目标后再移动。') });
   const scope = el('select', { id: 'paperOrganizerScope', 'aria-label': tr('整理范围') },
     el('option', { value: 'root', text: tr('根目录未归类') }), el('option', { value: 'all', text: tr('全部论文') }));
   const search = el('input', { type: 'search', id: 'paperOrganizerSearch', placeholder: tr('搜索标题或文件路径'), 'aria-label': tr('搜索标题或文件路径') });
   const read = el('button', { type: 'button', class: 'po-button', id: 'paperOrganizerRead', text: tr('补充识别标题'), onclick: enrichTitles });
+  const instructions = el('input', { type: 'text', id: 'paperOrganizerInstructions', maxLength: 1000,
+    placeholder: tr('例如：按研究主题分两级，优先使用已有文件夹'), 'aria-label': tr('分类要求（可选）') });
+  const classify = el('button', { type: 'button', class: 'po-button primary', id: 'paperOrganizerClassify', text: tr('AI 分类'), onclick: classifyPapers });
   const selection = el('input', { type: 'checkbox', id: 'paperOrganizerSelect', onchange: () => {
-    for (const row of currentPage()) if (movable(row)) row.selected = selection.checked;
+    for (const row of currentPage()) if (movable(row)) setSelected(row, selection.checked);
     sync();
   } });
   const list = el('div', { class: 'po-list', id: 'paperOrganizerList', role: 'list' });
@@ -75,16 +44,24 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   const dialog = el('dialog', { class: 'paper-organizer', id: 'paperOrganizer', 'aria-labelledby': heading.id },
     el('div', { class: 'po-heading' }, iconEl('folder'), heading), description,
     el('div', { class: 'po-toolbar' }, scope, search, read),
-    el('p', { class: 'po-note', text: tr('补充识别会读取当前页文件的标题；扫描件可手动分类。') }),
+    el('div', { class: 'po-ai-toolbar' }, el('label', { for: instructions.id, text: tr('分类要求（可选）') }), instructions, classify),
+    el('p', { class: 'po-note', text: tr('AI 分类会读取标题，并将文件名、标题和相对目录发送给设置中的模型。纯图片文件依据已有标题或文件名判断。') }),
     el('div', { class: 'po-list-head' }, el('label', {}, selection, tr('选择本页可移动项')), count), list, datalist,
     el('div', { class: 'po-page' }, prev, pagination, next), status,
     el('p', { class: 'po-note', text: tr('同名冲突会保留原文件。停止只影响后续文件，已完成的移动不会撤销。') }),
     el('div', { class: 'po-actions' }, cancel, stop, apply));
   document.body.append(dialog);
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
-  dialog.addEventListener('close', () => { ++opening; ++readRun; stopped = true; lastFocus?.focus?.({ preventScroll: true }); });
+  dialog.addEventListener('close', () => {
+    ++opening; operation?.controller.abort(); operation = null; reading = false; stopped = true;
+    lastFocus?.focus?.({ preventScroll: true });
+  });
   scope.addEventListener('change', () => { page = 0; render(); });
   search.addEventListener('input', debounce(() => { page = 0; render(); }, 100));
+  instructions.addEventListener('input', () => {
+    for (const row of rows) if (!row.done && !row.edited) clearSuggestion(row);
+    status.textContent = tr('分类要求已更新，请重新运行 AI 分类。'); render();
+  });
 
   function filtered() {
     const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
@@ -101,6 +78,24 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   }
   function movable(row) { return !row.done && !row.moving && targetOf(row).valid; }
   function selectedRows() { return filtered().filter(row => row.selected && movable(row)); }
+  function setSelected(row, selected) {
+    row.selected = selected;
+    if (selected && row.aiState === 'review') {
+      row.edited = true;
+      row.reason = tr('已确认此建议，AI 不会覆盖');
+    }
+  }
+  function pendingRows() { return filtered().filter(row => !row.done && !row.edited && row.aiState !== 'complete'); }
+  function clearSuggestion(row) {
+    row.target = ''; row.selected = false; row.aiState = 'pending'; row.error = '';
+    row.reason = tr('等待 AI 分类，或手动指定文件夹');
+  }
+  function updateFolders() {
+    const folders = new Set(existingFolders);
+    for (const row of rows) { const target = validateTargetFolder(row.target); if (target.valid) folders.add(target.folder); }
+    datalist.replaceChildren(...[...folders].sort().map(value => el('option', { value })));
+    return [...folders];
+  }
   function syncRow(row, ui) {
     const target = targetOf(row);
     ui.checkbox.checked = row.selected && !row.done;
@@ -118,6 +113,9 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     const selected = eligible.filter(row => row.selected).length;
     scope.disabled = busy; search.disabled = busy;
     read.disabled = busy || activeReads > 0 || typeof readTitle !== 'function' || !shown.some(row => !row.done);
+    instructions.disabled = busy;
+    classify.disabled = busy || activeReads > 0 || typeof classifyBatch !== 'function' || !pendingRows().length;
+    classify.textContent = tr('AI 分类 {0} 篇', pendingRows().length);
     selection.disabled = busy || !eligible.length;
     selection.checked = !!eligible.length && selected === eligible.length;
     selection.indeterminate = selected > 0 && selected < eligible.length;
@@ -126,7 +124,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     count.textContent = tr('{0} 篇 · 已选择 {1} 篇', visible.length, selectedRows().length);
     pagination.textContent = tr('第 {0} / {1} 页', page + 1, pages);
     prev.disabled = busy || page === 0; next.disabled = busy || page + 1 >= pages;
-    apply.disabled = busy || !selectedRows().length || typeof movePaper !== 'function';
+    apply.disabled = busy || activeReads > 0 || !selectedRows().length || typeof movePaper !== 'function';
     apply.textContent = tr('移动选中的 {0} 个文件', selectedRows().length);
     stop.hidden = !moving && !reading;
     stop.disabled = stopped;
@@ -138,12 +136,12 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     page = Math.max(0, Math.min(page, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1)));
     nodes.clear(); list.replaceChildren();
     for (const row of currentPage()) {
-      const checkbox = el('input', { type: 'checkbox', 'aria-label': tr('选择 {0}', row.title), onchange: () => { row.selected = checkbox.checked; sync(); } });
+      const checkbox = el('input', { type: 'checkbox', 'aria-label': tr('选择 {0}', row.title), onchange: () => { setSelected(row, checkbox.checked); sync(); } });
       const title = el('strong', { class: 'po-paper-title', text: row.title });
       const reason = el('p', { class: 'po-reason' });
       const target = el('input', { type: 'text', value: row.target, list: datalist.id,
         placeholder: tr('选择或输入目标文件夹'), 'aria-label': tr('目标文件夹：{0}', row.title),
-        oninput: () => { row.target = target.value; row.edited = true; row.error = ''; row.selected = movable(row); sync(); } });
+        oninput: () => { row.target = target.value; row.edited = true; row.error = ''; row.reason = tr('已手动指定，AI 不会覆盖'); row.selected = movable(row); sync(); } });
       const root = el('div', { class: 'po-row', role: 'listitem', dataset: { path: row.from } }, checkbox,
         el('div', { class: 'po-paper' }, title, el('span', { class: 'po-source', text: row.from, title: row.from })),
         el('div', { class: 'po-target' }, target, reason));
@@ -154,8 +152,8 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   }
   function requestStop() {
     stopped = true;
-    if (reading) ++readRun;
-    status.textContent = moving ? tr('正在等待当前文件完成；之后停止，已移动文件会保留。') : tr('已停止后续识别；正在读取的文件会自行结束。');
+    operation?.controller.abort();
+    status.textContent = moving ? tr('正在等待当前文件完成；之后停止，已移动文件会保留。') : tr('已停止分类和标题读取；已完成的建议保留，文件未移动。');
     sync();
   }
   function close() {
@@ -165,48 +163,102 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   }
   async function enrichTitles() {
     if (loading || moving || reading || activeReads || typeof readTitle !== 'function') return;
-    const tasks = currentPage().filter(row => !row.done), run = ++readRun, opened = opening;
+    const tasks = currentPage().filter(row => !row.done), task = beginOperation();
+    for (const row of tasks) if (!row.edited) clearSuggestion(row);
+    try {
+      await readTitles(tasks, task, { force: true });
+      if (isCurrent(task)) status.textContent = tr('已识别 {0} / {1} 篇', tasks.length, tasks.length);
+    } catch (error) {
+      if (isCurrent(task)) status.textContent = tr('标题读取失败：{0}', error.message || String(error));
+    } finally { finishOperation(task); }
+  }
+  function beginOperation() {
+    const task = { controller: new AbortController(), opening };
+    operation = task; stopped = false; reading = true; sync();
+    return task;
+  }
+  function isCurrent(task) { return operation === task && task.opening === opening && dialog.open && !task.controller.signal.aborted; }
+  function finishOperation(task) {
+    if (operation !== task) return;
+    operation = null; reading = false;
+    if (dialog.open) { updateFolders(); render(); }
+  }
+  async function readTitles(targets, task, { force = false } = {}) {
+    if (typeof readTitle !== 'function') return;
+    const tasks = targets.filter(row => force || !row.titleRead);
     let index = 0, finished = 0;
-    stopped = false; reading = true; sync();
-    const current = () => run === readRun && dialog.open && !stopped;
     const worker = async () => {
-      while (current() && index < tasks.length) {
+      while (isCurrent(task) && index < tasks.length) {
         const row = tasks[index++];
         activeReads++;
-        let timer;
-        // If an adapter ignores cancellation, stop this queue at the deadline
-        // instead of starting more reads while the old PDF worker is still alive.
-        const readingTitle = Promise.resolve().then(() => readTitle(row.paper.url, row.paper.name));
-        readingTitle.finally(() => { activeReads--; if (dialog.open) sync(); }).catch(() => {});
+        let settled = false;
+        const readingTitle = Promise.resolve().then(() => readTitle(row.paper.url, row.paper.name, { signal: task.controller.signal }));
+        readingTitle.finally(() => { settled = true; activeReads--; if (dialog.open) sync(); }).catch(() => {});
         try {
-          const title = await Promise.race([readingTitle, new Promise((_, reject) => {
-            timer = setTimeout(() => reject(new Error(tr('标题读取超时，已停止后续识别'))), 12000);
-          })]);
-          if (!current()) return;
+          const title = await runWithDeadline(() => readingTitle, { signal: task.controller.signal, timeoutMs: 12000 });
+          if (!isCurrent(task)) return;
+          row.titleRead = true;
           if (typeof title === 'string' && title.trim()) {
             row.title = title.trim().slice(0, 320);
-            const proposal = classifyPaper({ name: row.paper.name, title: row.title });
-            row.reason = proposal.reason;
-            if (!row.edited) { row.target = proposal.folder; row.selected = movable(row); }
             row.error = '';
-          } else row.error = tr('未读到标题，可手动选择文件夹');
+            if (!row.edited) row.reason = tr('标题已读取，等待 AI 分类');
+          } else if (!row.edited) row.reason = tr('未读到标题，AI 将依据文件名判断');
         } catch (error) {
-          if (!current()) return;
-          row.error = tr('标题读取失败：{0}', error.message || String(error));
-          if (activeReads > 0 && String(error.message).includes(tr('标题读取超时，已停止后续识别'))) {
-            stopped = true; ++readRun;
+          if (!isCurrent(task)) return;
+          // A provider that ignores cancellation must not accumulate workers.
+          if (error.name === 'TimeoutError' && !settled) {
+            task.controller.abort();
+            status.textContent = tr('标题读取超时，已停止后续识别');
+            return;
           }
-        } finally { clearTimeout(timer); }
+          row.titleRead = true;
+          if (!row.edited) row.reason = tr('未读到标题，AI 将依据文件名判断');
+        }
         finished++;
-        if (dialog.open) { status.textContent = tr('已识别 {0} / {1} 篇', finished, tasks.length); render(); }
+        if (isCurrent(task)) { status.textContent = tr('正在读取标题 {0} / {1}…', finished, tasks.length); sync(); }
       }
     };
     await Promise.all([worker(), worker()]);
-    reading = false;
-    if (dialog.open) { if (stopped && opened === opening) status.textContent = tr('已停止后续识别；正在读取的文件会自行结束。'); sync(); }
+  }
+  async function classifyPapers() {
+    if (loading || moving || reading || activeReads || typeof classifyBatch !== 'function') return;
+    try { await checkAIReady(); }
+    catch (error) { status.textContent = error.message || String(error); return; }
+    if (!dialog.open || loading || reading || moving) return;
+    const tasks = pendingRows(), task = beginOperation();
+    let finished = 0, uncertain = 0;
+    const preferences = instructions.value.trim();
+    try {
+      for (let start = 0; start < tasks.length && isCurrent(task); start += PAPER_CLASSIFIER_BATCH_SIZE) {
+        const batch = tasks.slice(start, start + PAPER_CLASSIFIER_BATCH_SIZE);
+        for (const row of batch) clearSuggestion(row);
+        await readTitles(batch, task);
+        if (!isCurrent(task)) return;
+        status.textContent = tr('AI 正在分类 {0}–{1} / {2} 篇…', start + 1, start + batch.length, tasks.length);
+        const proposals = await classifyBatch({ papers: batch.map(row => ({ id: row.from, name: row.paper.name, title: row.title, path: row.from })),
+          folders: updateFolders(), instructions: preferences, signal: task.controller.signal });
+        if (!isCurrent(task)) return;
+        const byId = new Map(proposals.map(proposal => [proposal.id, proposal]));
+        for (const row of batch) {
+          const proposal = byId.get(row.from);
+          const valid = proposal && validateTargetFolder(proposal.folder).valid;
+          row.target = valid ? proposal.folder : '';
+          row.aiState = valid && proposal.selected ? 'complete' : 'review';
+          row.selected = !!(valid && proposal.selected && movable(row));
+          row.reason = valid && proposal.selected ? tr('AI 建议：{0}', proposal.reason)
+            : tr('需确认：{0}', proposal?.reason || tr('信息不足，请手动选择文件夹'));
+          if (row.aiState === 'review') uncertain++;
+        }
+        finished += batch.length;
+        updateFolders(); render();
+      }
+      if (isCurrent(task)) status.textContent = tr('AI 已分类 {0} 篇，{1} 篇需确认。检查建议后再移动。', finished, uncertain);
+    } catch (error) {
+      if (isCurrent(task)) status.textContent = tr('AI 分类失败：{0}。已完成的建议保留，可重试剩余项。', error.message || String(error));
+    } finally { finishOperation(task); }
   }
   async function applyMoves() {
-    if (loading || reading || moving || typeof movePaper !== 'function') return;
+    if (loading || reading || moving || activeReads || typeof movePaper !== 'function') return;
     const tasks = selectedRows().map(row => ({ row, from: row.from, to: targetOf(row).folder }));
     if (!tasks.length) return;
     moving = true; stopped = false; const moves = []; let failures = 0;
@@ -247,18 +299,18 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
         if (!from || seen.has(from)) continue;
         seen.add(from);
         const title = String(getLabel(paper) || paper.name || from);
-        const proposal = classifyPaper({ name: paper.name, title });
-        const row = { paper, from, title, target: proposal.folder, reason: proposal.reason, selected: false, edited: false, done: false, error: '' };
-        row.selected = movable(row); rows.push(row);
+        const row = { paper, from, title, target: '', reason: tr('等待 AI 分类，或手动指定文件夹'),
+          selected: false, edited: false, done: false, error: '', aiState: 'pending', titleRead: false };
+        rows.push(row);
         if (index % 100 === 99) { if (index === 99) render(); await pause(); if (revision !== opening || !dialog.open) return; }
       }
-      const folderNames = new Set(organizerFolders);
+      const folderNames = new Set();
       for (const folder of folders || []) {
         const value = typeof folder === 'string' ? folder : folder.path;
         const checked = validateTargetFolder(value);
         if (checked.valid) folderNames.add(checked.folder);
       }
-      datalist.replaceChildren(...[...folderNames].sort().map(value => el('option', { value })));
+      existingFolders = [...folderNames]; updateFolders();
     } catch (error) { if (revision === opening && dialog.open) status.textContent = tr('读取文件列表失败：{0}', error.message || String(error)); }
     finally { if (revision === opening && dialog.open) { loading = false; render(); search.focus(); } }
   }

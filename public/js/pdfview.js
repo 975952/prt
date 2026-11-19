@@ -5,6 +5,7 @@ import { orderSelectionRuns, clipSelectionRuns, selectionTextOf, selectionRunAt 
 import { applyNightReading, NIGHT_PAPER } from './pdf-reading-theme.js';
 import { cleanPaperTitle, firstPageTitle } from './paper-titles.js';
 import { createPaperAccess } from './paper-access.js';
+import { runWithDeadline } from './task-deadline.js';
 
 let pdfjsLib = null;
 
@@ -310,15 +311,13 @@ export function createPdfPaperAccess({ loadPdfjs = initPdfjs, ...cacheOptions } 
 export const paperAccess = createPdfPaperAccess();
 
 /** Read local title metadata/first page only, with a deadline and worker cleanup. */
-export async function readPdfTitle(url, name) {
-  const lib = await initPdfjs();
+export async function readPdfTitle(url, name, { signal } = {}) {
+  const lib = await runWithDeadline(() => initPdfjs(), { signal, timeoutMs: 10000 });
   const task = lib.getDocument({ url, cMapUrl: '/vendor/cmaps/', cMapPacked: true,
     standardFontDataUrl: '/vendor/standard_fonts/', wasmUrl: '/vendor/wasm/',
     useSystemFonts: true, isEvalSupported: false, disableAutoFetch: true, disableStream: true });
-  let timer;
   try {
-    return await Promise.race([
-      (async () => {
+    return await runWithDeadline(async () => {
         const pdf = await task.promise;
         const metadata = await pdf.getMetadata().catch(() => null);
         const title = cleanPaperTitle(metadata?.info?.Title, name)
@@ -327,11 +326,8 @@ export async function readPdfTitle(url, name) {
         const page = await pdf.getPage(1);
         const text = await page.getTextContent();
         return firstPageTitle(text.items, page.view[3] - page.view[1], name);
-      })(),
-      new Promise((_, reject) => { timer = setTimeout(() => reject(new Error('PDF title timed out')), 10000); }),
-    ]);
+    }, { signal, timeoutMs: 10000 });
   } finally {
-    clearTimeout(timer);
     await task.destroy().catch(() => {});
   }
 }

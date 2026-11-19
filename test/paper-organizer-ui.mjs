@@ -1,6 +1,6 @@
 /** Library organizer preview, safe partial moves and reader continuity.
  * node test/paper-organizer-ui.mjs [--desktop]
- * Uses disposable data and synthetic PDFs; all model/external requests are blocked. */
+ * Uses disposable data, synthetic PDFs and a loopback SSE model double. */
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -11,6 +11,7 @@ import puppeteer from 'puppeteer-core';
 import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
 import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 import { writeTitlePdf } from './fixtures/make-title-pdf.mjs';
+import { startOrganizerTestModel } from './_organizer-test-model.mjs';
 
 const desktop = process.argv.includes('--desktop');
 fs.mkdirSync(SANDBOX, { recursive: true });
@@ -37,7 +38,7 @@ const checks = [], errors = [], requests = [], geometry = [], observations = {};
 const pass = label => { checks.push(label); console.log(`PASS ${label}`); };
 const row = relative => `#paperOrganizerList .po-row[data-path=${JSON.stringify(relative)}]`;
 const moveRequests = () => requests.filter(item => item.path === '/api/move' && item.method === 'POST');
-let base, reader, browser, page, metadataReading = false, activePdfReads = 0, maxPdfReads = 0;
+let base, reader, browser, page, model, metadataReading = false, activePdfReads = 0, maxPdfReads = 0;
 const metadataRequests = new Set();
 async function api(route, body) {
   const response = await fetch(`${base}${route}`, body === undefined ? undefined : {
@@ -92,6 +93,16 @@ async function screenshotLayout(width) {
 }
 
 try {
+  model = await startOrganizerTestModel(record => {
+    const input = JSON.parse(record.body.messages.at(-1).content);
+    model.reply(record, { items: input.papers.map(paper => ({ id: paper.id,
+      folder: paper.path === activeName ? 'Abstract structures/Proof methods'
+        : paper.path === conflictName ? '数学/数值分析'
+        : paper.path === 'metadata-paper.pdf' ? 'Visual reasoning/Scene understanding' : 'Uncertain/Review',
+      confidence: ['Unclassified Notes.pdf', '12345.pdf'].includes(paper.path) ? 0.3 : 0.94,
+      reason: `Synthetic AI category based on ${paper.title}`,
+    })) });
+  });
   const probe = http.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
   base = `http://127.0.0.1:${port}`;
@@ -110,6 +121,7 @@ try {
   assert.equal(path.resolve(listing.dir), papersDir);
   assert.deepEqual(listing.papers.map(paper => paper.path).sort(), fixtures.map(([relative]) => relative).sort());
   const activePaper = listing.papers.find(paper => paper.path === activeName);
+  await api('/api/config', { baseURL: model.baseURL, model: 'organizer-ui-synthetic', apiKey: 'SYNTHETIC_ORGANIZER_UI_KEY' });
   for (const asset of ['js/app.js', 'js/paper-organizer.js', 'paper-organizer.css']) {
     assert.equal(await fetch(`${base}/${asset}`).then(response => response.text()), fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8'));
   }
@@ -122,7 +134,7 @@ try {
   page.on('request', request => {
     const url = new URL(request.url());
     if (/^https?:$/.test(url.protocol) && url.origin !== base
-        || ['/api/chat', '/api/web-search', '/api/ref-search', '/api/import-pdf'].includes(url.pathname)) {
+        || ['/api/web-search', '/api/ref-search', '/api/import-pdf'].includes(url.pathname)) {
       errors.push(`Unexpected external/model request: ${url.origin}${url.pathname}`); return request.abort();
     }
     if (url.origin === base) requests.push({ path: url.pathname, method: request.method(), query: url.search,
@@ -150,17 +162,16 @@ try {
   await organizer();
   assert.equal(await page.$eval('#paperOrganizerScope', node => node.value), 'root');
   assert.equal(await page.$$eval('#paperOrganizerList .po-row', rows => rows.length), 5);
-  assert.deepEqual(await page.$eval(row(activeName), node => ({ target: node.querySelector('.po-target input').value,
-    selected: node.querySelector('input[type="checkbox"]').checked })), { target: '数学/线性代数', selected: true });
-  for (const relative of ['Unclassified Notes.pdf', '12345.pdf', 'metadata-paper.pdf']) {
+  for (const relative of [activeName, conflictName, 'Unclassified Notes.pdf', '12345.pdf', 'metadata-paper.pdf']) {
     assert.deepEqual(await page.$eval(row(relative), node => ({ target: node.querySelector('.po-target input').value,
       selected: node.querySelector('input[type="checkbox"]').checked })), { target: '', selected: false });
   }
   await wait(250);
   assert.equal(requests.filter(item => item.path === '/api/pdf').length, beforePreview, 'opening preview does not read PDFs');
   assert.equal(moveRequests().length, 0);
+  assert.equal(model.requests.length, 0, 'preview does not ask the model to classify');
   for (const [relative, hash] of originalHashes) assert.equal(digest(relative), hash);
-  pass('preview suggests filename topics, leaves unknowns unselected, and performs no PDF reads or moves');
+  pass('preview leaves every destination empty and unselected without PDF reads, model calls or moves');
   await screenshotLayout(1400); await screenshotLayout(480); await page.setViewport({ width: 1400, height: 940 });
   pass('organizer remains within the viewport at 1400px and 480px without horizontal overflow');
   await page.select('#paperOrganizerScope', 'all');
@@ -178,10 +189,12 @@ try {
     && /已识别/.test(document.querySelector('#paperOrganizer .po-status').textContent));
   metadataReading = false;
   assert.ok(maxPdfReads > 0 && maxPdfReads <= 2, `observed ${maxPdfReads} concurrent PDF reads`);
-  assert.equal(await page.$eval(`${row('metadata-paper.pdf')} .po-target input`, node => node.value), '计算机/计算机视觉');
+  assert.equal(await page.$eval(`${row('metadata-paper.pdf')} .po-target input`, node => node.value), '');
+  assert.equal(await page.$eval(`${row('metadata-paper.pdf')} .po-paper-title`, node => node.textContent), 'Computer Vision Image Recognition');
+  assert.equal(model.requests.length, 0, 'title extraction alone does not classify');
   assert.equal(moveRequests().length, 0);
   for (const [relative, hash] of originalHashes) assert.equal(digest(relative), hash);
-  pass('optional title reading recognizes metadata with at most two PDF reads and still moves no files');
+  pass('optional title reading extracts metadata with at most two PDF reads without inventing categories or moving files');
   await closeOrganizer();
 
   await page.locator(`#homeList [data-path=${JSON.stringify(activeName)}] .home-item-go`).click();
@@ -215,6 +228,25 @@ try {
   assert.equal((await progressSaved).status(), 200);
   const savedProgress = (await api('/api/state')).docs[activePaper.docId];
   await organizer();
+  await page.$eval('#paperOrganizerInstructions', node => {
+    node.value = 'SYNTHETIC_CUSTOM_RULE: group by research method and reuse existing folders when appropriate.';
+    node.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await page.locator('#paperOrganizerClassify').click();
+  await page.waitForFunction(() => document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false'
+    && [...document.querySelectorAll('#paperOrganizerList .po-target input')].some(node => node.value));
+  assert.equal(model.requests.length, 1);
+  const classificationInput = JSON.parse(model.requests[0].body.messages.at(-1).content);
+  assert.equal(model.requests[0].body.model, 'organizer-ui-synthetic');
+  assert.ok(classificationInput.classificationInstructions.includes('SYNTHETIC_CUSTOM_RULE'));
+  assert.ok(classificationInput.existingFolders.includes('数学/数值分析'));
+  assert.equal(classificationInput.papers.find(paper => paper.path === 'metadata-paper.pdf').title, 'Computer Vision Image Recognition');
+  assert.equal(await page.$eval(`${row(activeName)} .po-target input`, node => node.value), 'Abstract structures/Proof methods');
+  assert.equal(await page.$eval(`${row(conflictName)} .po-target input`, node => node.value), '数学/数值分析');
+  assert.equal(await page.$eval(`${row('Unclassified Notes.pdf')} input[type="checkbox"]`, node => node.checked), false);
+  assert.equal(moveRequests().length, 0);
+  assert.equal(requests.filter(request => request.path === '/api/chat').length, 1);
+  pass('explicit AI classification uses the configured model, custom instructions and extracted titles for new and existing folders without moving files');
   await editTarget(activeName, 'Reading/Linear algebra');
   await selectOnly([activeName, conflictName]);
   await applyAndWait(2);
@@ -268,7 +300,7 @@ try {
   const final = (await api('/api/papers')).papers;
   assert.equal(final.find(paper => paper.path === movedActive).docId, activePaper.docId);
   assert.deepEqual(errors, []);
-  pass('reload shows the new folders and stable document identity without stale cards or external/model requests');
+  pass('reload shows new folders and stable document identity without stale cards or unexpected model requests');
   await page.locator(`#homeList [data-path=${JSON.stringify(movedActive)}] .home-item-go`).click();
   await page.waitForFunction(() => window.__state?.viewerDocId === window.__state?.doc?.docId && window.__viewer?.pdf);
   await page.evaluate(async () => {
@@ -321,6 +353,8 @@ try {
   await page?.screenshot({ path: path.join(scratch, 'failure.png') }).catch(() => {});
   console.error(`Evidence: ${scratch}`); throw error;
 } finally {
-  fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ desktop, checks, errors, requests, geometry, observations, maxPdfReads }, null, 2), 'utf8');
+  fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ desktop, checks, errors, requests, geometry, observations, maxPdfReads,
+    model: model?.snapshot() }, null, 2), 'utf8');
   await browser?.close(); if (desktop) await stopChild(reader); else reader?.kill();
+  await model?.close();
 }
