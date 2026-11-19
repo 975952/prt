@@ -7,7 +7,7 @@ import { createAgentMotion } from './agent-motion.js';
 import { windowStorage } from './window-storage.js';
 
 /** UI only: the caller owns conversation scope, persistence, and document navigation. */
-export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
+export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, onOpenPapers,
   onContinue, onRestore, onNew, onStartSearch, onResume, onHistory, onLanding, onSessionSelect, onSettings,
   getPapers = () => [], onNameChange, onProfileChange } = {}) {
   const byId = id => document.getElementById(id);
@@ -337,6 +337,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   ui.agentPapersToggle.addEventListener('click', () => {
     if (busy || transitioning) return;
     const open = ui.agentPaperPicker.hidden;
+    if (open) onOpenPapers?.();
     closeName(); ui.agentPaperPicker.hidden = !open;
     ui.agentPapersToggle.setAttribute('aria-expanded', String(open));
     if (open) { void refreshPapers(); ui.agentPaperSearch.focus({ preventScroll: true }); }
@@ -349,6 +350,6 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper,
   setProfile(profile); setView(view);
   return { setView, setName, setProfile, setLanding, setTransitioning, showHandoff, hideHandoff, showNameSetup,
     hasProfileDraft: settings.isDirty, resetProfileDraft: settings.reset,
-    closeNameSetup: () => closeName(), refreshPapers, captureRect, animateFrom, setRecentConversations,
+    closeNameSetup: () => closeName(), closePapers, refreshPapers, captureRect, animateFrom, setRecentConversations,
     beginPaperMotion: node => motion.begin(node), endPaperMotion: motion.end, transitionLayout };
 }

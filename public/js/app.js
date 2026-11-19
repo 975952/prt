@@ -2535,6 +2535,7 @@ function initAgentWorkspace() {
     },
     onBack: async () => { await parkAgentConversation(); showHome(); },
     onOpenPaper: openAgentPaper,
+    onOpenPapers: sessionsCloseOverlays,
     onContinue: dismissAgentHandoff,
     onRestore: () => chooseAgentLocalConversation(false),
     onNew: () => chooseAgentLocalConversation(true),
@@ -7910,6 +7911,7 @@ function sessionsContext() {
     scopeKey: () => sessionScopeKey(),
     scopeMode: () => effectiveSessionScopeMode(),
     isAgentWorkspace: () => agentSessionOverride === 'global',
+    onOpenHistory: () => agentWorkspace?.closePapers(),
     acceptSessionRow: (row) => agentSessionOverride !== 'global' || isAgentGlobalSessionRow(row),
     // 历史行里的 fileKey 是服务端规范化后的键（全局 default → default-<hash>）：
     // sessions.js 用它在两种排列下判断「这一行是不是当前归属的副本」

@@ -849,6 +849,7 @@ function renderMemoryBtn() {
 
 async function openHistory() {
   if (!st.ctx?.hasDoc?.()) return;
+  st.ctx.onOpenHistory?.();
   st.historyOpen = true;
   st.renameSid = null;
   st.histMode = readHistMode();
