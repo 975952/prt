@@ -1,6 +1,10 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  '保持原样': 'Keep as is',
+  '合理分类保持原样，只整理需要调整的内容。新分类只用一层文件夹。': 'Keep well-organized PDFs in place. Organize only what needs changing, using flat folders.',
+  '先看文件名和所在目录；不明确时才读第一页。重新分类覆盖旧预览，确认后只移动需要调整的文件。': 'Use filenames and current folders first; read page one only when unclear. Each run replaces the preview; confirmation moves only files that need changes.',
+  '{0} 篇保持原样，{1} 篇需要移动，{2} 篇待确认。': '{0} kept in place, {1} to move, {2} need review.',
   '调整 Library 侧栏宽度': 'Resize Library sidebar',
   '拖动调整宽度，双击恢复默认；方向键微调': 'Drag to resize; double-click to reset; arrow keys to adjust',
   "分类只用一层文件夹，请勿输入 / 或反斜线。": "Use a single folder name without slashes.",

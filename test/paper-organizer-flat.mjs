@@ -7,11 +7,11 @@ const answer = value => JSON.stringify(value);
 const initial = { groups: [{ folder: 'Vision', papers: [1] }, { folder: 'Electronics', papers: [2] }], unknown: [3, 4] };
 let checks = 0;
 async function check(name, fn) { await fn(); console.log(`PASS ${name}`); checks++; }
-await check('names alone classify without opening any PDF or leaking old titles and paths', async () => {
+await check('names and current folders classify without opening PDFs or sending stale titles', async () => {
   let calls = 0;
   const result = await groupPaperCollection({ papers: papers.slice(0, 2), readFirstPage: () => { throw Error('must not read'); }, chat: async ({ messages }) => {
-    calls++; assert.ok(!JSON.stringify(messages).includes('STALE')); const payload = input(messages);
-    assert.deepEqual(payload.papers, papers.slice(0, 2).map((p, i) => ({ index: i + 1, name: p.name })));
+    calls++; assert.ok(!JSON.stringify(messages).includes('STALE TITLE')); const payload = input(messages);
+    assert.deepEqual(payload.papers, papers.slice(0, 2).map((p, i) => ({ index: i + 1, name: p.name, currentFolder: 'STALE FOLDER' })));
     return answer({ groups: [{ folder: 'Research', papers: [2, 1] }], unknown: [] });
   } });
   assert.equal(calls, 1); assert.deepEqual(result.groups[0].ids, ['1', '0']);
@@ -85,3 +85,14 @@ await check('model timeout keeps the initial accepted preview and stops regroupi
   await assert.rejects(work, { name: 'TimeoutError' }); assert.equal(updates, 1);
 });
 console.log(`PASS ${checks} filename-first classification checks; no real model requests`);
+await check('already organized files stay put, including existing nested folders, without page reads', async () => {
+  const result = await groupPaperCollection({ papers, readFirstPage: () => { throw Error('must not read kept papers'); },
+    chat: async ({ messages }) => {
+      assert.ok(input(messages).papers.every(p => p.currentFolder === 'STALE FOLDER'));
+      return answer({ groups: [{ folder: 'New topic', papers: [2] }], keep: [1, 3, 4], unknown: [] });
+    } });
+  assert.deepEqual(result.keep, ['0', '2', '3']); assert.deepEqual(result.groups[0].ids, ['1']);
+  assert.throws(() => parsePaperGroups(answer({ ...initial, keep: [1] }), papers));
+  assert.throws(() => parsePaperGroups(answer({ groups: [], keep: [1, 2, 3, 5], unknown: [] }), papers));
+  assert.throws(() => parsePaperGroups(answer({ groups: [], keep: 'all', unknown: [] }), papers));
+});

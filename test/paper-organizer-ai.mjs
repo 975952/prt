@@ -26,8 +26,8 @@ globalThis.fetch = () => { throw new Error('This suite must not make network req
 try {
   await check('classification prompt is registered with version and no topic whitelist', () => {
     assert.equal(PAPER_CLASSIFIER_BATCH_SIZE, 12); assert.equal(PAPER_CLASSIFIER_MIN_CONFIDENCE, 0.75);
-    assert.equal(getManifest()['organizer.classify'], '3.0.0');
-    assert.equal(getManifest()['organizer.plan'], '2.0.0'); assert.equal(getManifest()['organizer.summarize'], '1.0.0');
+    assert.equal(getManifest()['organizer.classify'], '4.0.0');
+    assert.equal(getManifest()['organizer.plan'], '3.0.0'); assert.equal(getManifest()['organizer.summarize'], '1.0.0');
     const def = getPromptDef('organizer.classify'); assert.equal(def.historyMax, 0); assert.deepEqual(def.memory, []);
     const sys = def.system.map(block => block.text).join('\n');
     assert.match(sys, /不可信资料/); assert.match(sys, /不能声称已经创建目录/); assert.match(sys, /不要套用固定学科清单/);

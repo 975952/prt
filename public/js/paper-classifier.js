@@ -186,6 +186,9 @@ export function parsePaperClassifications(output, papers, plan) {
     const unknown = reason => ({ id, folder: '', confidence: 0, reason, selected: false });
     const item = byId.get(id);
     if (!item) return unknown(tr('AI 未返回该论文的分类，请重试或手动选择'));
+    if (item.keep === true && Object.keys(item).every(key => ['id', 'keep'].includes(key))) {
+      return { id, folder: '', confidence: 1, reason: tr('保持原样'), selected: false, keep: true };
+    }
     if (Object.keys(item).some(key => !['id', 'folder', 'confidence', 'reason'].includes(key))
       || typeof item.folder !== 'string' || typeof item.reason !== 'string' || item.reason.length > 2000
       || typeof item.confidence !== 'number' || !Number.isFinite(item.confidence)
@@ -215,9 +218,9 @@ export async function classifyPaperBatch({ papers, plan, instructions = '', sign
 
 export function parsePaperGroups(output, papers) {
   const parsed = parseJson(output), seen = new Set(), names = new Set();
-  if (!record(parsed) || Object.keys(parsed).some(key => !['groups', 'unknown'].includes(key))
+  if (!record(parsed) || Object.keys(parsed).some(key => !['groups', 'unknown', 'keep'].includes(key))
     || !Array.isArray(parsed.groups) || parsed.groups.length > Math.min(6, papers.length)
-    || !Array.isArray(parsed.unknown)) throw fail('schema', tr('AI 分类结果结构无效，请重试'));
+    || !Array.isArray(parsed.unknown) || parsed.keep !== undefined && !Array.isArray(parsed.keep)) throw fail('schema', tr('AI 分类结果结构无效，请重试'));
   const take = index => {
     if (!Number.isInteger(index) || index < 1 || index > papers.length || seen.has(index)) {
       throw fail('identity', tr('AI 分类结果包含未知或重复的论文标识，请重试'));
@@ -233,14 +236,19 @@ export function parsePaperGroups(output, papers) {
     names.add(key); return { folder: group.folder, ids: group.papers.map(take) };
   });
   const unknown = parsed.unknown.map(take);
+  const keep = (parsed.keep || []).map(take);
   if (seen.size !== papers.length) throw fail('identity', tr('AI 未覆盖全部文件，请重新分类'));
-  return { groups, unknown };
+  return { groups, unknown, keep };
 }
 
 /** Name-only first pass; only unresolved papers may access page one. No file mutations. */
 export async function groupPaperCollection({ papers, instructions = '', chat, signal, readFirstPage,
   timeoutMs = 180000, onProgress = () => {}, onUpdate = () => {} } = {}) {
-  const inputs = paperInputs(papers, PAPER_PLANNER_MAX_PAPERS).map(paper => ({ ...paper, title: '', path: '' }));
+  const inputs = paperInputs(papers, PAPER_PLANNER_MAX_PAPERS).map(paper => ({ ...paper, title: '' }));
+  const currentFolder = paper => {
+    const path = paper.path.replace(/\\/g, '/');
+    return path.includes('/') ? path.slice(0, path.lastIndexOf('/')) : '';
+  };
   const request = messages => requestModel(messages, { chat, signal, timeoutMs });
   const evidence = new Map(), errors = new Map(), textPages = new Map();
   const inspectImage = async (original, page) => {
@@ -258,22 +266,23 @@ export async function groupPaperCollection({ papers, instructions = '', chat, si
     onProgress({ stage: 'group' });
     if (inputs.length <= PAPER_PLANNER_CHUNK_SIZE) {
       return parsePaperGroups(await request(paperGroupingMessages({ instructions: text(instructions, 2000),
-        papers: inputs.map((paper, index) => ({ index: index + 1, name: paper.name,
+        papers: inputs.map((paper, index) => ({ index: index + 1, name: paper.name, currentFolder: currentFolder(paper),
           ...(evidence.has(paper.id) ? { evidence: evidence.get(paper.id) } : {}) })) })), inputs);
     }
     // Large libraries still use one shared vocabulary covering the entire collection.
     const enriched = inputs.map(paper => ({ ...paper, title: evidence.get(paper.id) || '' }));
-    const plan = await planPaperFolders({ papers: enriched, instructions, chat, signal, timeoutMs });
-    const groups = plan.folders.map(folder => ({ folder: folder.path, ids: [] })), unknown = [];
+    const plan = await planPaperFolders({ papers: enriched, folders: [...new Set(inputs.map(currentFolder).filter(Boolean))], instructions, chat, signal, timeoutMs });
+    const groups = plan.folders.map(folder => ({ folder: folder.path, ids: [] })), unknown = [], keep = [];
     for (let at = 0; at < enriched.length; at += PAPER_CLASSIFIER_BATCH_SIZE) {
       const items = await classifyPaperBatch({ papers: enriched.slice(at, at + PAPER_CLASSIFIER_BATCH_SIZE), plan,
         instructions, chat, signal, timeoutMs });
       for (const item of items) {
-        if (item.selected) groups.find(group => group.folder === item.folder).ids.push(item.id);
+        if (item.keep) keep.push(item.id);
+        else if (item.selected) groups.find(group => group.folder === item.folder).ids.push(item.id);
         else unknown.push(item.id);
       }
     }
-    return { groups: groups.filter(group => group.ids.length), unknown };
+    return { groups: groups.filter(group => group.ids.length), unknown, keep };
   };
   if (!inputs.length) return { groups: [], unknown: [], errors };
   let result = await group(); onUpdate(result);

@@ -77,7 +77,7 @@ try {
   await page.goto(base + '/?topbar=static', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__state?.papers.length === 2);
   await organize();
-  assert.ok(!exists('Old')); assert.ok(!exists('Empty')); assert.equal(fs.readFileSync(path.join(papers, 'Keep/note.txt'), 'utf8'), 'KEEP');
+  assert.ok(!exists('Old')); assert.ok(exists('Empty')); assert.equal(fs.readFileSync(path.join(papers, 'Keep/note.txt'), 'utf8'), 'KEEP');
   assert.deepEqual(['Unified/a.pdf', 'Unified/b.pdf'].map(digest), hashes);
   pass('applying classification replaces old empty category trees and preserves all PDF bytes and non-PDF files');
   await page.reload({ waitUntil: 'domcontentloaded' }); await page.waitForFunction(() => window.__state?.papers.length === 2);

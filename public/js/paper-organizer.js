@@ -18,7 +18,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   let existingFolders = [], activePlan = null;
   const nodes = new Map();
   const heading = el('h2', { id: 'paperOrganizerTitle', text: tr('整理 PDF') });
-  const description = el('p', { class: 'po-description', text: tr('按名字分类，相似内容放一起。只用一层文件夹，确认后移动。') });
+  const description = el('p', { class: 'po-description', text: tr('合理分类保持原样，只整理需要调整的内容。新分类只用一层文件夹。') });
   const scope = el('select', { id: 'paperOrganizerScope', 'aria-label': tr('整理范围') },
     el('option', { value: 'all', text: tr('全部论文') }), el('option', { value: 'root', text: tr('根目录未归类') }));
   const search = el('input', { type: 'search', id: 'paperOrganizerSearch', placeholder: tr('搜索标题或文件路径'), 'aria-label': tr('搜索标题或文件路径') });
@@ -48,7 +48,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     el('div', { class: 'po-toolbar' }, scope, search, classify),
     el('details', { class: 'po-options' }, el('summary', { text: tr('分类偏好') }),
       el('div', { class: 'po-ai-toolbar' }, instructions)),
-    el('p', { class: 'po-note', text: tr('先发送文件名；无法判断时才发送第一页文字或图片。每次重新分类覆盖旧方案。') }),
+    el('p', { class: 'po-note', text: tr('先看文件名和所在目录；不明确时才读第一页。重新分类覆盖旧预览，确认后只移动需要调整的文件。') }),
     planPreview, el('div', { class: 'po-list-head' }, el('label', {}, selection, tr('选择本页可移动项')), count), list, datalist,
     el('div', { class: 'po-page' }, prev, pagination, next), status,
     el('div', { class: 'po-actions' }, cancel, stop, apply));
@@ -73,7 +73,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
       && terms.every(term => `${row.title} ${row.from}`.toLocaleLowerCase().includes(term)))
       .sort((a, b) => {
         const groups = activePlan?.plan.folders.map(folder => folder.path) || [];
-        const rank = row => row.target ? (groups.indexOf(row.target) < 0 ? groups.length : groups.indexOf(row.target)) : groups.length + 1;
+        const rank = row => row.keep ? groups.length + 2 : row.target ? (groups.indexOf(row.target) < 0 ? groups.length : groups.indexOf(row.target)) : groups.length + 1;
         return rank(a) - rank(b) || (a.target || '').localeCompare(b.target || '') || (a.order ?? 0) - (b.order ?? 0);
       });
   }
@@ -81,11 +81,11 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   function targetOf(row) {
     const result = validateTargetFolder(row.target);
     if (result.valid && result.folder.toLocaleLowerCase() === parentFolder(row.from).toLocaleLowerCase()) {
-      return { ...result, valid: false, error: tr('已在此文件夹中') };
+      return { ...result, valid: false, error: tr('保持原样') };
     }
     return result;
   }
-  function movable(row) { return !row.done && !row.moving && targetOf(row).valid; }
+  function movable(row) { return !row.keep && !row.done && !row.moving && targetOf(row).valid; }
   function selectedRows() { return filtered().filter(row => row.selected && movable(row)); }
   function setSelected(row, selected) {
     row.selected = selected;
@@ -100,6 +100,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   }
   function clearSuggestion(row) {
     row.target = ''; row.selected = false; row.aiState = 'pending'; row.error = '';
+    row.keep = false;
     row.reason = '';
   }
   function updateFolders() {
@@ -153,10 +154,11 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     ui.checkbox.checked = row.selected && !row.done;
     ui.checkbox.disabled = loading || moving || reading || !movable(row);
     ui.target.disabled = loading || moving || reading || row.done;
-    ui.target.setAttribute('aria-invalid', String(!!row.target && !target.valid));
+    const unchanged = row.keep || (!!row.target && row.target.toLocaleLowerCase() === parentFolder(row.from).toLocaleLowerCase());
+    ui.target.setAttribute('aria-invalid', String(!unchanged && !!row.target && !target.valid));
     ui.root.dataset.status = row.done ? 'done' : row.error ? 'error' : row.moving ? 'moving' : '';
     ui.reason.textContent = row.done ? tr('已移动到：{0}', row.newPath) : row.moving ? tr('正在移动…')
-      : row.error || (!target.valid && row.target ? target.error : row.reason);
+      : row.error || (unchanged ? tr('保持原样') : !target.valid && row.target ? target.error : row.reason);
     ui.reason.hidden = !ui.reason.textContent;
     ui.title.textContent = row.title;
     ui.title.title = row.title;
@@ -191,7 +193,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     nodes.clear(); list.replaceChildren();
     let previousGroup = null;
     for (const row of currentPage()) {
-      const group = row.target || tr('待分类');
+      const group = row.keep ? tr('保持原样') : row.target || tr('待分类');
       if (group !== previousGroup && activePlan) {
         list.append(el('div', { class: 'po-section-title', text: group })); previousGroup = group;
       }
@@ -200,7 +202,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
       const reason = el('p', { class: 'po-reason' });
       const target = el('input', { type: 'text', value: row.target, list: datalist.id,
         placeholder: tr('分类名称'), 'aria-label': tr('目标文件夹：{0}', row.title),
-        oninput: () => { row.target = target.value; row.edited = true; row.error = ''; row.reason = tr('已手动调整；重新分类会替换'); row.selected = movable(row); sync(); renderPlan(); } });
+        oninput: () => { row.keep = false; row.target = target.value; row.edited = true; row.error = ''; row.reason = tr('已手动调整；重新分类会替换'); row.selected = movable(row); sync(); renderPlan(); } });
       const root = el('div', { class: 'po-row', role: 'listitem', dataset: { path: row.from } }, checkbox,
         el('div', { class: 'po-paper' }, title, el('span', { class: 'po-source', text: row.from, title: row.from })),
         el('div', { class: 'po-target' }, target, reason));
@@ -263,6 +265,10 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
         const row = byId.get(id);
         if (row) { row.aiState = 'review'; row.reason = tr('待确认'); row.order = order++; }
       }
+      for (const id of result.keep || []) {
+        const row = byId.get(id);
+        if (row) { row.keep = true; row.target = ''; row.aiState = 'complete'; row.reason = tr('保持原样'); row.order = order++; }
+      }
       activePlan = { key, plan: { folders: result.groups.map(group => ({ path: group.folder })), maxDepth: 1, paperCount: tasks.length } };
       planPreview.open = false;
       updateFolders(); render();
@@ -277,8 +283,9 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
         } });
       if (!isCurrent(task)) return;
       accept(result);
-      for (const row of tasks) if (!row.target && result.errors?.has(row.from)) row.reason = result.errors.get(row.from);
-      status.textContent = tr('{0} 个分类，{1} 篇待确认。确认后移动。', result.groups.length, result.unknown.length);
+      for (const row of tasks) if (!row.keep && !row.target && result.errors?.has(row.from)) row.reason = result.errors.get(row.from);
+      const kept = tasks.filter(row => row.keep || row.target && row.target.toLocaleLowerCase() === parentFolder(row.from).toLocaleLowerCase()).length;
+      status.textContent = tr('{0} 篇保持原样，{1} 篇需要移动，{2} 篇待确认。', kept, tasks.filter(movable).length, result.unknown.length);
     } catch (error) {
       if (isCurrent(task)) status.textContent = error.name === 'TimeoutError'
         ? tr('模型响应超时，已完成的分类保留。可重新分类。')
@@ -307,7 +314,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
       } catch (error) { failures++; row.error = tr('移动失败：{0}', error.message || String(error)); }
       finally { row.moving = false; sync(); renderPlan(); }
     }
-    }, { all: scope.value === 'all' && !search.value.trim() }); }
+    }, { all: false }); }
     catch (error) { operationError = tr('整理未完成：{0}。可在设置中回退或重试。', error.message || String(error)); }
     try { if (moves.length) await onComplete(moves); }
     catch (error) { status.textContent = tr('文件已移动，但列表刷新失败：{0}', error.message || String(error)); moving = false; sync(); return; }

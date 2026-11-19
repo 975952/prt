@@ -15,6 +15,7 @@ fs.mkdirSync(SANDBOX, { recursive: true });
 const scratch = fs.mkdtempSync(path.join(SANDBOX, `flat-organizer-${desktop ? 'desktop' : 'node'}-`));
 const data = assertIsolatedDataDir(path.join(scratch, 'data')), papers = path.join(scratch, 'papers');
 fs.mkdirSync(data); fs.mkdirSync(papers);
+fs.mkdirSync(path.join(papers, 'Unrelated empty folder'));
 const names = ['Old/Nested/Vision networks.pdf', 'Old/Circuit design.pdf', 'Old/1234.pdf', 'Old/5678.pdf'];
 for (const relative of names) {
   fs.mkdirSync(path.dirname(path.join(papers, relative)), { recursive: true });
@@ -52,6 +53,10 @@ try {
     }
     assert.equal(input.task, 'group');
     assert.ok(input.papers.every(p => !('path' in p) && !('title' in p)));
+    assert.ok(input.papers.every(p => typeof p.currentFolder === 'string'));
+    if (mode === 'keep-all') return model.reply(record, { groups: [], keep: input.papers.map(p => p.index), unknown: [] });
+    if (mode === 'keep-most') return model.reply(record, { groups: [{ folder: 'Adjusted', papers: [input.papers[0].index] }],
+      keep: input.papers.slice(1).map(p => p.index), unknown: [] });
     if (mode === 'replace') return model.reply(record, { groups: [{ folder: 'New research', papers: input.papers.map(p => p.index).reverse() }], unknown: [] });
     const groups = new Map(), unknown = [];
     for (const paper of input.papers) {
@@ -138,6 +143,21 @@ try {
   assert.ok(second.papers.every(p => /^(Vision|Electronics)\//.test(p.path)));
   assert.ok(!second.folders.some(folder => folder.path === 'New research'));
   pass('classify again after moving uses current PDF URLs and replaces the previous physical categories');
+  mode = 'keep-all'; const beforeKeep = model.requests.length; await classify();
+  assert.equal(model.requests.length, beforeKeep + 1, 'kept files need no page reads');
+  assert.ok((await rows()).every(row => !row.target && !row.selected));
+  assert.equal(await page.$eval('#paperOrganizerApply', n => n.disabled), true);
+  assert.match(await page.$eval('#paperOrganizer .po-status', n => n.textContent), /4 篇保持原样，0 篇需要移动/);
+  const beforePartial = new Set(second.papers.map(p => p.path));
+  mode = 'keep-most'; await classify();
+  const partial = await rows(), moving = partial.find(row => row.selected);
+  assert.equal(partial.filter(row => row.selected).length, 1);
+  await page.locator('#paperOrganizerApply').click(); await idle();
+  const afterPartial = await api('/api/papers');
+  for (const original of beforePartial) if (original !== moving.path) assert.ok(afterPartial.papers.some(p => p.path === original));
+  assert.ok(afterPartial.folders.some(folder => folder.path === 'Unrelated empty folder'));
+  assert.equal(requests.filter(r => r.path === '/api/move').length, 9);
+  pass('keep-all performs no moves; mixed plan moves only the changed PDF and retains unrelated empty folders');
   assert.deepEqual(errors, []); assert.deepEqual(model.errors, []);
   console.log(`PASS ${checks.length} ${desktop ? 'desktop' : 'Node'} UI checks; artifacts ${scratch}`);
 } finally { await browser?.close(); await stopChild(reader); await model?.close(); }
