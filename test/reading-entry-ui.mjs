@@ -40,8 +40,22 @@ try {
   assert.equal(await page.$eval('#homeReadingEntry', n => n.disabled), true);
   await page.goto(base + '/?document=' + encodeURIComponent(paper.docId), { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId && document.body.classList.contains('reading'));
+  const filesRail = '#railLeft [data-rail="files"]';
+  if (await page.$eval(filesRail, n => !n.classList.contains('active'))) await page.click(filesRail);
+  await page.click(filesRail);
+  assert.ok(await page.evaluate(() => document.body.classList.contains('no-left')));
+  assert.equal(await page.$('#railLeft .active'), null);
+  await page.click(filesRail);
+  assert.ok(await page.$eval(filesRail, n => n.classList.contains('active')));
+  assert.equal(await page.$('.panel-hide'), null);
   await page.locator('#homeBtn').click();
   await page.waitForFunction(() => !document.body.classList.contains('reading'));
+  await page.evaluate(() => {
+    const theme = document.querySelector('#uiTheme'); theme.value = 'dark';
+    theme.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  assert.equal(await page.$eval('.home-content', n => getComputedStyle(n).backgroundColor), 'rgb(11, 12, 14)');
+  await page.screenshot({ path: path.join(scratch, 'library-dark.png') });
   assert.equal(await page.$eval('#homeReadingEntry span', n => n.textContent), '回到阅读区');
   await page.goto(base + '/?topbar=static', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__ctx && window.__state?.papers.length === 1);

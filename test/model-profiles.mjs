@@ -161,6 +161,7 @@ try {
     args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1360, height: 960 },
   });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   const errors = [];
   page.on('pageerror', error => errors.push(String(error)));
   await page.goto(`${BASE}/?topbar=static`, { waitUntil: 'networkidle0' });
@@ -199,8 +200,12 @@ try {
   dialog(false); await page.select('#cfgProfile', second);
   assert.equal(await page.$eval('#cfgProfile', el => el.value), first);
   assert.equal(await page.$eval('#cfgModel', el => el.value), 'reader-alpha-renamed');
-  dialog(false); await page.click('#closeSettings');
-  assert.equal(await page.$eval('#settingsModal', el => el.classList.contains('hidden')), false);
+  await page.mouse.click(2, 2);
+  assert.equal(await page.$eval('#settingsModal', el => el.classList.contains('hidden')), true);
+  await page.click('#settingsBtn');
+  await page.waitForSelector('#settingsModal:not(.hidden)');
+  await page.select('#cfgProfile', first);
+  await set('#cfgModel', 'reader-alpha-renamed');
   await page.evaluate(() => {
     const original = window.fetch;
     window.fetch = (input, options) => {
@@ -220,15 +225,19 @@ try {
   await save();
   assert.equal((await get()).activeProfile, first);
   assert.equal((await get()).modelProfiles.length, 2);
-  assert.equal(chatCalls, 0, 'saving must not silently send a model request');
-  await save();
+  assert.equal(chatCalls, 1, 'saving model changes must test the connection');
+  await page.click('#saveSettings');
+  await page.waitForSelector('#settingsModal.hidden');
+  assert.equal(chatCalls, 1, 'unchanged save closes without testing');
+  await page.click('#settingsBtn');
+  await page.waitForSelector('#settingsModal:not(.hidden)');
   assert.equal((await get()).modelProfiles.length, 2);
-  console.log('PASS: preview does not switch models, unsaved edits are protected, saving never adds duplicates or tests implicitly');
+  console.log('PASS: preview is inert, outside click discards drafts, changed save tests and unchanged save closes');
 
   await page.click('#testModel');
   await page.waitForFunction(() => document.querySelector('#testResult').textContent.includes('连接正常'));
   await enabled();
-  assert.equal(chatCalls, 1);
+  assert.equal(chatCalls, 2);
   assert.ok(lastChatBody.tools?.some((tool) => tool.function?.name === 'get_reading_state'),
     'connection test must cover the function-calling shape used by paper Q&A');
   rejectChat = true;

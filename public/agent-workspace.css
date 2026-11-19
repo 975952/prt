@@ -124,7 +124,7 @@ body.agent-full {
   --agent-glass-highlight: rgba(255, 255, 255, .86);
   --agent-glass-shadow: rgba(40, 36, 28, .10);
 }
-:root[data-theme="dark"] body.agent-full {
+:root[data-theme="dark"] body:is(.agent-full, :not(.reading)) {
   --agent-glass-edge: rgba(255, 255, 255, .12);
   --agent-glass-highlight: rgba(255, 255, 255, .10);
   --agent-glass-shadow: rgba(0, 0, 0, .24);
@@ -386,14 +386,19 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
   color-scheme: dark;
   background: var(--bg);
 }
-:root[data-theme="dark"] body.agent-full #topbar {
+:root[data-theme="dark"] body:is(.agent-full, :not(.reading)) #topbar {
   background: #0b0c0e;
   border-bottom: 1px solid #25272c;
   box-shadow: none;
 }
-:root[data-theme="dark"] body.agent-full #main {
+:root[data-theme="dark"] body:is(.agent-full, :not(.reading)) #main {
   background: #0b0c0e;
 }
+:root[data-theme="dark"] body:not(.reading) :is(#home, #home .home-content, .viewer-wrap) {
+  background: #0b0c0e;
+  box-shadow: none;
+}
+:root[data-theme="dark"] body:not(.reading) .home-sidebar { background: #101113; }
 :root[data-theme="dark"] body.agent-full #agentNav {
   border-color: #25272c;
   background: #101113;

@@ -54,6 +54,11 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     el('div', { class: 'po-actions' }, cancel, stop, apply));
   document.body.append(dialog);
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
+  dialog.addEventListener('click', event => {
+    if (event.target !== dialog) return;
+    const rect = dialog.getBoundingClientRect();
+    if (event.clientX < rect.left || event.clientX > rect.right || event.clientY < rect.top || event.clientY > rect.bottom) close();
+  });
   dialog.addEventListener('close', () => {
     ++opening; operation?.controller.abort(); operation = null; reading = false; stopped = true;
     lastFocus?.focus?.({ preventScroll: true });
@@ -219,7 +224,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     sync();
   }
   function close() {
-    if (moving) { requestStop(); return; }
+    if (moving) requestStop();
     if (reading) requestStop();
     dialog.close();
   }

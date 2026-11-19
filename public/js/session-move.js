@@ -66,6 +66,9 @@ export function createSessionMove({ host, getContext, canMove, onMoved } = {}) {
     el('div', { class: 'sess-move-actions' }, cancel, submit));
   const layer = el('div', { class: 'sess-move-layer', id: 'sessMoveLayer', hidden: true }, panel);
   host.append(layer);
+  document.addEventListener('pointerdown', event => {
+    if (source && !panel.contains(event.target)) close({ focus: false, force: true });
+  });
 
   function chosenTarget() {
     if (mode.value === 'global') return { mode: 'global', docId: '', folderPath: '' };

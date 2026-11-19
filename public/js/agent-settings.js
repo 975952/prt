@@ -17,7 +17,7 @@ export function createAgentSettings({ onSave } = {}) {
     ui.agentNameAlias.hidden = agentDisplayName(draft()) === draft().name;
     ui.agentGenderCustomField.hidden = ui.agentGenderSelect.value !== 'custom';
     for (const control of ui.agentProfileForm.querySelectorAll('input,select,textarea,button')) control.disabled = saving;
-    ui.agentProfileSave.disabled = saving || !isDirty();
+    ui.agentProfileSave.disabled = saving;
     ui.agentProfileReset.disabled = saving || !isDirty();
     ui.agentProfileSave.textContent = saving ? tr('正在保存…') : tr('保存');
     ui.agentProfileForm.setAttribute('aria-busy', String(saving));
@@ -41,7 +41,8 @@ export function createAgentSettings({ onSave } = {}) {
   ui.agentProfileReset.addEventListener('click', fill);
   ui.agentProfileForm.addEventListener('submit', async event => {
     event.preventDefault();
-    if (saving || !isDirty()) return;
+    if (saving) return;
+    if (!isDirty()) { document.getElementById('closeSettings')?.click(); return; }
     const next = draft(); saving = true; ui.agentProfileStatus.textContent = ''; sync();
     try { await onSave?.(next); profile = next; fill(); ui.agentProfileStatus.textContent = tr('已保存'); }
     catch (error) { ui.agentProfileStatus.textContent = String(error?.message || tr('操作失败，请重试。')); ui.agentProfileStatus.classList.add('error'); }

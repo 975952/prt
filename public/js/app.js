@@ -600,10 +600,7 @@ function panelIcon(iconId, title, onclick, extra) {
 /** 右栏两块只有「在右栏里 / 藏着」两种去向，左栏四块同理 —— 所以标题栏只留一个「隐藏」。
  *  再打开走左栏底部的图标坞（左栏面板）或右栏底部的「译文 / 问答」切换器。 */
 function panelActions(id) {
-  const title = panelTitle(id);
-  return el('div', { class: 'panel-actions' },
-    panelIcon('close', tr("隐藏「{0}」", title), () => setPanelVisible(id, false), 'panel-hide'),
-  );
+  return el('div', { class: 'panel-actions' });
 }
 
 /* 左栏底部的小图标坞（连同 PANEL_DOCK_ICON / dockButton）已整体删除（2026-10）。
@@ -1453,6 +1450,7 @@ function applyResponsiveLayout() {
   document.body.classList.toggle('no-left', noLeft);
   document.body.classList.toggle('no-right', noRight);
   syncSideToggleButtons();
+  syncRailActive();
   // 右栏被收起 / 放开都会改「哪些块真的有地方放」：节点的停放与结果区的重排必须跟着走，
   // 否则会出现「栏收起来了，块还赖在 DOM 里」。
   renderCols();
@@ -1599,7 +1597,11 @@ function initRails() {
       if (!id) return;
       const expanded = !document.body.classList.contains('no-left');
       const wasVisible = !!state.panels?.[id]?.visible;
-      if (expanded && wasVisible) return;
+      if (expanded && wasVisible) {
+        setSideCollapsed('left', true, true);
+        syncRailActive();
+        return;
+      }
       rememberLeftChoice(id);            // 点活动栏出来的就是点的这一个，并且记住它
       setSideCollapsed('left', false, true);
       setPanelVisible(id, true);         // 内部会把左栏其余三块收起（一次只开一个）
@@ -1773,7 +1775,7 @@ function syncRailActive() {
   const active = leftActiveId();
   for (const btn of $$('#railLeft .rail-btn')) {
     const id = { files: 'files', outline: 'outline', notes: 'notes', rel: 'relations' }[btn.dataset.rail];
-    const on = id === active;
+    const on = id === active && !document.body.classList.contains('no-left');
     btn.classList.toggle('active', on);
     if (on) btn.setAttribute('aria-current', 'true');
     else btn.removeAttribute('aria-current');
@@ -14846,7 +14848,7 @@ function showSettingsPane(name) {
   });
   const box = document.querySelector('.settings-box');
   if (box) box.dataset.settingsPane = pane;
-  $('#saveSettings').textContent = pane === 'model' ? tr("保存并使用") : tr("保存");
+  $('#saveSettings').textContent = pane === 'model' ? tr("保存并测试") : tr("保存");
   try { localStorage.setItem(SETTINGS_PANE_KEY, pane); } catch (e) { /* 隐私模式写不了，忽略 */ }
   if (pane === 'library') void renderOrganizerHistory();
 }
@@ -14874,9 +14876,6 @@ async function openSettings(hint) {
 }
 
 function closeSettings() {
-  if (settingsOperation && settingsOperation !== 'test') return;
-  if ((modelDraftDirty() || agentWorkspace?.hasProfileDraft() || $('#cfgLongTermMemory').value !== (Settings.data.longTermMemory || ''))
-    && !window.confirm(tr("有尚未保存的修改，确定放弃并关闭设置吗？"))) return;
   settingsTestAbort?.abort();
   agentWorkspace?.resetProfileDraft();
   $('#settingsModal').classList.add('hidden');
@@ -15041,9 +15040,10 @@ function initSettings() {
     const visionModel = $('#cfgVisionModel').value.trim();
     const longTermMemory = $('#cfgLongTermMemory').value.slice(0, 4000);
     const baseURL = $('#cfgBaseURL').value.trim();
-    const saveModel = document.querySelector('.settings-box')?.dataset.settingsPane === 'model' || modelDraftDirty();
+    const saveModel = modelDraftDirty() || (document.querySelector('.settings-box')?.dataset.settingsPane === 'model' && settingsProfileId !== Settings.data.activeProfile);
     const patch = {};
     if (longTermMemory !== (Settings.data.longTermMemory || '')) patch.longTermMemory = longTermMemory;
+    if (!saveModel && !Object.keys(patch).length) { closeSettings(); return; }
     if (saveModel) {
       if (!model || !baseURL) {
         settingsStatus(tr("请填写模型名和接口地址。"), 'err');
@@ -15070,7 +15070,11 @@ function initSettings() {
       await Settings.save(patch);
       fillSettings();
       checkConfigWarning();
-      settingsStatus(saveModel ? tr("已保存并使用此配置。可按需测试连接。") : tr("设置已保存。"), 'ok');
+      settingsStatus(tr("设置已保存。"), 'ok');
+      if (saveModel && !$('#settingsModal').classList.contains('hidden')) {
+        settingsOperation = '';
+        await $('#testModel').onclick();
+      }
     } catch (e) {
       settingsStatus(e.message, 'err');
     } finally { settingsOperation = ''; updateModelControls(); }

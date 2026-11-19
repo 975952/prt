@@ -465,7 +465,7 @@ export const en = {
   "按文件夹（同文件夹里的论文接同一段）": "Shared within each folder", "换论文时对话怎么接：{0}": "Conversation scope: {0}",
   "已恢复默认效果": "Default effects restored", "1.0×（默认）": "1.0× (default)", "阅读字号 {0}px": "Reading font size {0}px",
   "已重置外观与阅读偏好，模型配置和阅读记录已保留": "Appearance and reading preferences reset. Model profiles and reading history kept.",
-  "保存并使用": "Save and use", "保存": "Save", "有尚未保存的修改，确定放弃并关闭设置吗？": "Discard unsaved changes and close Settings?",
+  "保存并测试": "Save and test", "保存并使用": "Save and use", "保存": "Save", "有尚未保存的修改，确定放弃并关闭设置吗？": "Discard unsaved changes and close Settings?",
   "当前配置有未保存的修改，确定放弃并查看其他配置吗？": "Discard unsaved changes and view another profile?",
   "当前配置有未保存的修改，确定放弃并新增配置吗？": "Discard unsaved changes and create a new profile?", "当前正在使用的配置不受影响。": "Your active profile will stay in use.",
   "删除后将使用“{0}”。": "After deletion, {0} will be used.", "这是最后一份配置。删除后需重新配置才能使用 AI。": "This is the last profile. You will need to connect a model again to use AI.",
