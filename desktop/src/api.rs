@@ -470,6 +470,12 @@ pub fn folders_rename(rq: Request, body: &[u8]) {
 
 /// DELETE /api/folders?path=folder&mode=to-root|recursive —— 删除文件夹
 pub fn folders_delete(rq: Request, raw_query: &str) {
+    if query_get(raw_query, "mode").as_deref() == Some("empty") {
+        return match delete_empty_folder_tree(&query_get(raw_query, "path").unwrap_or_default()) {
+            Ok(value) => send_json(rq, 200, &value),
+            Err((status, message)) => send_json(rq, status, &err_json(message)),
+        };
+    }
     let rel = normalize_rel(&query_get(raw_query, "path").unwrap_or_default());
     let mode = match query_get(raw_query, "mode").as_deref() {
         Some("recursive") => "recursive",
@@ -615,6 +621,41 @@ fn organizer_directory(root: &std::path::Path, relative: &str, create: bool) -> 
         current = resolved;
     }
     Ok(current)
+}
+
+/// Validate the complete tree first, then remove only empty directories.
+/// Files and links are never removed, even when an earlier PDF move failed.
+fn delete_empty_folder_tree(relative: &str) -> Result<Value, OrganizerMoveError> {
+    let relative = organizer_path(Some(&json!(relative)), false)?;
+    let metadata = std::fs::symlink_metadata(&dirs().papers).map_err(|_| (500, "无法检查论文目录"))?;
+    if organizer_is_link(&metadata) || !metadata.is_dir() { return Err((400, "论文目录必须是本地普通文件夹")); }
+    let root = std::fs::canonicalize(&dirs().papers).map_err(|_| (500, "无法检查论文目录"))?;
+    organizer_directory(&root, &relative, false)?;
+    fn inspect(root: &std::path::Path, relative: &str, directories: &mut Vec<String>) -> Result<(), OrganizerMoveError> {
+        let absolute = organizer_directory(root, relative, false)?;
+        let entries = std::fs::read_dir(&absolute).map_err(|_| (500, "无法检查空文件夹，内容已保留"))?;
+        for entry in entries {
+            let entry = entry.map_err(|_| (500, "无法检查空文件夹，内容已保留"))?;
+            let metadata = std::fs::symlink_metadata(entry.path()).map_err(|_| (500, "无法检查空文件夹，内容已保留"))?;
+            if organizer_is_link(&metadata) || !metadata.is_dir() { return Err((409, "文件夹仍包含文件或链接，已保留所有内容")); }
+            let name = entry.file_name().into_string().map_err(|_| (409, "文件夹名称无法读取，内容已保留"))?;
+            if name.contains(['/', '\\']) { return Err((409, "文件夹名称不合法，内容已保留")); }
+            inspect(root, &format!("{}/{}", relative, name), directories)?;
+        }
+        directories.push(relative.to_string());
+        Ok(())
+    }
+    let mut directories = Vec::new();
+    inspect(&root, &relative, &mut directories)?;
+    for current in directories {
+        let absolute = organizer_directory(&root, &current, false)?;
+        // remove_dir fails if a file appeared since preflight; never recurse.
+        std::fs::remove_dir(&absolute).map_err(|_| (409, "文件夹仍有内容或被占用，文件已保留"))?;
+    }
+    let order: Vec<String> = paper_order().into_iter()
+        .filter(|item| item != &relative && !item.starts_with(&format!("{}/", relative))).collect();
+    if !write_paper_order(&order) { store::log_line("[rmdir] 空文件夹已删除，排序保存失败"); }
+    Ok(json!({ "ok": true, "path": relative, "mode": "empty", "moved": 0 }))
 }
 
 fn organize_move_pdf(payload: &Value) -> Result<Value, OrganizerMoveError> {

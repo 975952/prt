@@ -9,7 +9,7 @@ import puppeteer from 'puppeteer-core';
 import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
 import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 import { writeTitlePdf } from './fixtures/make-title-pdf.mjs';
-import { startOrganizerTestModel } from './_organizer-test-model.mjs';
+import { startOrganizerTestModel, organizerModelInput, organizerModelTask } from './_organizer-test-model.mjs';
 
 const desktop = process.argv.includes('--desktop');
 fs.mkdirSync(SANDBOX, { recursive: true });
@@ -26,10 +26,18 @@ const checks = [], errors = [], requests = [], failedRequests = [], observations
 const pass = label => { checks.push(label); console.log(`PASS ${label}`); };
 const row = name => `#paperOrganizerList .po-row[data-path=${JSON.stringify(name)}]`;
 let base, model, reader, browser, page, mode = 'initial', phaseCount = 0, held;
-const inputOf = record => JSON.parse(record.body.messages.at(-1).content);
+const inputOf = organizerModelInput;
+const classificationCalls = (start = 0) => model.requests.slice(start).filter(record => organizerModelTask(record) === 'classify');
+const planningCalls = (start = 0) => model.requests.slice(start).filter(record => organizerModelTask(record) === 'plan');
+function planAnswer(record) {
+  const input = inputOf(record), paths = input.maxDepth === 1 ? ['海洋生态', '已有研究'] : ['海洋生态/珊瑚修复', 'Existing/Curated'];
+  return { folders: paths.slice(0, Math.min(2, input.maxFolders, input.paperCount))
+    .map(path => ({ path, description: `Synthetic global scope for ${path}` })) };
+}
 function answer(record, overrides = {}) {
+  const input = inputOf(record), allowed = input.allowedFolders.map(folder => folder.path);
   return { items: inputOf(record).papers.map(paper => ({ id: paper.id,
-    folder: paper.path === names[2] ? 'Existing/Curated' : '海洋生态/珊瑚修复',
+    folder: paper.path === names[2] && allowed.length > 1 ? allowed[1] : allowed[0],
     confidence: mode === 'initial' && [names[1], names[4], names[5]].includes(paper.path) ? 0.35 : 0.93,
     reason: 'Synthetic AI analysis of coral restoration title', ...overrides,
   })) };
@@ -45,6 +53,9 @@ async function open() {
   await page.locator('#homeOrganize').click();
   await page.waitForFunction(() => document.querySelector('#paperOrganizer')?.open
     && document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false');
+  assert.equal(await page.$eval('#paperOrganizerScope', node => node.value), 'all');
+  await page.select('#paperOrganizerScope', 'root');
+  await page.select('#paperOrganizerDepth', '2');
 }
 async function idle() {
   await page.waitForFunction(() => document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false');
@@ -81,11 +92,17 @@ async function assertNoMutation() {
 
 try {
   model = await startOrganizerTestModel(record => {
-    phaseCount++;
     assert.equal(record.body.model, 'organizer-ai-synthetic');
     const input = inputOf(record);
+    if (input.task === 'plan') {
+      assert.ok(input.papers.length > 0 && input.papers.length <= 200);
+      if (mode === 'hold-plan') { held = record; model.start(record); return; }
+      return model.reply(record, planAnswer(record));
+    }
+    assert.equal(input.task, 'classify'); phaseCount++;
     assert.ok(input.papers.length > 0 && input.papers.length <= 12);
     if (mode === 'invalid-path') return model.reply(record, answer(record, { folder: '../Outside' }));
+    if (mode === 'outside-plan') return model.reply(record, answer(record, { folder: 'New topic/Unplanned' }));
     if (mode === 'invalid-json') return model.reply(record, 'This is not the required classification JSON.');
     if (mode === 'fail-second' && phaseCount === 2) {
       record.response.writeHead(500, { 'Content-Type': 'application/json' });
@@ -138,12 +155,15 @@ try {
   await instructions('CUSTOM_CORAL_POLICY: organize by ecosystem and reuse Existing/Curated when appropriate.');
   const initialCheckpoint = model.requests.length;
   await classify();
-  const initialCalls = model.requests.slice(initialCheckpoint), initialPapers = initialCalls.flatMap(record => inputOf(record).papers);
+  const initialCalls = classificationCalls(initialCheckpoint), initialPapers = initialCalls.flatMap(record => inputOf(record).papers);
+  assert.equal(planningCalls(initialCheckpoint).length, 1);
   assert.deepEqual(initialCalls.map(record => inputOf(record).papers.length), [12, 12, 12, 8]);
   assert.equal(new Set(initialPapers.map(paper => paper.path)).size, 44);
   assert.ok(!initialPapers.some(paper => paper.path === names[0] || paper.path === 'Existing/Curated/Seed.pdf'));
   assert.ok(initialCalls.every(record => inputOf(record).classificationInstructions.includes('CUSTOM_CORAL_POLICY')
-    && inputOf(record).existingFolders.includes('Existing/Curated')));
+    && inputOf(record).allowedFolders.some(folder => folder.path === 'Existing/Curated')));
+  assert.ok(inputOf(planningCalls(initialCheckpoint)[0]).existingFolders.includes('Existing/Curated'));
+  assert.ok(initialCalls.every(record => JSON.stringify(inputOf(record).allowedFolders) === JSON.stringify(inputOf(initialCalls[0]).allowedFolders)));
   assert.ok(initialPapers.every(paper => paper.title.includes('Synthetic coral restoration study')));
   const firstPage = await rows();
   assert.equal(firstPage.find(item => item.path === names[0]).target, 'Manual/My coral shelf');
@@ -155,12 +175,12 @@ try {
   await page.locator('#paperOrganizer .po-page > button:first-child').click();
   await assertNoMutation();
   observations.push({ phase: 'initial', calls: initialCalls.map(record => inputOf(record).papers.length), rows: firstPage });
-  pass('45 PDFs classify across four bounded batches and both UI pages, reuse existing folders, accept novel categories and preserve manual edits');
+  pass('one global plan constrains all four classification batches across both UI pages and preserves existing folders and manual edits');
 
   await page.locator(`${row(names[1])} input[type="checkbox"]`).click();
   await search('Batch-04'); await page.locator('#paperOrganizerSelect').click(); await search('');
   const retryCheckpoint = model.requests.length; setMode('good'); await classify();
-  assert.deepEqual(model.requests.slice(retryCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path)), [names[5]]);
+  assert.deepEqual(classificationCalls(retryCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path)), [names[5]]);
   assert.equal((await rows()).find(row => row.path === names[1]).selected, true);
   assert.equal((await rows()).find(row => row.path === names[4]).selected, true);
   pass('low-confidence suggestions need confirmation; individual and header confirmation protect them while AI retries only the unresolved paper');
@@ -171,26 +191,28 @@ try {
     assert.equal(confirmedRow.target, '海洋生态/珊瑚修复'); assert.equal(confirmedRow.selected, true);
   }
   await search('Batch-03');
-  for (const invalid of ['invalid-path', 'invalid-json']) {
+  for (const invalid of ['invalid-path', 'outside-plan', 'invalid-json']) {
     setMode(invalid); const checkpoint = model.requests.length; await classify();
-    assert.equal(model.requests.length - checkpoint, 1);
+    assert.equal(classificationCalls(checkpoint).length, 1);
     const invalidRow = (await rows())[0];
     assert.equal(invalidRow.target, ''); assert.equal(invalidRow.selected, false);
     if (invalid === 'invalid-json') assert.match(await page.$eval('#paperOrganizer .po-status', node => node.textContent), /分类失败/);
-    else assert.match(invalidRow.reason, /无效/);
+    else assert.match(invalidRow.reason, /无效|规划|目录/);
     assert.ok(!fs.existsSync(path.join(scratch, 'Outside')));
   }
   setMode('good'); await classify();
   assert.equal((await rows())[0].target, '海洋生态/珊瑚修复');
-  pass('unsafe folders and malformed model output are rejected with retryable errors and no file mutation');
+  pass('unsafe paths, safe but unplanned categories and malformed output cannot create new destinations and remain retryable');
 
   await search(''); await instructions('RETRY_BATCH_POLICY'); setMode('fail-second');
   const failCheckpoint = model.requests.length; await classify();
-  assert.equal(model.requests.length - failCheckpoint, 2);
-  const completePaths = inputOf(model.requests[failCheckpoint]).papers.map(paper => paper.path);
+  assert.equal(classificationCalls(failCheckpoint).length, 2);
+  assert.equal(planningCalls(failCheckpoint).length, 1);
+  const completePaths = inputOf(classificationCalls(failCheckpoint)[0]).papers.map(paper => paper.path);
   assert.ok((await rows()).filter(row => completePaths.includes(row.path)).every(row => row.selected && row.target));
   setMode('good'); const recoverCheckpoint = model.requests.length; await classify();
-  const recovered = model.requests.slice(recoverCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path));
+  const recovered = classificationCalls(recoverCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path));
+  assert.equal(planningCalls(recoverCheckpoint).length, 0, 'same-scope retry reuses the original global plan');
   assert.equal(recovered.length, 30); assert.ok(recovered.every(path => !completePaths.includes(path)));
   assert.ok(!recovered.some(path => [names[0], names[1], names[4]].includes(path)));
   assert.equal((await rows()).find(row => row.path === names[0]).target, 'Manual/My coral shelf');
@@ -201,7 +223,7 @@ try {
   const cancelled = held;
   await page.locator('#paperOrganizer .po-actions > button:nth-child(2)').click(); await idle();
   const beforeLate = await rows();
-  assert.equal(model.requests.length - cancelCheckpoint, 2);
+  assert.equal(classificationCalls(cancelCheckpoint).length, 2);
   assert.equal(beforeLate.filter(row => row.target && ![names[0], names[1], names[4]].includes(row.path)).length, 12);
   model.reply(cancelled, answer(cancelled, { folder: 'Late/Must not appear' })); await wait(200);
   assert.deepEqual(await rows(), beforeLate);
@@ -213,15 +235,77 @@ try {
   model.reply(closed, answer(closed, { folder: 'Late/Closed dialog' })); await wait(200);
   assert.ok((await rows()).every(row => !row.target && !row.selected));
   await search('Batch-44'); setMode('good'); const reopenedCheckpoint = model.requests.length; await classify();
-  assert.deepEqual(model.requests.slice(reopenedCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path)), [names[44]]);
+  assert.deepEqual(classificationCalls(reopenedCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path)), [names[44]]);
   assert.equal((await rows())[0].target, '海洋生态/珊瑚修复');
   pass('closing cancels classification, reopening rejects old results, and a new search classifies only the matching paper');
+
+  await close(); await open(); await page.select('#paperOrganizerDepth', '1');
+  await instructions('CANCEL_GLOBAL_PLAN_POLICY'); setMode('hold-plan');
+  const planningCheckpoint = model.requests.length; await start(); await waitHeld();
+  const cancelledPlan = held;
+  await page.locator('#paperOrganizer .po-actions > button:nth-child(2)').click(); await idle();
+  assert.equal(planningCalls(planningCheckpoint).length, 1);
+  assert.equal(classificationCalls(planningCheckpoint).length, 0);
+  model.reply(cancelledPlan, planAnswer(cancelledPlan)); await wait(200);
+  assert.ok((await rows()).every(row => !row.target && !row.selected));
+  setMode('good'); const planRetryCheckpoint = model.requests.length; await classify();
+  assert.equal(planningCalls(planRetryCheckpoint).length, 1);
+  assert.equal(classificationCalls(planRetryCheckpoint).length, 4);
+  assert.equal(inputOf(planningCalls(planRetryCheckpoint)[0]).maxDepth, 1);
+  const grouped = () => page.$$eval('#paperOrganizerPlan .po-group', nodes => nodes.map(node => ({
+    folder: node.dataset.folder, count: Number(node.querySelector('.po-group-count').textContent.match(/\d+/)[0]),
+  })));
+  const groups = await grouped();
+  assert.equal(groups.length, 2); assert.equal(groups.reduce((sum, group) => sum + group.count, 0), 45);
+  assert.ok(groups.every(group => !group.folder.includes('/')));
+  pass('cancelled global planning cannot start classification; retry builds a bounded single-level plan with complete cross-page counts');
+  const renameGroup = async (from, to) => {
+    const selector = `#paperOrganizerPlan .po-group[data-folder=${JSON.stringify(from)}]`;
+    await field(`${selector} .po-group-target`, to); await page.locator(`${selector} .po-group-apply`).click();
+  };
+  await renameGroup(groups[0].folder, '统一研究');
+  assert.equal((await grouped()).find(group => group.folder === '统一研究').count, groups[0].count);
+  await renameGroup(groups[1].folder, '统一研究');
+  assert.deepEqual(await grouped(), [{ folder: '统一研究', count: 45 }]);
+  assert.ok((await rows()).every(row => row.target === '统一研究'));
+  await page.locator('#paperOrganizer .po-page > button:last-child').click();
+  assert.equal((await rows()).length, 5); assert.ok((await rows()).every(row => row.target === '统一研究'));
+  await instructions('KEEP_MANUAL_GROUP_EDITS');
+  assert.deepEqual(await grouped(), [{ folder: '统一研究', count: 45 }]);
+  assert.equal(await page.$eval('#paperOrganizerClassify', node => node.disabled), true);
+  await assertNoMutation();
+  pass('category rename and merge update every page and counts, retain manual choices, and never create or move files in preview');
+
+  await close(); await open(); await search('Batch-0');
+  await instructions('MIXED_MANUAL_DEPTH_POLICY'); setMode('good'); await classify();
+  await renameGroup('海洋生态/珊瑚修复', '人工归档');
+  const mixedRetryCheckpoint = model.requests.length; await classify();
+  assert.equal(planningCalls(mixedRetryCheckpoint).length, 1);
+  assert.deepEqual(classificationCalls(mixedRetryCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path)), [names[2]]);
+  assert.ok((await rows()).filter(row => row.path !== names[2]).every(row => row.target === '人工归档'));
+  pass('a manual single-level group inside a two-level plan triggers replanning only for the remaining automatic suggestion');
+  const beforeTitleRefresh = model.requests.length;
+  await page.locator('#paperOrganizerRead').click(); await idle();
+  assert.equal(model.requests.length, beforeTitleRefresh);
+  const titleRetryCheckpoint = model.requests.length; await classify();
+  assert.equal(planningCalls(titleRetryCheckpoint).length, 1);
+  assert.deepEqual(classificationCalls(titleRetryCheckpoint).flatMap(record => inputOf(record).papers.map(paper => paper.path)), [names[2]]);
+  assert.ok((await rows()).filter(row => row.path !== names[2]).every(row => row.target === '人工归档'));
+  pass('refreshing local title evidence invalidates the old plan while preserving every manual group destination');
 
   await assertNoMutation();
   assert.deepEqual(errors, []); assert.deepEqual(model.errors, []);
   assert.ok(failedRequests.every(request => request.error === 'net::ERR_ABORTED'), JSON.stringify(failedRequests));
   assert.equal(requests.filter(request => request.path === '/api/chat').length, model.requests.length);
   await page.screenshot({ path: path.join(scratch, 'completed.png') });
+  await page.setViewport({ width: 480, height: 940 });
+  const planLayout = await page.$eval('#paperOrganizer', dialog => ({
+    overflow: dialog.scrollWidth > dialog.clientWidth + 1,
+    groupsOverflow: dialog.querySelector('.po-groups').scrollWidth > dialog.querySelector('.po-groups').clientWidth + 1,
+    left: dialog.getBoundingClientRect().left, right: dialog.getBoundingClientRect().right,
+  }));
+  assert.ok(!planLayout.overflow && !planLayout.groupsOverflow && planLayout.left >= 0 && planLayout.right <= 480, JSON.stringify(planLayout));
+  await page.screenshot({ path: path.join(scratch, 'completed480.png') });
   pass('every classification used the real chat endpoint and local fake model, with no moves, external calls or page errors');
   console.log(`paper-organizer-ai: ${checks.length}/${checks.length}; ${scratch}`);
 } catch (error) {

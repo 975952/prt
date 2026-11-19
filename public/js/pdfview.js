@@ -6,6 +6,8 @@ import { applyNightReading, NIGHT_PAPER } from './pdf-reading-theme.js';
 import { cleanPaperTitle, firstPageTitle } from './paper-titles.js';
 import { createPaperAccess } from './paper-access.js';
 import { runWithDeadline } from './task-deadline.js';
+import { disposePdfDocument } from './pdf-lifecycle.js';
+export { disposePdfDocument };
 
 let pdfjsLib = null;
 
@@ -210,7 +212,7 @@ export async function extractPdfText(url, { maxPages = 40, onProgress } = {}) {
     }
     return parts.join('\n');
   } finally {
-    try { pdf.destroy(); } catch { /* 忽略 */ }
+    await disposePdfDocument(pdf);
   }
 }
 
@@ -256,10 +258,10 @@ export function createPdfPaperAccess({ loadPdfjs = initPdfjs, ...cacheOptions } 
       standardFontDataUrl: '/vendor/standard_fonts/', wasmUrl: '/vendor/wasm/',
       useSystemFonts: true, isEvalSupported: false, disableAutoFetch: true, disableStream: true });
     let destroying;
-    const destroy = () => destroying ||= Promise.resolve().then(() => task.destroy()).catch(() => {});
+    const destroy = () => destroying ||= disposePdfDocument(task);
     let pdf;
     try { pdf = await waitForPdfWork(task.promise, signal, destroy); }
-    catch (error) { void destroy(); throw error; }
+    catch (error) { void destroy().catch(() => {}); throw error; }
     return {
       numPages: pdf.numPages,
       destroy,
@@ -328,7 +330,7 @@ export async function readPdfTitle(url, name, { signal } = {}) {
         return firstPageTitle(text.items, page.view[3] - page.view[1], name);
     }, { signal, timeoutMs: 10000 });
   } finally {
-    await task.destroy().catch(() => {});
+    await disposePdfDocument(task);
   }
 }
 
@@ -610,7 +612,7 @@ export class PdfViewer {
     this.scanCache.clear();
     this._pageImageCache.clear();
     if (this.pdf) {
-      try { this.pdf.destroy(); } catch { /* ignore */ }
+      void disposePdfDocument(this.pdf).catch(() => {});
       this.pdf = null;
     }
     this.numPages = 0;
@@ -750,7 +752,7 @@ export class PdfViewer {
     });
     this.opts.onStatus?.(tr("正在解析 PDF…"));
     const pdf = await task.promise;
-    if (this._destroyed || gen !== this._gen) { pdf.destroy(); return { numPages: 0, stale: true }; }
+    if (this._destroyed || gen !== this._gen) { await disposePdfDocument(pdf); return { numPages: 0, stale: true }; }
     this.pdf = pdf;
     this.url = url;
     this.name = name;
@@ -760,7 +762,7 @@ export class PdfViewer {
 
     // 首页尺寸先拿到，立刻出画面
     const first = await pdf.getPage(1);
-    if (gen !== this._gen) { pdf.destroy(); return { numPages: 0, stale: true }; }
+    if (gen !== this._gen) { await disposePdfDocument(pdf); return { numPages: 0, stale: true }; }
     const vp1 = first.getViewport({ scale: 1 });
     this.baseSizes = new Array(this.numPages + 1);
     this.baseSizes[1] = { width: vp1.width, height: vp1.height, rotation: vp1.rotation };

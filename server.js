@@ -772,6 +772,12 @@ async function handleRenameFolder(req, res, url) {
 }
 
 async function handleDeleteFolder(req, res, url) {
+  if (url.searchParams.get('mode') === 'empty') {
+    const pending = organizerMoveChain.catch(() => {}).then(() => deleteEmptyFolderTree(url.searchParams.get('path')));
+    organizerMoveChain = pending;
+    try { return sendJson(res, 200, await pending); }
+    catch (error) { return sendJson(res, error.status || 500, { error: { message: error.status ? error.message : '删除空文件夹失败，文件已保留' } }); }
+  }
   const rel = normalizeRel(url.searchParams.get('path'));
   const mode = url.searchParams.get('mode') === 'recursive' ? 'recursive' : 'to-root';
   if (!rel) return sendJson(res, 400, { error: { message: '缺少 path' } });
@@ -875,6 +881,40 @@ async function organizerDirectory(root, relative, create = false) {
     current = resolved;
   }
   return current;
+}
+
+/** Preflight the complete tree before removing any directory. Never unlink a
+ * file or recursively remove a path, including after a failed earlier move. */
+async function deleteEmptyFolderTree(value) {
+  const relative = organizerPath(value);
+  const metadata = await fsp.lstat(PAPERS_DIR);
+  if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw organizerMoveError(400, '论文目录必须是本地普通文件夹');
+  const root = await fsp.realpath(PAPERS_DIR), directories = [];
+  await organizerDirectory(root, relative);
+  async function inspect(current) {
+    const absolute = await organizerDirectory(root, current);
+    const entries = await fsp.readdir(absolute, { withFileTypes: true });
+    for (const entry of entries) {
+      const child = `${current}/${entry.name}`;
+      const item = await fsp.lstat(path.join(absolute, entry.name));
+      if (item.isSymbolicLink() || !item.isDirectory()) throw organizerMoveError(409, '文件夹仍包含文件或链接，已保留所有内容');
+      await inspect(child);
+    }
+    directories.push(current);
+  }
+  await inspect(relative);
+  for (const current of directories) {
+    // Recheck ancestors so a replaced directory cannot redirect removal.
+    const absolute = await organizerDirectory(root, current);
+    try { await fsp.rmdir(absolute); }
+    catch (error) {
+      if (error.code === 'ENOTEMPTY' || error.code === 'EEXIST') throw organizerMoveError(409, '文件夹仍包含文件，已保留文件');
+      throw organizerMoveError(500, '删除空文件夹失败：目录可能被占用，文件已保留');
+    }
+  }
+  const order = (await readPaperOrder()).filter(item => item !== relative && !item.startsWith(`${relative}/`));
+  await writePaperOrder(order).catch(error => sec.diag(`空文件夹排序保存失败: ${error.message}`));
+  return { ok: true, path: relative, mode: 'empty', moved: 0 };
 }
 
 let organizerMoveChain = Promise.resolve();

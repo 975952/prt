@@ -11,6 +11,15 @@
 .po-ai-toolbar { display: flex; gap: 9px; align-items: center; }
 .po-ai-toolbar label { flex: 0 0 auto; color: var(--fg-dim); font-size: 12px; }
 .po-ai-toolbar input { flex: 1 1 auto; width: 0; }
+.po-ai-toolbar select { flex: 0 1 auto; max-width: 180px; }
+.po-plan { border: 1px solid var(--border); border-radius: 9px; padding: 8px 10px; min-height: 0; flex: 0 0 auto; }
+.po-plan[hidden] { display: none; }
+.po-plan summary { cursor: pointer; font-weight: 500; }
+.po-plan .po-note { margin-top: 6px; }
+.po-groups { display: grid; gap: 6px; max-height: 132px; overflow: auto; margin-top: 6px; }
+.po-group { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.po-group-count { flex: 0 0 65px; color: var(--fg-dim); font-size: 11px; }
+.po-group input { min-width: 0; width: 0; flex: 1 1 auto; }
 .paper-organizer input:not([type="checkbox"]), .paper-organizer select { min-width: 0; padding: 8px 10px; border: 1px solid var(--border-strong); border-radius: 9px; background: var(--bg-elev); color: var(--fg); font: inherit; }
 .po-toolbar input { flex: 1 1 auto; width: 0; }
 .paper-organizer input[type="checkbox"] { accent-color: var(--accent); width: 16px; height: 16px; margin: 3px 0; flex: 0 0 auto; }
@@ -46,6 +55,10 @@
   .po-ai-toolbar { flex-wrap: wrap; }
   .po-ai-toolbar label { width: 100%; }
   .po-ai-toolbar input { flex-basis: 50%; }
+  .po-ai-toolbar select { flex: 1 1 auto; max-width: none; }
+  .po-group { flex-wrap: wrap; gap: 5px; }
+  .po-group-count { flex-basis: 50px; }
+  .po-group .po-button { padding-inline: 6px; font-size: 11px; }
   .po-row { grid-template-columns: 18px minmax(0, 1fr); gap: 8px; }
   .po-target { grid-column: 2; }
   .po-list-head { flex-wrap: wrap; gap: 4px; }

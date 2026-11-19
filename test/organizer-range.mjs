@@ -71,6 +71,22 @@ async function move(relative, folder, expected = 'done') {
     && [...document.querySelectorAll('#paperOrganizerList .po-row')].some(row => row.dataset.path === relative && row.dataset.status === expected), {}, { relative, expected });
 }
 async function closeOrganizer() { await page.locator('#paperOrganizer .po-actions > button:first-child').click(); }
+async function rememberWorker() {
+  await page.evaluate(() => {
+    const pdf = window.__viewer.pdf;
+    window.__rangeOldPdf = pdf;
+    window.__rangeOldTask = pdf.loadingTask;
+    window.__rangeOldWorker = pdf.loadingTask._worker;
+    window.__rangeOldPort = pdf.loadingTask._worker?.port;
+  });
+}
+async function assertWorkerReleased() {
+  assert.deepEqual(await page.evaluate(() => ({ taskDestroyed: window.__rangeOldTask.destroyed,
+    transportReleased: window.__rangeOldTask._transport === null, taskWorkerReleased: window.__rangeOldTask._worker === null,
+    workerDestroyed: window.__rangeOldWorker.destroyed, portReleased: window.__rangeOldWorker.port === null,
+    terminateCalled: window.__rangeTerminatedWorkers.has(window.__rangeOldPort) })),
+  { taskDestroyed: true, transportReleased: true, taskWorkerReleased: true, workerDestroyed: true, portReleased: true, terminateCalled: true });
+}
 async function readingPosition() {
   return page.evaluate(() => ({ page: window.__viewer.current, scale: window.__viewer.scale, fit: window.__viewer._fitMode,
     anchor: window.__viewer._captureAnchor(), scrollTop: window.__viewer.container.scrollTop, path: window.__state.doc.path }));
@@ -81,7 +97,7 @@ async function setPosition(pageNumber, scale) {
     await viewer.goToPage(pageNumber); await viewer.restorePosition({ scrollTop: viewer.container.scrollTop + 135 });
     window.__rangeOldPdf = viewer.pdf;
   }, { pageNumber, scale });
-  await wait(250); return readingPosition();
+  await rememberWorker(); await wait(250); return readingPosition();
 }
 function assertPosition(before, after) {
   assert.equal(after.page, before.page); assert.ok(Math.abs(after.scale - before.scale) < 0.001);
@@ -117,6 +133,9 @@ try {
   });
   page.on('response', response => { if (new URL(response.url()).pathname === '/api/pdf' && response.status() >= 400) errors.push(`${response.status()} ${response.url()}`); });
   await page.evaluateOnNewDocument(() => {
+    window.__rangeTerminatedWorkers = new WeakSet();
+    const terminate = Worker.prototype.terminate;
+    Worker.prototype.terminate = function (...args) { window.__rangeTerminatedWorkers.add(this); return terminate.apply(this, args); };
     localStorage.setItem('reader.locale', 'zh-CN'); localStorage.setItem('reader.session.scopeMode', 'paper');
     localStorage.setItem('reader.session.onEnter', 'latest'); localStorage.setItem('reader.session.aiTitle', '0');
   });
@@ -135,6 +154,7 @@ try {
     return window.__ctx.activeSession;
   });
   await openOrganizer(); await move('large.pdf', 'conflict', 'error');
+  await assertWorkerReleased();
   assert.ok(fs.existsSync(path.join(papersDir, 'large.pdf')));
   await closeOrganizer(); await page.locator('#homeBtn').click();
   await page.waitForFunction(id => window.__state.viewerDocId === id && window.__viewer.pdf, {}, papers['large.pdf'].docId);
@@ -142,6 +162,7 @@ try {
   assert.equal(await page.$eval('#chatInput', input => input.value), 'UNSENT_RANGE_MOVE_DRAFT');
   assert.equal(await page.evaluate(() => window.__ctx.activeSession), activeSession);
   assert.match(await page.evaluate(() => window.__viewer.getPageText(6)), /Synthetic range page 6/);
+  await rememberWorker();
   pass('conflicting large-PDF move preserves the source and restores its reading position, draft and conversation');
   await openOrganizer();
   await page.evaluate(() => window.__ctx.chatJobs.set('range-fixture', { key: 'range-fixture', finished: false, discarded: false,
@@ -152,6 +173,7 @@ try {
   await page.evaluate(() => window.__ctx.chatJobs.delete('range-fixture'));
   pass('a background job holding a paper-list snapshot blocks moving its source before any API mutation');
   await move('large.pdf', 'Moved'); await closeOrganizer();
+  await assertWorkerReleased();
   const activeCheckpoint = requests.length;
   assert.equal(await page.evaluate(() => window.__viewer.pdf), null);
   await page.locator('#homeBtn').click();
@@ -170,6 +192,7 @@ try {
   const parkedPosition = await setPosition(8, 1.15);
   await page.evaluate(paper => window.__ctx.openDoc(paper), papers['other.pdf']);
   await openOrganizer(); await move('parked.pdf', 'Moved'); await closeOrganizer();
+  await assertWorkerReleased();
   const parkedCheckpoint = requests.length;
   const movedPaper = (await api('/api/papers')).papers.find(paper => paper.path === 'Moved/parked.pdf');
   await page.evaluate(paper => window.__ctx.openDoc(paper), movedPaper);

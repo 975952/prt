@@ -50,4 +50,4 @@ export {
   memoryExtractMessages, MEMORY_EXTRACT_SYS,
 } from './capabilities/background.js';
 export { SCREENSHOT_TASK } from './capabilities/qa.js';
-export { paperClassificationMessages } from './capabilities/organizer.js';
+export { paperClassificationMessages, paperFolderPlanningMessages, paperTopicSummaryMessages } from './capabilities/organizer.js';

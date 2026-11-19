@@ -14,12 +14,13 @@ import { isPaperNavigationRequest, normalizePaperSearchPlan, PAPER_SEARCH_PLAN_P
 import { AGENT_PROFILE_KEY, readAgentProfile, writeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle, paperAccess } from './pdfview.js';
+import { disposePdfDocument } from './pdf-lifecycle.js';
 import { resolvePaperTarget, snapshotPaperTarget } from './paper-target.js';
 import { runWithDeadline } from './task-deadline.js';
 import { createLibraryReader } from './chat-source.js';
 import { createPaperTitleIndex } from './paper-titles.js';
 import { createPaperOrganizer } from './paper-organizer.js';
-import { classifyPaperBatch } from './paper-classifier.js';
+import { classifyPaperBatch, planPaperFolders } from './paper-classifier.js';
 import { CARD_MATERIAL_DEFAULTS, updateTranslationMaterial } from './glass-material.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
@@ -1126,7 +1127,7 @@ function releaseRetiredChatPdfs() {
     if ([...chatJobs.values()].some(job => job.reader?.pdf === pdf)) continue;
     retiredChatPdfs.delete(pdf);
     if (viewer?.pdf === pdf || [...pdfHandles.values()].some(handle => handle.pdf === pdf)) continue;
-    try { Promise.resolve(pdf.destroy()).catch(() => {}); } catch { /* already released */ }
+    void disposePdfDocument(pdf).catch(error => console.warn('PDF cleanup failed', error));
   }
 }
 async function discardChatSession(scope, sid) {
@@ -1236,7 +1237,7 @@ function dropPdfHandle(docId) {
   if (!handle) return;
   pdfHandles.delete(docId);
   if ([...chatJobs.values()].some(job => job.reader?.pdf === handle.pdf)) { retiredChatPdfs.add(handle.pdf); return; }
-  try { handle.pdf?.destroy?.(); } catch { /* 已经销毁 */ }
+  void disposePdfDocument(handle.pdf).catch(error => console.warn('PDF cleanup failed', error));
 }
 
 
@@ -2975,16 +2976,25 @@ function renderHome({ navigation = true } = {}) {
     if ($(`#${id}`)) $(`#${id}`).textContent = String(count);
   }
   const folderNav = $('#homeFolders');
+  if ($('#homeNewFolder')) $('#homeNewFolder').onclick = () => startInlineCreate('');
   if (navigation && folderNav) {
     folderNav.replaceChildren();
     for (const folder of folders) {
       const count = allPapers.filter(p => inFolder(p, folder.path)).length;
       const depth = folder.path ? Math.min(3, folder.path.split('/').length - 1) : 0;
-      folderNav.append(el('button', {
+      const folderButton = el('button', {
         type: 'button', class: 'home-nav-btn', dataset: { homeFolder: folder.path }, title: folder.path || folder.name,
         style: `--depth:${depth}`, onclick: () => chooseHomeView('all', folder.path),
       }, el('span', { class: 'home-nav-icon' }, iconEl('folder')),
-      el('span', { text: folder.name }), el('span', { class: 'home-nav-count', text: String(count) })));
+      el('span', { text: folder.name }), el('span', { class: 'home-nav-count', text: String(count) }));
+      const target = folder.path ? { kind: 'folder', path: folder.path, name: folder.name } : { kind: 'blank' };
+      const actions = el('button', { type: 'button', class: 'home-folder-action', text: '…',
+        title: tr('文件夹操作：{0}', folder.name), 'aria-label': tr('文件夹操作：{0}', folder.name),
+        onclick: event => { event.stopPropagation(); const rect = event.currentTarget.getBoundingClientRect(); showFileCtx(rect.left, rect.bottom, target); },
+      });
+      folderNav.append(el('div', { class: 'home-folder-row', dataset: { folderPath: folder.path },
+        oncontextmenu: event => { event.preventDefault(); event.stopPropagation(); showFileCtx(event.clientX, event.clientY, target); },
+      }, folderButton, actions));
     }
     if (!folders.length) folderNav.append(el('div', { class: 'home-folders-empty', text: tr("导入后在这里整理") }));
   }
@@ -3698,6 +3708,9 @@ async function openPaperOrganizer() {
     checkAIReady: () => {
       if (!Settings.ready) throw new Error(tr("请先在设置中配置 AI 模型，再运行分类。"));
     },
+    planFolders: options => planPaperFolders({ ...options,
+      chat: request => streamChat({ idleMs: Number(Settings.data.idleMs) || 60000, ...request }),
+    }),
     classifyBatch: options => classifyPaperBatch({ ...options,
       chat: request => streamChat({ idleMs: Number(Settings.data.idleMs) || 60000, ...request }),
     }),
@@ -3721,6 +3734,7 @@ async function organizePaperMove({ from, to }) {
     && (job.docId === paper.docId || job.reader?.url === paper.url
       || job.papers?.some(item => (item.path || item.name) === from)));
   if (beingRead()) throw new Error(tr("正在生成中，等它跑完或者点停止"));
+  stopHomeThumbnailWork();
   const rangeLoaded = Number(paper.size) > 20 * 1024 * 1024;
   if (!rangeLoaded) {
     // Small documents stream in full. Finish that stream before removing its
@@ -3754,7 +3768,8 @@ async function organizePaperMove({ from, to }) {
       obsoletePdfs.add(handle.pdf);
     }
   }
-  await Promise.all([...obsoletePdfs].map(pdf => Promise.resolve().then(() => pdf.destroy()).catch(() => {})));
+  await Promise.all([...obsoletePdfs].map(pdf => disposePdfDocument(pdf)));
+  await paperAccess.release(paper.url);
   if (beingRead()) throw new Error(tr("正在生成中，等它跑完或者点停止"));
   const response = await fetch('/api/move', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
@@ -3784,7 +3799,6 @@ async function organizePaperMove({ from, to }) {
   }
   if (homeReadingState?.path === from) homeReadingState.path = movedPath;
   state.fileSel.delete(from);
-  paperAccess.release(oldUrl);
   tabsSyncBar(); tabsPersist();
   if (serverState.lastUrl === oldUrl) {
     serverState = { ...serverState, lastUrl: movedUrl };
@@ -3817,42 +3831,135 @@ async function moveFilesTo(paths, to) {
 
 /** POST /api/move 移动 PDF / 文件夹；成功后刷新列表并同步打开中文件的内部路径 */
 async function moveItem(from, to) {
+  const wasReading = document.body.classList.contains('reading') && agentWorkspaceView !== 'full';
   try {
-    const r = await fetch('/api/move', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from, to: to || '' }),
-    });
-    let j = {};
-    try { j = await r.json(); } catch { /* 非 JSON */ }
-    if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+    const isFolder = state.folders.some(folder => folder.path === from);
+    const j = isFolder ? await relocateLibraryFolder(from, () => fetch('/api/move', {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to: to || '' }),
+    })) : await organizePaperMove({ from, to: to || '' });
     const label = from.split('/').pop();
     const finalName = j.name || label;
     const renamed = finalName !== label ? `（${finalName}）` : '';
     toast(tr("已移动 {0} → {1}{2}", label, to || tr("根目录"), renamed), 'ok', 3000);
-    // 正在打开的文件被移动：不打断阅读，只更新内部 url / path（active 按 docId 判定，不受影响）
-    if (from === (state.doc?.path || state.doc?.name)) {
-      const newPath = to ? `${to}/${finalName}` : finalName;
-      state.doc.url = `/api/pdf?path=${encodeURIComponent(newPath)}`;
-      state.doc.path = newPath;
-      state.doc.name = finalName;
-    }
-    // 文件夹被移动：会话属于文件夹（folderKey 是路径哈希），先把当前文件夹同步到新路径，
-    // 再迁移会话文件 + localStorage 里的 activeSession 键（失败不阻塞文件移动）
-    if (!/\.pdf$/i.test(from)) {
-      const newPath = to ? `${to}/${finalName}` : finalName;
-      const cur = currentFolderPath();
-      if (cur === from || cur.startsWith(`${from}/`)) {
-        state.currentFolder = newPath + cur.slice(from.length);
-        persistCurrentFolder();
-        renderFolderSwitch();
-      }
-      try { await sessionsMigrateFolder(from, newPath); } catch { /* 会话迁移失败不影响文件移动 */ }
-    }
     await refreshPaperList();
+    renderHome();
   } catch (e) {
     toast(tr("移动失败：{0}", e.message), 'err', 5000);
     await refreshPaperList();
+  } finally {
+    if (wasReading && !viewer?.pdf && organizerReadingPositions.has(state.doc?.path)) await openDoc({ ...state.doc });
+  }
+}
+
+let folderMutationBusy = false;
+const pathInFolder = (path, folder) => path === folder || path?.startsWith(`${folder}/`);
+function setFolderMutationBusy(busy) {
+  folderMutationBusy = busy;
+  $('#homeFolders')?.setAttribute('aria-busy', String(busy));
+  for (const node of $$('#homeFolders button, #homeFolders .inline-name, #homeNewFolder')) node.disabled = busy;
+}
+
+/** Folder renames move every descendant at once, so retire range readers
+ * before mutation and update all paths only after the server succeeds. */
+async function relocateLibraryFolder(from, request) {
+  if (folderMutationBusy) throw new Error(tr('正在处理文件夹，请稍后再试'));
+  setFolderMutationBusy(true);
+  const wasReading = document.body.classList.contains('reading') && agentWorkspaceView !== 'full';
+  try {
+    const papers = state.papers.filter(paper => pathInFolder(paper.path || paper.name, from));
+    const ids = new Set(papers.map(paper => paper.docId)), paths = new Set(papers.map(paper => paper.path || paper.name));
+    const busy = () => [...chatJobs.values()].some(job => !job.finished && !job.discarded
+      && (ids.has(job.docId) || job.papers?.some(paper => paths.has(paper.path || paper.name))))
+      || ids.has(state.doc?.docId) && (regionCaptureCount > 0 || activeTranslationBatch
+        || [...translationJobs].some(job => !job.controller.signal.aborted));
+    if (busy()) throw new Error(tr('正在生成中，等它跑完或者点停止'));
+    await saveSessionNow();
+    await saveProgressNow({ silent: true });
+    stopHomeThumbnailWork();
+    const downloads = new Set(), obsolete = new Set();
+    for (const paper of papers) {
+      const source = paper.path || paper.name;
+      const large = Number(paper.size) > 20 * 1024 * 1024;
+      if (state.doc?.path === source && viewer?.pdf) {
+        if (!large) downloads.add(viewer.pdf);
+        else {
+          const position = homeReadingState?.path === source ? homeReadingState : {
+            page: viewer.current, ...viewer.capturePosition(), scrollLeft: viewer.container.scrollLeft,
+            fitMode: viewer._fitMode, anchor: viewer._captureAnchor(),
+          };
+          organizerReadingPositions.set(source, { ...position, path: source, pdf: null });
+          const handle = viewer.detach(); if (handle?.pdf) obsolete.add(handle.pdf);
+          state.viewerDocId = null;
+        }
+      }
+      for (const [id, handle] of pdfHandles) {
+        if (handle.sourcePath !== source) continue;
+        if (!large) downloads.add(handle.pdf);
+        else {
+          if (!organizerReadingPositions.has(source)) organizerReadingPositions.set(source, {
+            page: handle.page, scale: handle.scale, fitMode: handle.fitMode, scrollTop: handle.scrollTop, scrollLeft: 0,
+          });
+          obsolete.add(handle.pdf); pdfHandles.delete(id);
+        }
+      }
+    }
+    await Promise.all([...obsolete].map(pdf => disposePdfDocument(pdf)));
+    await Promise.all(papers.map(paper => paperAccess.release(paper.url)));
+    await runWithDeadline(() => Promise.all([...downloads].map(pdf => pdf.getDownloadInfo())), { timeoutMs: 15000 });
+    if (busy()) throw new Error(tr('正在生成中，等它跑完或者点停止'));
+    const response = await request(), result = await response.json();
+    if (!response.ok) throw new Error(result?.error?.message || `HTTP ${response.status}`);
+    if (result.moved === false) return result;
+    const to = result.to;
+    if (typeof to !== 'string' || !to) throw new Error(tr('文件夹路径未返回，请刷新列表'));
+    const remap = value => pathInFolder(value, from) ? to + value.slice(from.length) : value;
+    const oldFolders = state.folders.filter(folder => pathInFolder(folder.path, from)).map(folder => folder.path);
+    for (const paper of papers) {
+      const oldUrl = paper.url, next = remap(paper.path || paper.name), url = `/api/pdf?path=${encodeURIComponent(next)}`;
+      paper.path = next; paper.url = url; paper.folder = folderOf(next);
+      if (serverState.lastUrl === oldUrl) serverState = { ...serverState, lastUrl: url };
+    }
+    if (pathInFolder(state.doc?.path, from)) {
+      state.doc.path = remap(state.doc.path); state.doc.url = `/api/pdf?path=${encodeURIComponent(state.doc.path)}`;
+      viewer.url = state.doc.url;
+    }
+    for (const tab of tabsStore.tabs) if (pathInFolder(tab.path, from)) {
+      tab.path = remap(tab.path); tab.url = `/api/pdf?path=${encodeURIComponent(tab.path)}`;
+    }
+    for (const handle of pdfHandles.values()) if (pathInFolder(handle.sourcePath, from)) {
+      handle.sourcePath = remap(handle.sourcePath); handle.url = `/api/pdf?path=${encodeURIComponent(handle.sourcePath)}`;
+    }
+    for (const [path, position] of [...organizerReadingPositions]) if (pathInFolder(path, from)) {
+      organizerReadingPositions.delete(path); organizerReadingPositions.set(remap(path), { ...position, path: remap(path) });
+    }
+    if (homeReadingState?.path) homeReadingState.path = remap(homeReadingState.path);
+    const remapOwner = owner => {
+      if (!owner || !pathInFolder(owner.folder, from)) return owner;
+      const oldKey = folderKeyOf(owner.folder), nextFolder = remap(owner.folder), nextKey = folderKeyOf(nextFolder);
+      return { ...owner, folder: nextFolder, scope: owner.scope === oldKey ? nextKey : owner.scope,
+        slot: owner.slot === oldKey ? nextKey : owner.slot };
+    };
+    agentPinnedOwner = remapOwner(agentPinnedOwner);
+    if (agentFolderOverride !== null) agentFolderOverride = remap(agentFolderOverride);
+    if (homeReadingState?.conversation) {
+      homeReadingState.conversation = { ...homeReadingState.conversation,
+        pinnedOwner: remapOwner(homeReadingState.conversation.pinnedOwner),
+        folderOverride: homeReadingState.conversation.folderOverride === null ? null : remap(homeReadingState.conversation.folderOverride) };
+    }
+    if (homeView.folder !== null) homeView.folder = remap(homeView.folder);
+    state.fileSel = new Set([...state.fileSel].map(remap));
+    state.folderOpen = new Set([...state.folderOpen].map(remap)); saveFolderOpen();
+    state.currentFolder = remap(currentFolderPath()); persistCurrentFolder();
+    tabsSyncBar(); tabsPersist();
+    await queueProgressSave(serverState).catch(() => toast(tr('阅读进度保存失败，当前进度仍在内存中。'), 'err', 5000));
+    for (const folder of oldFolders) {
+      try { await sessionsMigrateFolder(folder, remap(folder)); }
+      catch { toast(tr('会话迁移失败，原会话仍已保留。'), 'err', 5000); }
+    }
+    return result;
+  } finally {
+    setFolderMutationBusy(false);
+    if (wasReading && !viewer?.pdf && organizerReadingPositions.has(state.doc?.path)) await openDoc({ ...state.doc });
   }
 }
 
@@ -3901,13 +4008,15 @@ function sanitizeClientFolderName(name) {
 function initFileContextMenu() {
   const menu = $('#fileCtx');
   if (!menu) return;
+  // Library hides the reader's left sidebar; its shared menu must live outside it.
+  document.body.append(menu);
   const close = () => { menu.hidden = true; menu.innerHTML = ''; };
   document.addEventListener('click', (e) => { if (!menu.hidden && !menu.contains(e.target)) close(); });
   document.addEventListener('keydown', (e) => { if (e.key === 'Escape') close(); });
   window.addEventListener('blur', close);
   // 只接管文件列表 / 拖入区 / 筛选框的右键
   document.addEventListener('contextmenu', (e) => {
-    if (!e.target.closest?.('#fileList, #dropzone, #fileFilter')) return;
+    if (!e.target.closest?.('#fileList, #dropzone, #fileFilter, #homeFolders, #homeNewFolder')) return;
     e.preventDefault();
     const folderLi = e.target.closest?.('li.folder[data-path]');
     const fileLi = e.target.closest?.('li[data-path]:not(.folder)');
@@ -3978,9 +4087,9 @@ function showFileCtx(x, y, target) {
   if (target.kind === 'blank') {
     menu.append(item(tr("新建文件夹"), () => startInlineCreate('')));
   } else if (target.kind === 'folder') {
-    menu.append(item(tr("新建文件夹"), () => startInlineCreate('')));
+    menu.append(item(tr('新建子文件夹'), () => startInlineCreate(target.path)));
     menu.append(item(tr("重命名"), () => startInlineRename(target.path, target.name)));
-    menu.append(item(tr("删除文件夹"), () => deleteFolder(target.path, target.name), true));
+    menu.append(item(tr('删除文件夹（保留论文）'), () => deleteFolder(target.path, target.name), true));
     menu.append(item(tr("移动到…"), () => showMoveTargets(menu, target)));
   } else {
     menu.append(item(tr("在新窗口打开"), () => openReaderWindow((state.papers || []).find((p) => (p.path || p.name) === target.path))));
@@ -4012,16 +4121,21 @@ function showMoveTargets(menu, target) {
 
 /** 内联新建文件夹（根下或指定父夹下） */
 function startInlineCreate(parentPath) {
+  const inLibrary = !document.body.classList.contains('reading');
+  const redraw = () => { renderPaperList(); renderHome(); };
   if (parentPath && !state.folderOpen.has(parentPath)) {
     state.folderOpen.add(parentPath);
     saveFolderOpen();
   }
-  renderPaperList();
-  const list = $('#fileList');
+  redraw();
+  const list = inLibrary ? $('#homeFolders') : $('#fileList');
   if (!list) return;
   const input = el('input', { class: 'inline-name', placeholder: tr("新文件夹名，Enter 确认") });
-  const li = el('li', { class: 'folder inline-create' }, input);
-  if (!parentPath) {
+  const li = el(inLibrary ? 'div' : 'li', { class: inLibrary ? 'home-folder-row inline-create' : 'folder inline-create' }, input);
+  if (inLibrary && parentPath) {
+    const parent = [...list.querySelectorAll('[data-folder-path]')].find(node => node.dataset.folderPath === parentPath);
+    if (parent) parent.after(li); else list.prepend(li);
+  } else if (!parentPath) {
     list.prepend(li);
   } else {
     const ul = [...$$('#fileList ul.folder-children')].find((u) => u.dataset.parent === parentPath);
@@ -4033,7 +4147,7 @@ function startInlineCreate(parentPath) {
     if (done) return;
     done = true;
     const name = input.value.trim();
-    if (!name) { renderPaperList(); return; }
+    if (!name) { redraw(); return; }
     try {
       const q = new URLSearchParams({ name });
       if (parentPath) q.set('parent', parentPath);
@@ -4043,22 +4157,26 @@ function startInlineCreate(parentPath) {
       if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
       if (parentPath && !state.folderOpen.has(parentPath)) { state.folderOpen.add(parentPath); saveFolderOpen(); }
       await refreshPaperList();
+      renderHome();
       toast(tr("已创建文件夹「{0}」", j.path || j.name), 'ok', 2400);
     } catch (e) {
       toast(tr("创建文件夹失败：{0}", e.message), 'err', 4200);
-      renderPaperList();
+      redraw();
     }
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') commit();
-    else if (e.key === 'Escape') { done = true; renderPaperList(); }
+    else if (e.key === 'Escape') { done = true; redraw(); }
   });
   input.addEventListener('blur', commit);
 }
 
 /** 内联重命名文件夹（改磁盘真实目录名；内部 PDF 的 docId / 笔记 / 会话不受影响） */
 function startInlineRename(folderPath, name) {
-  const li = [...$$('#fileList li.folder')].find((x) => x.dataset.path === folderPath);
+  const inLibrary = !document.body.classList.contains('reading');
+  const redraw = () => { renderPaperList(); renderHome(); };
+  const li = inLibrary ? [...$$('#homeFolders [data-folder-path]')].find(node => node.dataset.folderPath === folderPath)
+    : [...$$('#fileList li.folder')].find((x) => x.dataset.path === folderPath);
   if (!li) return;
   const input = el('input', { class: 'inline-name', value: name });
   li.classList.add('renaming');
@@ -4070,89 +4188,63 @@ function startInlineRename(folderPath, name) {
     if (done) return;
     done = true;
     const to = input.value.trim();
-    if (!to || to === name) { renderPaperList(); return; }
+    if (!to || to === name) { redraw(); return; }
     try {
-      const r = await fetch('/api/folders', {
+      await relocateLibraryFolder(folderPath, () => fetch('/api/folders', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: folderPath, to }),
-      });
-      let j = {};
-      try { j = await r.json(); } catch { /* 非 JSON */ }
-      if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
-      // 打开中文件在旧夹里：url 换成 name 回退形式，不打断阅读
-      if (state.doc && (state.doc.path || '').startsWith(`${folderPath}/`)) {
-        const base = (state.doc.path || '').split('/').pop();
-        state.doc.url = `/api/pdf?name=${encodeURIComponent(base)}`;
-        state.doc.path = base;
-      }
-      // 文件夹改名：会话属于文件夹（folderKey 是路径哈希），同步当前文件夹并迁移会话键
-      // （旧会话文件保留作回退备份；失败不阻塞改名）
-      const parent = folderPath.includes('/') ? folderPath.slice(0, folderPath.lastIndexOf('/')) : '';
-      const newPath = parent ? `${parent}/${j.name || to}` : (j.name || to);
-      const cur = currentFolderPath();
-      if (cur === folderPath || cur.startsWith(`${folderPath}/`)) {
-        state.currentFolder = newPath + cur.slice(folderPath.length);
-        persistCurrentFolder();
-        renderFolderSwitch();
-      }
-      try { await sessionsMigrateFolder(folderPath, newPath); } catch { /* 会话迁移失败不影响改名 */ }
+      }));
       await refreshPaperList();
+      renderHome();
       toast(tr("已重命名「{0}」→「{1}」", name, to), 'ok', 2600);
     } catch (e) {
       toast(tr("重命名失败：{0}", e.message), 'err', 4200);
-      renderPaperList();
+      redraw();
     }
   };
   input.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') commit();
-    else if (e.key === 'Escape') { done = true; renderPaperList(); }
+    else if (e.key === 'Escape') { done = true; redraw(); }
   });
   input.addEventListener('blur', commit);
 }
 
 async function deleteFolder(folderPath, name) {
-  const f = (state.folders || []).find((x) => x.path === folderPath);
-  const count = f?.count || 0;
-  if (!count) {
-    if (!confirm(tr("删除文件夹「{0}」？", name))) return;
-    return doDeleteFolder(folderPath, 'recursive');
-  }
-  // 非空：默认推荐「PDF 移到根再删」；取消则问是否彻底删
-  if (confirm(tr("删除文件夹「{0}」？\n\n里面有 {1} 篇 PDF。\n确定 = PDF 移到根目录再删（推荐，不丢文件）\n取消 = 改为彻底删除", name, count))) {
-    return doDeleteFolder(folderPath, 'to-root');
-  }
-  if (confirm(tr("彻底删除「{0}」？\n\n连同里面 {1} 篇 PDF 一起删除，不可恢复。", name, count))) {
-    return doDeleteFolder(folderPath, 'recursive');
-  }
+  const count = state.papers.filter(paper => pathInFolder(paper.path || paper.name, folderPath)).length;
+  const ok = await sessionsConfirm({ title: tr('删除文件夹「{0}」？', name),
+    body: count ? tr('其中 {0} 篇论文将移到根目录；同名冲突或其他文件会保留原文件夹。', count)
+      : tr('只删除空文件夹；其他文件会保留，取消不会删除任何内容。'), okText: tr('删除文件夹（保留论文）') });
+  if (ok) await doDeleteFolder(folderPath);
 }
 
-async function doDeleteFolder(folderPath, mode) {
+async function doDeleteFolder(folderPath) {
+  if (folderMutationBusy) { toast(tr('正在处理文件夹，请稍后再试')); return; }
+  const wasReading = document.body.classList.contains('reading') && agentWorkspaceView !== 'full';
+  setFolderMutationBusy(true);
   try {
-    const r = await fetch(`/api/folders?path=${encodeURIComponent(folderPath)}&mode=${mode}`, { method: 'DELETE' });
+    const papers = state.papers.filter(paper => pathInFolder(paper.path || paper.name, folderPath));
+    for (const paper of papers) await organizePaperMove({ from: paper.path || paper.name, to: '' });
+    const r = await fetch(`/api/folders?path=${encodeURIComponent(folderPath)}&mode=empty`, { method: 'DELETE' });
     let j = {};
     try { j = await r.json(); } catch { /* 非 JSON */ }
     if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
     const label = folderPath.split('/').pop();
-    toast(mode === 'to-root'
-      ? tr("已删除文件夹「{0}」，其中 {1} 篇 PDF 移到根目录", label, j.moved || 0)
-      : tr("已删除文件夹「{0}」", label), 'ok', 3200);
-    state.folderOpen.delete(folderPath);
+    toast(papers.length ? tr('已删除文件夹「{0}」，其中 {1} 篇 PDF 移到根目录', label, papers.length)
+      : tr('已删除文件夹「{0}」', label), 'ok', 3200);
+    state.folderOpen = new Set([...state.folderOpen].filter(path => !pathInFolder(path, folderPath)));
     saveFolderOpen();
-    // 正在读的文件受影响：to-root 换 name 回退 url；recursive 收掉阅读态
-    if (state.doc && (state.doc.path || '').startsWith(`${folderPath}/`)) {
-      if (mode === 'to-root') {
-        const base = (state.doc.path || '').split('/').pop();
-        state.doc.url = `/api/pdf?name=${encodeURIComponent(base)}`;
-        state.doc.path = base;
-      } else {
-        closeDeletedDoc();
-      }
+    if (pathInFolder(currentFolderPath(), folderPath)) {
+      state.currentFolder = ''; persistCurrentFolder(); renderFolderSwitch();
     }
-    await refreshPaperList();
-    renderHome();
+    if (homeView.folder !== null && pathInFolder(homeView.folder, folderPath)) homeView.folder = '';
   } catch (e) {
     toast(tr("删除文件夹失败：{0}", e.message), 'err', 5000);
+  } finally {
+    try {
+      await refreshPaperList(); renderHome();
+      if (wasReading && !viewer?.pdf && organizerReadingPositions.has(state.doc?.path)) await openDoc({ ...state.doc });
+    } finally { setFolderMutationBusy(false); }
   }
 }
 

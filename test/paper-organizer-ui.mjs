@@ -50,6 +50,9 @@ async function organizer() {
   await page.locator('#homeOrganize').click();
   await page.waitForFunction(() => document.querySelector('#paperOrganizer')?.open
     && document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false');
+  assert.equal(await page.$eval('#paperOrganizerScope', node => node.value), 'all');
+  await page.select('#paperOrganizerScope', 'root');
+  await page.select('#paperOrganizerDepth', '2');
 }
 async function closeOrganizer() {
   await page.locator('#paperOrganizer .po-actions > button:first-child').click();
@@ -95,6 +98,9 @@ async function screenshotLayout(width) {
 try {
   model = await startOrganizerTestModel(record => {
     const input = JSON.parse(record.body.messages.at(-1).content);
+    if (input.task === 'plan') return model.reply(record, { folders: ['Abstract structures/Proof methods', '数学/数值分析',
+      'Visual reasoning/Scene understanding', 'Uncertain/Review'].map(path => ({ path, description: `Synthetic scope for ${path}` })) });
+    assert.equal(input.task, 'classify');
     model.reply(record, { items: input.papers.map(paper => ({ id: paper.id,
       folder: paper.path === activeName ? 'Abstract structures/Proof methods'
         : paper.path === conflictName ? '数学/数值分析'
@@ -235,18 +241,21 @@ try {
   await page.locator('#paperOrganizerClassify').click();
   await page.waitForFunction(() => document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false'
     && [...document.querySelectorAll('#paperOrganizerList .po-target input')].some(node => node.value));
-  assert.equal(model.requests.length, 1);
-  const classificationInput = JSON.parse(model.requests[0].body.messages.at(-1).content);
+  assert.equal(model.requests.length, 2);
+  const planInput = JSON.parse(model.requests[0].body.messages.at(-1).content);
+  const classificationInput = JSON.parse(model.requests[1].body.messages.at(-1).content);
   assert.equal(model.requests[0].body.model, 'organizer-ui-synthetic');
+  assert.equal(planInput.task, 'plan'); assert.equal(classificationInput.task, 'classify');
   assert.ok(classificationInput.classificationInstructions.includes('SYNTHETIC_CUSTOM_RULE'));
-  assert.ok(classificationInput.existingFolders.includes('数学/数值分析'));
+  assert.ok(planInput.existingFolders.includes('数学/数值分析'));
+  assert.ok(classificationInput.allowedFolders.some(folder => folder.path === '数学/数值分析'));
   assert.equal(classificationInput.papers.find(paper => paper.path === 'metadata-paper.pdf').title, 'Computer Vision Image Recognition');
   assert.equal(await page.$eval(`${row(activeName)} .po-target input`, node => node.value), 'Abstract structures/Proof methods');
   assert.equal(await page.$eval(`${row(conflictName)} .po-target input`, node => node.value), '数学/数值分析');
   assert.equal(await page.$eval(`${row('Unclassified Notes.pdf')} input[type="checkbox"]`, node => node.checked), false);
   assert.equal(moveRequests().length, 0);
-  assert.equal(requests.filter(request => request.path === '/api/chat').length, 1);
-  pass('explicit AI classification uses the configured model, custom instructions and extracted titles for new and existing folders without moving files');
+  assert.equal(requests.filter(request => request.path === '/api/chat').length, 2);
+  pass('explicit AI planning and constrained classification use the configured model, custom instructions and extracted titles without moving files');
   await editTarget(activeName, 'Reading/Linear algebra');
   await selectOnly([activeName, conflictName]);
   await applyAndWait(2);
