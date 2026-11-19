@@ -1,5 +1,11 @@
 /* One conversation surface moves between the main workspace and the reader. */
 .agent-open { flex: 0 0 auto; gap: 5px; max-width: 150px; }
+.agent-visible-actions { display: none; }
+body.agent-full #rightSide > .agent-visible-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 16px 22px 8px; }
+body.agent-full .agent-visible-actions .agent-action { display: inline-flex; align-items: center; gap: 8px; min-height: 40px; padding: 9px 16px; font-size: 14px; border: 1px solid var(--border-strong); border-radius: 10px; background: var(--bg-elev); }
+body.agent-full .agent-visible-actions .agent-primary-entry, .reading-entry { font-weight: 600; }
+body.agent-full .agent-visible-actions .reading-entry { background: var(--accent-soft); color: var(--accent); }
+.reading-entry:disabled { opacity: .5; cursor: default; }
 .agent-open [data-agent-name] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-open[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
 .agent-icon, [data-agent-icon] { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }

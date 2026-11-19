@@ -167,6 +167,7 @@
           <header class="home-head">
             <h1 id="homeHeading">Library</h1>
             <div class="home-head-actions">
+              <button type="button" class="home-open reading-entry" id="homeReadingEntry"><span>打开上次阅读区</span></button>
               <button type="button" class="home-open" id="homeOrganize"><span>整理 PDF</span></button>
               <button type="button" class="home-open" id="homeOpen"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg><span>打开 PDF</span></button>
             </div>
@@ -208,6 +209,10 @@
   <div class="splitter" id="splitRight" title="拖动调整宽度"></div>
 
   <aside class="side right" id="rightSide">
+    <nav class="agent-visible-actions" aria-label="会话与阅读">
+      <button type="button" class="agent-action agent-primary-entry" id="agentNewSessionEntry"><span data-agent-icon="pencil" aria-hidden="true"></span><span>新建会话</span></button>
+      <button type="button" class="agent-action reading-entry" id="agentReadingEntry"><span data-agent-icon="book" aria-hidden="true"></span><span>打开上次阅读区</span></button>
+    </nav>
     <header class="agent-identity" id="agentIdentity" hidden>
       <div class="agent-heading">
         <span class="agent-mark" data-agent-icon="alina" aria-hidden="true"></span>
@@ -307,7 +312,7 @@
     </form>
     <nav class="agent-launch-actions" id="agentLaunchActions" aria-label="智能体快捷入口" hidden>
       <button type="button" class="agent-launch" id="agentStartSearch"><span class="agent-launch-icon" data-agent-icon="search" aria-hidden="true"></span><span class="agent-launch-copy"><span class="agent-launch-title">找论文</span><span class="agent-launch-detail">题目、作者，或你记得的内容</span></span><span class="agent-launch-arrow" data-agent-icon="chevron-right" aria-hidden="true"></span></button>
-      <button type="button" class="agent-launch" id="agentResume"><span class="agent-launch-icon" data-agent-icon="history" aria-hidden="true"></span><span class="agent-launch-copy"><span class="agent-launch-title">继续上次</span><span class="agent-launch-recent" id="agentRecentTitle" hidden></span></span><span class="agent-launch-arrow" data-agent-icon="chevron-right" aria-hidden="true"></span></button>
+      <button type="button" class="agent-launch" id="agentResume"><span class="agent-launch-icon" data-agent-icon="history" aria-hidden="true"></span><span class="agent-launch-copy"><span class="agent-launch-title">继续上次会话</span><span class="agent-launch-recent" id="agentRecentTitle" hidden></span></span><span class="agent-launch-arrow" data-agent-icon="chevron-right" aria-hidden="true"></span></button>
     </nav>
   </aside>
   </div>

@@ -2324,6 +2324,7 @@ function initViewer() {
 }
 
 function refreshReturnButton() {
+  refreshReadingEntries();
   // 顶栏那个「返回原位置」按钮已删除，所以这里没有按钮可刷 —— 直接返回。
   // 保留函数本身：__ctx 仍导出它、跳转历史（state.jumpHistory）仍由 recordReaderJump 维护，
   // 测试与将来的入口都还能用。
@@ -2502,6 +2503,21 @@ async function returnToReader() {
   } finally { agentNavigationBusy = false; }
 }
 
+function refreshReadingEntries() {
+  const loaded = !!(viewer?.pdf && state.viewerDocId === state.doc?.docId);
+  const paper = loaded ? state.doc : recentDocs()[0];
+  const label = loaded || homeReadingState ? tr('回到阅读区') : tr('打开上次阅读区');
+  for (const id of ['homeReadingEntry', 'agentReadingEntry']) {
+    const button = $(`#${id}`);
+    if (!button) continue;
+    button.querySelector('span:last-child').textContent = label;
+    button.disabled = !paper;
+    button.title = paper ? `${label} · ${paper.name}` : tr('还没有阅读记录');
+    button.setAttribute('aria-label', button.title);
+    button.onclick = () => void returnToReader();
+  }
+}
+
 function setAgentWorkspaceView(view) {
   if (view === 'full' && agentWorkspaceView !== 'full' && viewer?.pdf
     && viewer.container.clientWidth > 0 && viewer.container.clientHeight > 0) {
@@ -2511,6 +2527,7 @@ function setAgentWorkspaceView(view) {
   agentWorkspaceView = view;
   if (view !== 'full') setAgentLanding(false);
   agentWorkspace?.setView(view);
+  refreshReadingEntries();
   syncHomeBtnVisibility();
   if ($('#chatInput') && rightPanelInCol(1) !== 'translate') {
     $('#chatInput').placeholder = view === 'full' ? tr('描述想找的论文，或直接聊聊…') : tr('问点什么…');
@@ -2952,6 +2969,7 @@ function chooseHomeView(filter, folder = null) {
 
 /** 书架来自磁盘文件，阅读状态来自 serverState；所有入口共用 openDoc。 */
 function renderHome({ navigation = true } = {}) {
+  refreshReadingEntries();
   initLibrarySidebar($('#home'), { storage: localStorage, label: tr('调整 Library 侧栏宽度'), resetLabel: tr('拖动调整宽度，双击恢复默认；方向键微调') });
   const list = $('#homeList');
   if (!list) return;
