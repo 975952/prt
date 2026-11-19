@@ -918,6 +918,37 @@ async function deleteEmptyFolderTree(value) {
 }
 
 let organizerMoveChain = Promise.resolve();
+let organizerHistoryChain = Promise.resolve();
+async function readOrganizerHistory() {
+  try {
+    const value = JSON.parse(await fsp.readFile(path.join(DATA_DIR, 'organizer-history.json'), 'utf8'));
+    validateOrganizerHistory(value);
+    return value;
+  } catch (error) {
+    if (error.code === 'ENOENT') return { revision: 0, records: [] };
+    throw new Error('整理记录无法读取，原记录已保留');
+  }
+}
+
+function validateOrganizerHistory(value) {
+  if (!value || !Number.isSafeInteger(value.revision) || value.revision < 0 || !Array.isArray(value.records)
+    || value.records.length > 10) throw new Error('Invalid organizer history');
+  let total = 0;
+  for (const record of value.records) {
+    if (!record || typeof record.id !== 'string' || record.id.length > 100 || typeof record.date !== 'string'
+      || record.date.length > 100 || !['running', 'complete', 'restoring', 'partial', 'restored'].includes(record.status)
+      || !Array.isArray(record.entries) || !Array.isArray(record.folders) || !Array.isArray(record.cleanup)
+      || record.folders.length > 10000 || record.cleanup.length > 10000) throw new Error('Invalid organizer history');
+    total += record.entries.length;
+    if (total > 20000) throw new Error('Organizer history is too large');
+    for (const folder of [...record.folders, ...record.cleanup]) organizerPath(folder);
+    for (const entry of record.entries) {
+      if (!entry || !['pending', 'moving', 'moved', 'restoring', 'restored'].includes(entry.state)
+        || !Number.isFinite(entry.size) || entry.size < 0 || !Number.isFinite(entry.mtime)
+        || !/\.pdf$/i.test(organizerPath(entry.from)) || !/\.pdf$/i.test(organizerPath(entry.to))) throw new Error('Invalid organizer history');
+    }
+  }
+}
 async function organizeMovePdf(raw) {
   const from = organizerPath(raw.from), to = organizerPath(raw.to, true);
   if (!/\.pdf$/i.test(from)) throw organizerMoveError(400, '整理只支持 PDF 文件');
@@ -2513,6 +2544,24 @@ async function handle(req, res) {
       return profileWriteChain;
     }
     return send(res, 405, 'Method Not Allowed');
+  }
+
+  if (pathname === '/api/organizer-history') {
+    if (req.method === 'GET') return sendJson(res, 200, await readOrganizerHistory());
+    if (req.method !== 'POST') return send(res, 405, 'Method Not Allowed');
+    const payload = await readJsonBodyOrReq(req, res, 8 * 1024 * 1024);
+    if (payload === null) return;
+    try { validateOrganizerHistory(payload); }
+    catch { return sendJson(res, 400, { error: { message: '整理记录无效或过大，原记录已保留' } }); }
+    const pending = organizerHistoryChain.catch(() => {}).then(async () => {
+      const current = await readOrganizerHistory();
+      if (current.revision !== payload.revision) return sendJson(res, 409, { error: { message: '整理记录已在其他窗口更新，请刷新后重试' } });
+      const next = { revision: current.revision + 1, records: payload.records };
+      await writeDataFile('organizer-history.json', next);
+      return sendJson(res, 200, { ok: true, revision: next.revision });
+    });
+    organizerHistoryChain = pending;
+    return pending;
   }
 
   // ---- 阅读进度 / 上次打开的文件

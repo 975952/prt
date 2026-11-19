@@ -28,6 +28,7 @@ fn body_limit(path: &str) -> usize {
         "/api/upload" => MAX_UPLOAD,
         "/api/config" => limits::BODY_CONFIG,
         "/api/state" => limits::BODY_STATE,
+        "/api/organizer-history" => 8 * 1024 * 1024,
         // 书架排序（/api/papers 的 POST）：一个文件名数组，正常只有几百字节
         "/api/papers" => limits::BODY_STATE,
         "/api/notes" => limits::BODY_NOTES,
@@ -191,6 +192,7 @@ fn handle(mut rq: Request, ctx: &Ctx) {
         "/api/upload" => return api::upload(rq, &method, &raw_query, &body),
         "/api/config" => return api::config(rq, &method, &body),
         "/api/state" => return api::state(rq, &method, &raw_query, &body),
+        "/api/organizer-history" => return api::organizer_history(rq, &method, &body),
         "/api/profile" => return api::profile(rq, &method, &body),
         "/api/notes" => return api::notes(rq, &method, &raw_query, &body),
         "/api/session" => return api::session(rq, &method, &raw_query, &body),

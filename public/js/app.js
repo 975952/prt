@@ -20,6 +20,7 @@ import { runWithDeadline } from './task-deadline.js';
 import { createLibraryReader } from './chat-source.js';
 import { createPaperTitleIndex } from './paper-titles.js';
 import { createPaperOrganizer } from './paper-organizer.js';
+import { createOrganizerHistory } from './organizer-history.js';
 import { classifyPaperBatch, planPaperFolders } from './paper-classifier.js';
 import { CARD_MATERIAL_DEFAULTS, updateTranslationMaterial } from './glass-material.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
@@ -3698,6 +3699,53 @@ function bindPaperDrag(list) {
 }
 
 let paperOrganizer = null;
+const organizerHistory = createOrganizerHistory({
+  movePaper: organizePaperMove,
+  refresh: async () => {
+    await refreshPaperList();
+    if (homeView.folder && !state.folders.some(folder => folder.path === homeView.folder)) homeView.folder = null;
+    renderHome();
+  },
+});
+let organizerRollbackBusy = false;
+async function renderOrganizerHistory() {
+  const status = $('#organizerHistoryStatus'), list = $('#organizerHistoryList'), button = $('#organizerRollback');
+  if (!status || !list || !button) return;
+  button.disabled = true;
+  try {
+    const history = await organizerHistory.load();
+    list.replaceChildren();
+    for (const record of [...history.records].reverse()) {
+      const label = record.status === 'restored' ? tr('已回退') : record.status === 'complete' ? tr('已整理') : tr('未完成，可回退');
+      list.append(el('p', { text: `${new Date(record.date).toLocaleString()} · ${tr('{0} 篇论文', record.entries.length)} · ${label}` }));
+    }
+    const available = history.records.some(record => record.status !== 'restored');
+    status.textContent = available ? tr('回退最近一次未回退的整理，恢复原目录和论文位置。同名或已修改的文件会保留，可处理冲突后重试。')
+      : tr('没有可回退的整理记录。旧版本的整理未保存原位置，无法恢复；新整理会自动记录。');
+    button.disabled = organizerRollbackBusy || !available;
+  } catch (error) { status.textContent = error.message; }
+}
+async function rollbackOrganizer() {
+  if (organizerRollbackBusy) return;
+  const confirmed = await sessionsConfirm({ title: tr('回退最近一次 PDF 整理？'),
+    body: tr('将论文放回整理前的位置，并恢复清理掉的旧目录。不会覆盖同名文件。'), okText: tr('回退整理') });
+  if (!confirmed) return;
+  const wasReading = document.body.classList.contains('reading') && agentWorkspaceView !== 'full';
+  organizerRollbackBusy = true; $('#organizerRollback').disabled = true;
+  $('#organizerHistoryStatus').textContent = tr('正在回退整理…');
+  try {
+    await refreshPaperList();
+    const result = await organizerHistory.rollback();
+    organizerRollbackBusy = false;
+    await renderOrganizerHistory();
+    $('#organizerHistoryStatus').textContent = tr('已恢复 {0} 篇，{1} 项冲突或文件已变化；未覆盖任何文件。', result.restored, result.conflicts.length)
+      + (result.conflicts.length ? `\n${result.conflicts.join('\n')}` : '');
+  } catch (error) { $('#organizerHistoryStatus').textContent = tr('回退未完成：{0}。记录已保留，可重试。', error.message); $('#organizerRollback').disabled = false; }
+  finally {
+    organizerRollbackBusy = false;
+    if (wasReading && !viewer?.pdf && organizerReadingPositions.has(state.doc?.path)) await openDoc({ ...state.doc });
+  }
+}
 async function openPaperOrganizer() {
   if (conversationMoveBusy) return;
   paperOrganizer ||= createPaperOrganizer({
@@ -3715,6 +3763,7 @@ async function openPaperOrganizer() {
       chat: request => streamChat({ idleMs: Number(Settings.data.idleMs) || 60000, ...request }),
     }),
     movePaper: organizePaperMove,
+    runMoves: (tasks, execute, options) => organizerHistory.runBatch(tasks, execute, options),
     onComplete: async () => { await refreshPaperList(); renderHome(); },
   });
   try { await paperOrganizer.open(); }
@@ -14733,7 +14782,7 @@ function resetSettings() {
 }
 
 const SETTINGS_PANE_KEY = 'reader.settings.pane';
-const SETTINGS_PANES = ['language', 'model', 'agent', 'appearance', 'behavior', 'session', 'memory'];
+const SETTINGS_PANES = ['language', 'model', 'agent', 'appearance', 'behavior', 'session', 'memory', 'library'];
 
 /**
  * 设置弹窗两栏切换：左列竖排分类，右侧只显示对应面板。
@@ -14755,6 +14804,7 @@ function showSettingsPane(name) {
   if (box) box.dataset.settingsPane = pane;
   $('#saveSettings').textContent = pane === 'model' ? tr("保存并使用") : tr("保存");
   try { localStorage.setItem(SETTINGS_PANE_KEY, pane); } catch (e) { /* 隐私模式写不了，忽略 */ }
+  if (pane === 'library') void renderOrganizerHistory();
 }
 
 async function openSettings(hint) {
@@ -14886,6 +14936,7 @@ function initSettings() {
     } finally { settingsTestAbort = null; settingsOperation = ''; updateModelControls(); }
   };
   $('#settingsBtn').onclick = () => openSettings();
+  $('#organizerRollback').onclick = rollbackOrganizer;
   // 左列分类：点击切换；键盘 ↑/↓/Home/End 也能在分类间走动（panel 内部 Tab 正常）
   const settingsNav = document.querySelector('.settings-nav');
   settingsNav?.addEventListener('click', (e) => {

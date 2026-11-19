@@ -1104,6 +1104,63 @@ pub fn config(rq: Request, method: &Method, body: &[u8]) {
 
 /* ---------------------------------------------------------------- 进度 */
 
+pub fn organizer_history(rq: Request, method: &Method, body: &[u8]) {
+    static HISTORY_LOCK: Mutex<()> = Mutex::new(());
+    let _guard = HISTORY_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let current: Value = match std::fs::read_to_string(store::data_path("organizer-history.json")) {
+        Ok(text) => match serde_json::from_str::<Value>(&text) {
+            Ok(value) if value.get("revision").and_then(Value::as_u64).is_some() && value.get("records").and_then(Value::as_array).is_some() => value,
+            _ => return send_json(rq, 500, &err_json("整理记录无法读取，原记录已保留")),
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => json!({"revision": 0, "records": []}),
+        Err(_) => return send_json(rq, 500, &err_json("整理记录无法读取，原记录已保留")),
+    };
+    if *method == Method::Get { return send_json(rq, 200, &current); }
+    if *method != Method::Post { return send_text(rq, 405, "Method Not Allowed"); }
+    let payload = match parse_json(body) {
+        Ok(value) => value,
+        Err(_) => return send_json(rq, 400, &err_json("整理记录无效或过大，原记录已保留")),
+    };
+    let valid = (|| -> Option<()> {
+        let revision = payload.get("revision")?.as_u64()?;
+        if revision > 9_007_199_254_740_991 { return None; }
+        let records = payload.get("records")?.as_array()?;
+        if records.len() > 10 { return None; }
+        let mut total = 0;
+        for record in records {
+            if record.get("id")?.as_str()?.chars().count() > 100 || record.get("date")?.as_str()?.chars().count() > 100
+                || !["running", "complete", "restoring", "partial", "restored"].contains(&record.get("status")?.as_str()?) { return None; }
+            for key in ["folders", "cleanup"] {
+                let paths = record.get(key)?.as_array()?;
+                if paths.len() > 10000 { return None; }
+                for path in paths { organizer_path(Some(path), false).ok()?; }
+            }
+            let entries = record.get("entries")?.as_array()?;
+            total += entries.len();
+            if total > 20000 { return None; }
+            for entry in entries {
+                if !["pending", "moving", "moved", "restoring", "restored"].contains(&entry.get("state")?.as_str()?)
+                    || entry.get("size")?.as_f64()? < 0.0 { return None; }
+                entry.get("mtime")?.as_f64()?;
+                for key in ["from", "to"] {
+                    if !organizer_path(entry.get(key), false).ok()?.to_lowercase().ends_with(".pdf") { return None; }
+                }
+            }
+        }
+        Some(())
+    })().is_some();
+    if !valid { return send_json(rq, 400, &err_json("整理记录无效或过大，原记录已保留")); }
+    if payload["revision"] != current["revision"] {
+        return send_json(rq, 409, &err_json("整理记录已在其他窗口更新，请刷新后重试"));
+    }
+    let revision = current["revision"].as_u64().unwrap_or(0) + 1;
+    let next = json!({"revision": revision, "records": payload["records"]});
+    if !store::write_json("organizer-history.json", &next) {
+        return send_json(rq, 500, &err_json("整理记录保存失败，已停止后续移动"));
+    }
+    send_json(rq, 200, &json!({"ok": true, "revision": revision}));
+}
+
 pub fn state(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     static STATE_LOCK: Mutex<()> = Mutex::new(());
     let _guard = STATE_LOCK.lock().unwrap_or_else(|e| e.into_inner());

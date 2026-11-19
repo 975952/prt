@@ -203,6 +203,17 @@ try {
   assert.ok(requests.slice(parkedLaterCheckpoint).some(request => request.path === 'Moved/parked.pdf' && request.range));
   assert.ok(!requests.slice(parkedCheckpoint).some(request => request.path === 'parked.pdf'));
   pass('parked large PDF discards its old transport and restores its saved reading position using the moved file');
+  await page.locator('#settingsBtn').click();
+  await page.locator('#settingsNavLibrary').click();
+  await page.waitForFunction(() => !document.querySelector('#organizerRollback').disabled);
+  await page.locator('#organizerRollback').click();
+  await page.waitForSelector('.sess-confirm-mask:not(.hidden)');
+  await page.locator('.sess-confirm-acts button:last-child').click();
+  await page.waitForFunction(() => window.__state.doc.path === 'parked.pdf' && window.__viewer.pdf && window.__viewer.current === 44);
+  assert.match(await page.evaluate(() => window.__viewer.getPageText(44)), /Synthetic range page 44/);
+  assert.ok(fs.existsSync(path.join(papersDir, 'parked.pdf')));
+  assert.ok(!fs.existsSync(path.join(papersDir, 'Moved/parked.pdf')));
+  pass('Settings rollback restores the active large PDF to its original path while preserving the current page');
   assert.deepEqual(errors, []);
   assert.ok(!failedRequests.some(request => request.error && !/ERR_ABORTED/.test(request.error)), JSON.stringify(failedRequests));
   pass('no PDF HTTP errors, unexpected request failures, page errors, model requests or external requests');

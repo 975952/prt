@@ -13,7 +13,7 @@ const PAGE_SIZE = 40;
 
 /** Preview first; this component never moves a file until Apply is clicked. */
 export function createPaperOrganizer({ getPapers = () => [], getFolders = () => [],
-  getLabel = paper => paper.name, readTitle, planFolders, classifyBatch, checkAIReady = () => {}, movePaper, onComplete = () => {} } = {}) {
+  getLabel = paper => paper.name, readTitle, planFolders, classifyBatch, checkAIReady = () => {}, movePaper, runMoves, onComplete = () => {} } = {}) {
   let rows = [], page = 0, opening = 0, loading = false, reading = false, moving = false;
   let stopped = false, activeReads = 0, lastFocus = null, operation = null;
   let existingFolders = [], activePlan = null;
@@ -38,7 +38,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   const planSummary = el('summary');
   const planGroups = el('div', { class: 'po-groups' });
   const planPreview = el('details', { id: 'paperOrganizerPlan', class: 'po-plan', hidden: true }, planSummary,
-    el('p', { class: 'po-note', text: tr('将多个分类改成相同目录即可合并。这里仅修改预览，原文件夹不会被删除。') }), planGroups);
+    el('p', { class: 'po-note', text: tr('将多个分类改成相同目录即可合并。应用后替换旧分类并清理旧空目录，可在设置中回退。') }), planGroups);
   const status = el('p', { class: 'po-status', role: 'status', 'aria-live': 'polite' });
   const count = el('span', { class: 'po-count' });
   const prev = el('button', { type: 'button', class: 'po-button', text: tr('上一页'), onclick: () => { page--; render(); } });
@@ -342,13 +342,15 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     if (!tasks.length) return;
     moving = true; stopped = false; const moves = []; let failures = 0;
     sync();
+    let replacement, operationError = '';
+    try { replacement = await (runMoves || ((_tasks, execute) => execute(movePaper)))(tasks, async managedMove => {
     for (const task of tasks) {
       if (stopped) break;
       const { row, from, to } = task;
       row.moving = true; row.error = ''; sync();
       status.textContent = tr('正在移动 {0} / {1}：{2}', moves.length + failures + 1, tasks.length, from);
       try {
-        const result = await movePaper({ from, to });
+        const result = await managedMove({ from, to });
         if (result?.ok === false || result?.moved === false) throw new Error(result?.error?.message || tr('文件未移动，请检查目标文件夹'));
         row.done = true; row.selected = false;
         row.newPath = typeof result?.to === 'string' ? result.to : `${to}/${fileName(from)}`;
@@ -356,11 +358,14 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
       } catch (error) { failures++; row.error = tr('移动失败：{0}', error.message || String(error)); }
       finally { row.moving = false; sync(); renderPlan(); }
     }
+    }, { all: scope.value === 'all' && !search.value.trim() }); }
+    catch (error) { operationError = tr('整理未完成：{0}。可在设置中回退或重试。', error.message || String(error)); }
     try { if (moves.length) await onComplete(moves); }
     catch (error) { status.textContent = tr('文件已移动，但列表刷新失败：{0}', error.message || String(error)); moving = false; sync(); return; }
     moving = false;
-    status.textContent = stopped ? tr('已停止：已移动 {0} 篇，失败 {1} 篇；其余文件未处理。', moves.length, failures)
-      : tr('已移动 {0} 篇，失败 {1} 篇。失败项可修改后重试。', moves.length, failures);
+    status.textContent = operationError || (stopped ? tr('已停止：已移动 {0} 篇，失败 {1} 篇；其余文件未处理。', moves.length, failures)
+      : tr('已移动 {0} 篇，失败 {1} 篇。失败项可修改后重试。', moves.length, failures));
+    if (replacement) status.textContent += tr('旧空分类已清理，{0} 个非空目录已保留。可在设置中回退。', replacement.retained.length);
     sync();
   }
   async function open() {
