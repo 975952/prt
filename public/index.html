@@ -209,10 +209,6 @@
   <div class="splitter" id="splitRight" title="拖动调整宽度"></div>
 
   <aside class="side right" id="rightSide">
-    <nav class="agent-visible-actions" aria-label="会话与阅读">
-      <button type="button" class="workspace-action" id="agentNewSessionEntry"><span>新建会话</span></button>
-      <button type="button" class="workspace-action reading-entry" id="agentReadingEntry"><span>打开上次阅读区</span></button>
-    </nav>
     <header class="agent-identity" id="agentIdentity" hidden>
       <div class="agent-heading">
         <span class="agent-mark" data-agent-icon="alina" aria-hidden="true"></span>
@@ -228,6 +224,10 @@
       <h1 id="agentLandingName" data-agent-name>小林</h1>
       <p>今天想读什么？</p>
     </section>
+    <nav class="agent-visible-actions" aria-label="会话与阅读">
+      <button type="button" class="workspace-action" id="agentNewSessionEntry"><span>新建会话</span></button>
+      <button type="button" class="workspace-action reading-entry" id="agentReadingEntry"><span>打开上次阅读区</span></button>
+    </nav>
     <section class="agent-paper-picker" id="agentPaperPicker" aria-label="选择论文" hidden>
       <div class="agent-picker-heading"><label for="agentPaperSearch">从书架打开</label><button class="agent-action agent-icon-button" id="agentPapersClose" type="button" title="收起论文列表" aria-label="收起论文列表"><span data-agent-icon="close" aria-hidden="true"></span></button></div>
       <input id="agentPaperSearch" type="search" placeholder="搜索论文名称或文件夹…" aria-label="搜索论文名称或文件夹" autocomplete="off" />

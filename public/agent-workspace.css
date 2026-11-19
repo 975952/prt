@@ -1,7 +1,7 @@
 /* One conversation surface moves between the main workspace and the reader. */
 .agent-open { flex: 0 0 auto; gap: 5px; max-width: 150px; }
 .agent-visible-actions { display: none; }
-body.agent-full #rightSide > .agent-visible-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-end; gap: 10px; padding: 16px 22px 8px; }
+body.agent-full #rightSide > .agent-visible-actions { display: flex; flex: 0 0 auto; flex-wrap: wrap; justify-content: flex-start; gap: 10px; width: min(100%, 940px); margin-inline: auto; padding: 12px 32px 16px; }
 .agent-open [data-agent-name] { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .agent-open[aria-expanded="true"] { background: var(--accent-soft); color: var(--accent); }
 .agent-icon, [data-agent-icon] { display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto; }
@@ -445,15 +445,19 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
 /* The five workspace actions share one visual treatment and screen size. */
 .workspace-action {
   display: inline-flex; align-items: center; justify-content: center; flex: 0 0 auto;
-  min-height: 40px; padding: 9px 17px; border: 1px solid color-mix(in srgb, var(--accent) 80%, var(--fg));
-  border-radius: 10px; background: var(--accent); color: var(--bg);
+  min-height: 40px; padding: 9px 17px; border: 1px solid var(--border-strong);
+  border-radius: 10px; background: transparent; color: var(--fg-dim);
   font: 500 14px/20px var(--font); cursor: pointer;
-  box-shadow: 0 2px 5px color-mix(in srgb, var(--accent) 15%, transparent);
-  transition: filter .15s, box-shadow .15s, transform .15s;
+  box-shadow: none;
+  transition: color .15s, border-color .15s, background .15s, transform .15s;
 }
-.workspace-action:hover:not(:disabled) { filter: brightness(1.12); box-shadow: 0 3px 8px color-mix(in srgb, var(--accent) 22%, transparent); }
+.workspace-action:hover:not(:disabled) { background: color-mix(in srgb, var(--accent) 7%, transparent); color: var(--fg); border-color: var(--accent); }
 .workspace-action:active:not(:disabled) { transform: translateY(1px); }
 .workspace-action:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
 .workspace-action:disabled { opacity: .45; cursor: default; box-shadow: none; }
 .home-head-actions .workspace-action { zoom: calc(1 / var(--home-scale, 1)); }
 .agent-visible-actions .workspace-action { zoom: calc(1 / var(--agent-scale, 1)); }
+
+body.agent-full.agent-landing #rightSide > .agent-visible-actions { justify-content: center; padding-top: 0; padding-bottom: 22px; }
+body.agent-full.agent-landing .agent-landing-hero { padding-bottom: 20px; }
+@media (max-width: 650px) { body.agent-full #rightSide > .agent-visible-actions { padding-inline: 16px; } }
