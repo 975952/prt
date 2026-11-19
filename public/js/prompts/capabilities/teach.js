@@ -165,7 +165,7 @@ export function teachUserContent(ctx) {
 
 const TEACH_DEF_BASE = {
   kind: 'teach',
-  version: '2.1.0',
+  version: '2.2.0',
   identity: BASE_TEACH,
   systemJoin: '\n\n',
   history: (ctx) => teachHistory(ctx.history || []),

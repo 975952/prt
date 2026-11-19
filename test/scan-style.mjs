@@ -44,7 +44,11 @@ try {
     await page.evaluate(n => window.__viewer.goToPage(n), n); await ready(n);
     const s = await style(n);
     if (n < 4) assert.deepEqual(s, { kind: 'true', radius: '0px', paper: 'rgb(255, 255, 255)', shadow: 'none', frost: 'none', sheen: 'none', canvasRadius: '0px' });
-    else { assert.equal(s.kind, 'false'); assert.equal(s.radius, '20px'); }
+    else {
+      const configuredRadius = await page.evaluate(() => getComputedStyle(document.documentElement).getPropertyValue('--glass-radius').trim());
+      assert.equal(s.kind, 'false'); assert.ok(parseFloat(configuredRadius) > 0);
+      assert.equal(s.radius, configuredRadius);
+    }
   }
   console.log('PASS alternating scan margins use square white paper; mixed text/image pages retain glass');
   const pixels = await page.evaluate(() => {

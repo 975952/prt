@@ -535,29 +535,17 @@ body.dragging .viewer { pointer-events: none; }
 }
 
 .outline, .notes { list-style: none; margin: 0; padding: 0 6px 10px; }
-.outline-status { min-width: 0; margin-left: auto; overflow: hidden; color: var(--fg-faint); font-size: var(--ui-fs-2xs); text-overflow: ellipsis; white-space: nowrap; }
-.outline-retry { flex: 0 0 26px; width: 26px; height: 26px; padding: 0; }
 /* 目录：全部同一字号（不做大标题/小标题），靠颜色深浅 + 左缩进体现层级，标题折行不截断 */
 .outline li {
   padding: calc(var(--list-pad-y) * .5) var(--list-pad-x); border-radius: 5px; cursor: pointer; font-size: var(--ui-fs-md);
   color: var(--fg-dim); line-height: var(--list-lh); word-break: break-word;
 }
-.outline li.toc-entry { display: flex; align-items: flex-start; gap: 3px; }
-.outline-entry-main { flex: 1 1 auto; min-width: 0; }
-.outline-go { display: block; width: 100%; padding: 0; border: 0; background: transparent; color: inherit; font: inherit; line-height: inherit; text-align: left; cursor: pointer; overflow-wrap: anywhere; }
-.outline-meta { margin-top: 2px; color: var(--fg-faint); font-size: var(--ui-fs-2xs); line-height: 1.25; }
-.outline-edit { flex: 0 0 24px; width: 24px; height: 24px; padding: 0; opacity: 0; }
-.outline li:hover .outline-edit, .outline li:focus-within .outline-edit { opacity: 1; }
-.outline-correct { display: flex; align-items: center; gap: 3px; margin-top: 4px; }
-.outline-correct input { width: 62px; min-width: 0; height: 26px; padding: 2px 5px; border: 1px solid var(--border-strong); border-radius: 4px; background: var(--bg-sunken); color: var(--fg); font: inherit; }
-.outline-correct button { flex: 0 0 26px; width: 26px; height: 26px; padding: 0; }
 .outline li:hover { background: var(--bg-sunken); color: var(--accent); }
 .outline li.lv1 { color: var(--fg); }
 .outline li.lv2 { padding-left: 18px; }
 .outline li.lv3 { padding-left: 30px; }
 .outline li.lv4, .outline li.lv5 { padding-left: 42px; color: var(--fg-faint); }
 .outline li.empty, .notes li.empty { color: var(--fg-faint); cursor: default; }
-@media (pointer: coarse) { .outline-edit { opacity: 1; } }
 
 .notes li {
   background: var(--bg-sunken); border-left: 3px solid var(--hl); border-radius: 6px;

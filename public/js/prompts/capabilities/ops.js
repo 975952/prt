@@ -64,7 +64,7 @@ function opsSystemBlocks(task) {
 
 const OP_DEF_BASE = {
   kind: 'op',
-  version: '2.1.0',
+  version: '2.2.0',
   identity: BASE_OPS,
   systemJoin: '\n\n',
   history: (ctx) => opHistory(ctx.history || []),

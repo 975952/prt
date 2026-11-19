@@ -14,7 +14,9 @@ node test/prompts-manifest.mjs
 npm --prefix test test
 ```
 
-快照保存在 `test/fixtures/prompts-manifest.json`，用于检查代码、文档与版本是否一致。系统版本：**2026.11.7**。
+快照保存在 `test/fixtures/prompts-manifest.json`，用于检查代码、文档与版本是否一致。系统版本：**2026.11.8**。
+
+纯图片论文的主题和内容方向可依据已提供的标题或有意义的文件名初步判断，回答明确标注“根据标题判断”。标题不足时保留不确定性；具体内容与页码仍须核对原文或页图。打开文档不自动识别扫描目录。
 
 ## 注册清单
 
@@ -27,18 +29,18 @@ npm --prefix test test
 | `bg.scan.transcribe` | 1.0.0 |
 | `bg.sessionSummary` | 1.0.0 |
 | `bg.sessionTitle` | 1.0.0 |
-| `op.evidence` | 2.1.0 |
-| `op.limits` | 2.1.0 |
-| `qa.chat` | 2.3.0 |
-| `qa.explain` | 2.3.0 |
+| `op.evidence` | 2.2.0 |
+| `op.limits` | 2.2.0 |
+| `qa.chat` | 2.4.0 |
+| `qa.explain` | 2.4.0 |
 | `qa.screenshot` | 1.0.0 |
 | `teach.condense` | 1.0.0 |
-| `teach.intro` | 2.1.0 |
-| `teach.prereq` | 2.1.0 |
-| `teach.prereq.one` | 2.1.0 |
-| `teach.visual` | 2.1.0 |
-| `teach.walk` | 2.1.0 |
-| `teach.walk.continue` | 2.1.0 |
-| `teach.walk.reteach` | 2.1.0 |
+| `teach.intro` | 2.2.0 |
+| `teach.prereq` | 2.2.0 |
+| `teach.prereq.one` | 2.2.0 |
+| `teach.visual` | 2.2.0 |
+| `teach.walk` | 2.2.0 |
+| `teach.walk.continue` | 2.2.0 |
+| `teach.walk.reteach` | 2.2.0 |
 | `translate.screenshot` | 1.1.0 |
 | `translate.selection` | 2.1.0 |

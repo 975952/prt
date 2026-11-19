@@ -10,6 +10,7 @@ import { renderPrompt, noteDebug } from '../compose.js';
 import { nowContext, buildProfileBlock } from '../../profile.js';
 import { resolveReadingRequest } from '../../reading-context.js';
 import { BASE_RULES } from '../base.js';
+import { TITLE_TOPIC_RULE } from '../contracts.js';
 import { qaHistory } from '../history.js';
 import {
   askPageImageRule, screenshotRule, pageHeadFor, selectionBlock, topicBlock,
@@ -85,6 +86,7 @@ function qaSystemBlocks() {
     { id: 'identity', text: QA_IDENTITY },
     { id: 'base-rules', text: BASE_RULES },
     { id: 'task', text: QA_TASK },
+    { id: 'title-topic', text: TITLE_TOPIC_RULE },
     { id: 'translate-only', fn: (ctx) => (ctx.translateIntent ? TASK_TRANSLATE_ONLY : '') },
     { id: 'multi-image-mapping', fn: (ctx) => {
       const total = (Number(ctx.screenshotCount) || 0) + (Array.isArray(ctx.pageImages) ? ctx.pageImages.length : 0);
@@ -147,7 +149,7 @@ export function qaUserContent(ctx) {
 
 const QA_BASE = {
   kind: 'qa',
-  version: '2.3.0',
+  version: '2.4.0',
   identity: QA_IDENTITY,
   system: qaSystemBlocks(),
   systemJoin: '\n',
