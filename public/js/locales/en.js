@@ -1,6 +1,12 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  '启动页面': 'Startup page',
+  '打开程序时': 'When opening the app',
+  'Library（默认）': 'Library (default)',
+  '继续上次阅读': 'Resume reading',
+  '智能体起始页': 'Agent landing page',
+  '自动保存，下次启动生效。直接打开指定 PDF 时仍进入该论文。': 'Saved automatically for the next launch. Opening a specific PDF still takes you to that paper.',
   '保持原样': 'Keep as is',
   '合理分类保持原样，只整理需要调整的内容。新分类只用一层文件夹。': 'Keep well-organized PDFs in place. Organize only what needs changing, using flat folders.',
   '先看文件名和所在目录；不明确时才读第一页。重新分类覆盖旧预览，确认后只移动需要调整的文件。': 'Use filenames and current folders first; read page one only when unclear. Each run replaces the preview; confirmation moves only files that need changes.',

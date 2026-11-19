@@ -4777,7 +4777,19 @@ function installTabsShortcuts() {
   }, true);
 }
 
-/** boot：恢复工作区（有标签就打开活动标签；空工作区 = Welcome，不按 lastDoc 自动打开） */
+function startupPagePreference() {
+  try {
+    const value = localStorage.getItem('reader.startupPage');
+    return ['library', 'resume', 'agent'].includes(value) ? value : 'library';
+  } catch { return 'library'; }
+}
+
+async function showStartupPage() {
+  setView('home');
+  if (startupPagePreference() === 'agent') await openAgentWorkspace({ landing: true });
+}
+
+/** Restore tab identities without forcing a PDF open when starting in Library. */
 async function bootTabWorkspace() {
   cleanStaleLastDoc();
   const ws = loadWorkspace();
@@ -4802,10 +4814,18 @@ async function bootTabWorkspace() {
     tabsStore.active = '';
     tabsSyncBar();
   }
+  // Explicit document links and a language-change reload retain their destination.
+  if (!openName && !openId && !sessionStorage.getItem('reader.reopenLanguageSettings') && startupPagePreference() !== 'resume') {
+    tabsStore.active = tabsStore.tabs.some(tab => tab.docId === ws.active) ? ws.active : tabsStore.tabs[0]?.docId || '';
+    tabsSyncBar();
+    await showStartupPage();
+    return;
+  }
   // ② 这次要打开哪篇：?open 指定 > 上次活动标签 > 第一个标签
   const wanted = named
     ? (tabsStore.tabs.find((t) => t.docId === named.docId) || tabFor({ ...named, path: named.path || named.name }))
-    : (tabsStore.tabs.find((t) => t.docId === ws.active) || tabsStore.tabs[0] || null);
+    : (tabsStore.tabs.find((t) => t.docId === ws.active) || tabsStore.tabs[0]
+      || (startupPagePreference() === 'resume' && byId.has(serverState.lastDoc) ? tabFor(byId.get(serverState.lastDoc)) : null));
   if (!wanted) { await goWelcome(); return; }
   if (!tabsStore.tabs.some((t) => t.docId === wanted.docId)) {
     if (tabsStore.tabs.length >= TABS_MAX) { await goWelcome(); return; }
@@ -14497,6 +14517,7 @@ function fillModelSettings(id = Settings.data.activeProfile || '') {
 }
 
 function fillSettings() {
+  $('#startupPage').value = startupPagePreference();
   fillModelSettings();
   $('#cfgLongTermMemory').value = Settings.data.longTermMemory || '';
   fillUiSettings();
@@ -14876,6 +14897,10 @@ async function changeInterfaceLanguage(next) {
 }
 
 function initSettings() {
+  $('#startupPage').value = startupPagePreference();
+  $('#startupPage').addEventListener('change', event => {
+    localStorage.setItem('reader.startupPage', event.target.value);
+  });
   $('#uiLanguage').value = locale;
   $('#answerLanguage').value = localStorage.getItem(RESPONSE_LANGUAGE_KEY) || 'auto';
   $('#answerLanguage').addEventListener('change', (event) => {
@@ -15155,8 +15180,9 @@ async function copyText(text) {
 async function maybeReopenLast() {
   const url = new URL(location.href);
   const openName = url.searchParams.get('open');
-  if (openName) {
-    const found = state.papers.find((p) => p.name === openName || p.name.replace(/\.pdf$/i, '') === openName);
+  const openId = url.searchParams.get('document');
+  if (openName || openId) {
+    const found = state.papers.find((p) => openId ? p.docId === openId : p.name === openName || p.name.replace(/\.pdf$/i, '') === openName);
     if (found) {
       await openDoc({ name: found.name, url: found.url, docId: found.docId });
       return;
@@ -15166,7 +15192,11 @@ async function maybeReopenLast() {
 
   // 停在首页。顺手清掉「上次那篇已经被删掉/移走」的陈旧标记（多标签 Welcome 路径共用）。
   cleanStaleLastDoc();
-  setView('home');
+  if (startupPagePreference() === 'resume') {
+    const last = state.papers.find(p => p.docId === serverState.lastDoc);
+    if (last) { await openDoc(last); return; }
+  }
+  await showStartupPage();
 }
 
 /**

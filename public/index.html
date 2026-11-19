@@ -515,6 +515,11 @@
         <section class="settings-pane hidden" id="settingsPaneBehavior" data-pane="behavior" role="tabpanel" aria-labelledby="settingsNavBehavior">
           <div class="settings-pane-title">阅读与问答</div>
           <div class="settings-pane-sub">调整缩放手感与提问时使用的资料。修改即时生效。</div>
+          <div class="settings-section-title">启动页面</div>
+          <div class="settings-grid settings-core-grid">
+            <label class="field"><span>打开程序时</span><select id="startupPage"><option value="library">Library（默认）</option><option value="resume">继续上次阅读</option><option value="agent">智能体起始页</option></select></label>
+          </div>
+          <div class="modal-note">自动保存，下次启动生效。直接打开指定 PDF 时仍进入该论文。</div>
           <div class="settings-section-title">双指缩放</div>
     <div class="settings-grid settings-core-grid">
       <!-- 缩放速度：触摸屏捏合与触摸板捏合都乘这个倍率（1 = 默认手感，见 pdfview.js 的 clampZoomSpeed）。
