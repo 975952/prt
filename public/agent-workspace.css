@@ -469,6 +469,15 @@ body.agent-full.agent-landing #rightSide > .agent-visible-actions { display: non
 body.agent-full:not(.agent-landing) #rightSide > .agent-visible-actions { width: min(100%, 1000px); padding-inline: 24px; }
 body.agent-full .agent-launch-actions { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 body.agent-full #agentLaunchActions > button { min-height: 88px; height: 100%; padding: 18px 16px; gap: 10px; zoom: 1; }
+body.agent-full #agentLaunchActions > .agent-launch {
+  transition: transform .16s ease-out, background .16s ease-out, border-color .16s ease-out, box-shadow .16s ease-out;
+}
+body.agent-full #agentLaunchActions > .agent-launch:hover:not(:disabled) { transform: translateY(-1px); }
+body.agent-full #agentLaunchActions > .agent-launch:active:not(:disabled) {
+  transform: scale(.992);
+  transition-duration: .1s;
+  border-color: var(--border-strong);
+}
 body.agent-full #agentLaunchActions .agent-launch-copy { min-height: 44px; justify-content: center; }
 body.agent-full:not(.agent-landing) #agentReadingEntry :is(.agent-launch-icon, .agent-launch-detail, .agent-launch-arrow) { display: none; }
 @container agent (max-width: 600px) {

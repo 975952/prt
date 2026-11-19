@@ -68,6 +68,13 @@ try {
   const tops = await page.$$eval('#agentLaunchActions > button', nodes => nodes.map(n => n.getBoundingClientRect().top));
   assert.equal(tops.length, 3);
   assert.ok(Math.max(...tops) - Math.min(...tops) < 2);
+  await page.hover('#agentStartSearch'); await pause(350);
+  const hoverTransform = await page.$eval('#agentStartSearch', n => getComputedStyle(n).transform);
+  await page.mouse.down(); await pause(120);
+  const pressTransform = await page.$eval('#agentStartSearch', n => getComputedStyle(n).transform);
+  assert.notEqual(pressTransform, hoverTransform, 'pressing a launch card must visibly depress it');
+  await page.mouse.move(5, 5); await page.mouse.up(); await pause(350);
+  assert.equal(await page.$eval('#agentStartSearch', n => getComputedStyle(n).transform), 'none');
   for (const selector of ['#agentReadingEntry', '#agentNavNew']) {
     assert.ok(await page.$eval(selector, n => n.getBoundingClientRect().height > 30 && getComputedStyle(n).visibility !== 'hidden'));
   }
