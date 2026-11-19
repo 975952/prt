@@ -6,12 +6,13 @@ import { t as tr } from './i18n.js';
 export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullscreen, isFullscreen,
   prepareChat, restoreLayout, openTranslations, beforeEnter, onExit, onError } = {}) {
   let active = false, busy = false, ownedFullscreen = false, hideTimer = 0, hideDeadline = 0, turnTimer = 0, down = null;
+  let wheelAt = 0, wheelDistance = 0, wheelTurned = false;
   const body = document.body, viewerElement = document.getElementById('viewer');
   const button = (id, label, icon, action) => el('button', { id, type: 'button', class: 'immersive-control',
     title: label, 'aria-label': label, onclick: event => { action(event); if (event.detail) event.currentTarget.blur(); } }, iconEl(icon), el('span', { text: label }));
   const exit = button('immersiveExit', tr('退出翻书'), 'chevron-left', () => setActive(false));
-  const translate = button('immersiveTranslate', tr('翻译'), 'translate', () => { openTranslations?.(); reveal(); });
-  const chat = button('immersiveChat', tr('问答'), 'chat', () => showChat(!body.classList.contains('immersive-chat-open')));
+  const translate = button('immersiveTranslate', tr('翻译'), 'translate', () => { openTranslations?.(); raiseCard('translate'); reveal(); });
+  const chat = button('immersiveChat', tr('问答'), 'chat', () => showChat(!body.classList.contains('immersive-chat-open') || body.dataset.immersiveCard !== 'chat'));
   const top = el('nav', { id: 'immersiveTopbar', class: 'immersive-chrome', 'aria-label': tr('沉浸翻书工具') },
     exit, el('span', { class: 'immersive-title', text: tr('沉浸翻书') }), translate, chat);
   const prev = button('immersivePrev', tr('上一页'), 'chevron-left', () => turn(-1));
@@ -23,12 +24,26 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
   viewerElement.tabIndex = -1;
   const side = document.getElementById('rightSide');
   const columns = document.getElementById('rightCols');
+  const translation = document.getElementById('translationCard');
   const columnsHome = document.createComment('Reading sidebar home');
   columns.before(columnsHome);
   const cardHead = el('div', { class: 'reading-qa-card-head', id: 'immersiveChatHead' }, iconEl('chat'),
     el('span', { class: 'reading-qa-card-title', text: tr('问答') }),
     button('immersiveChatClose', tr('收起问答'), 'close', () => showChat(false)));
   side.prepend(cardHead);
+
+  function raiseCard(card) {
+    if (active) body.dataset.immersiveCard = card;
+  }
+  for (const [card, name] of [[side, 'chat'], [translation, 'translate']]) {
+    card.addEventListener('pointerdown', () => raiseCard(name), true);
+    card.addEventListener('focusin', () => raiseCard(name));
+  }
+  // Selection and screenshot translations also open the same card outside the
+  // toolbar callback. Raising it only on open keeps streaming from stealing it.
+  new MutationObserver(records => {
+    if (!translation.classList.contains('hidden') && records.some(record => /(?:^|\s)hidden(?:\s|$)/.test(record.oldValue || ''))) raiseCard('translate');
+  }).observe(translation, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
 
   function scheduleHide(delay = 160) {
     const deadline = performance.now() + delay;
@@ -63,7 +78,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     if (!active) return;
     body.classList.toggle('immersive-chat-open', show);
     chat.setAttribute('aria-pressed', String(show));
-    if (show) { prepareChat?.(); side.classList.add('reading-qa-card'); fitChatCard(); }
+    if (show) { prepareChat?.(); side.classList.add('reading-qa-card'); fitChatCard(); raiseCard('chat'); }
     reveal();
   }
   function fitChatCard() {
@@ -85,6 +100,8 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
         // Request fullscreen in the original click's activation, before any await.
         const fullscreen = ownedFullscreen ? enterFullscreen?.() : null;
         active = true; body.classList.add('immersive-reading');
+        wheelAt = 0; wheelDistance = 0; wheelTurned = false;
+        raiseCard(translation.classList.contains('hidden') ? 'chat' : 'translate');
         // Escape the fixed reader's stacking context without replacing live chat DOM.
         body.append(columns);
         document.getElementById('immersiveBtn')?.setAttribute('aria-pressed', 'true');
@@ -94,6 +111,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
       } else {
         active = false; clearTimeout(hideTimer); hideTimer = 0; clearTimeout(turnTimer);
         body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible');
+        delete body.dataset.immersiveCard;
         columnsHome.after(columns);
         document.getElementById('immersiveBtn')?.setAttribute('aria-pressed', 'false');
         side.classList.remove('reading-qa-card');
@@ -106,6 +124,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     } catch (error) {
       active = false; clearTimeout(hideTimer); hideTimer = 0; clearTimeout(turnTimer);
       body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible');
+      delete body.dataset.immersiveCard;
       columnsHome.after(columns);
       document.getElementById('immersiveBtn')?.setAttribute('aria-pressed', 'false');
       side.classList.remove('reading-qa-card');
@@ -149,6 +168,23 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     }, 220);
   });
   viewerElement.addEventListener('dblclick', () => clearTimeout(turnTimer));
+  viewerElement.addEventListener('wheel', event => {
+    if (!active || event.ctrlKey || event.metaKey || !event.deltaY || Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      || event.target.closest('input,textarea,select,[contenteditable="true"],#translationCard,#rightSide')) return;
+    event.preventDefault();
+    const now = performance.now();
+    const delta = event.deltaY * (event.deltaMode === 1 ? 16 : event.deltaMode === 2 ? viewerElement.clientHeight : 1);
+    // A touchpad gesture has many small momentum events. Turn once for that
+    // burst, while a fresh wheel action or direction reversal starts anew.
+    if (now - wheelAt > 140 || Math.sign(delta) !== Math.sign(wheelDistance)) { wheelDistance = 0; wheelTurned = false; }
+    wheelAt = now;
+    wheelDistance += delta;
+    if (!wheelTurned && Math.abs(wheelDistance) >= 36) {
+      wheelTurned = true;
+      clearTimeout(turnTimer);
+      turn(Math.sign(wheelDistance));
+    }
+  }, { passive: false });
   document.addEventListener('keydown', event => {
     if (!active || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey
       || event.target.closest('input,textarea,select,[contenteditable="true"],#translationCard,#rightSide')) return;

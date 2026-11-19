@@ -665,7 +665,7 @@ const DEFAULT_UI_STYLE = Object.freeze({
   theme: 'glass', density: 'standard', fontSize: 17, lineHeight: 1.72,
   codeSize: 12, maxWidth: 916, opacity: 1,
   glassTransparency: 16, glassSurfaceTransparency: 100, glassFrost: 48, glassRadius: 28,
-  glassBrightness: 92, glassTone: 1, glassShadow: 100, glassCrystal: 100, appearanceVersion: 3,
+  glassBrightness: 0, glassTone: 1, glassShadow: 100, glassCrystal: 100, appearanceVersion: 4,
   glassCardMode: 'liquid', glassCardTransparency: 35, glassCardBlur: 11.4, glassCardRefraction: 99,
   nightSaturation: 65, nightBrightness: 95, motion: true,
   // PDF 纸张默认跟随阅读器的暖色纸面；设置里可切换为纯白。
@@ -686,7 +686,7 @@ const GLASS_CONTROLS = Object.freeze({
   glassSurfaceTransparency: { id: 'uiGlassSurfaceTransparency', min: 0, max: 100, unit: '%' },
   glassFrost: { id: 'uiGlassFrost', min: 0, max: 48, unit: 'px' },
   glassRadius: { id: 'uiGlassRadius', min: 0, max: 32, unit: 'px' },
-  glassBrightness: { id: 'uiGlassBrightness', min: 92, max: 100, unit: '%' },
+  glassBrightness: { id: 'uiGlassBrightness', min: 0, max: 100, unit: '%' },
   glassTone: { id: 'uiGlassTone', min: 0, max: 100, unit: '%' },
   glassShadow: { id: 'uiGlassShadow', min: 0, max: 100, unit: '%' },
   glassCrystal: { id: 'uiGlassCrystal', min: 0, max: 100, unit: '%' },
@@ -1547,7 +1547,16 @@ function initLayout() {
     uiStyle.appearanceVersion = 3;
     try { localStorage.setItem('reader.ui', JSON.stringify({ ...saved, style: uiStyle })); } catch {}
   }
-  // Keep the whole brightness range usable; older dim values upgrade to the new floor.
+  // Normalize the old narrow slider while preserving its light-theme colors.
+  if ((saved.style?.appearanceVersion || 0) < 4) {
+    if (Number.isFinite(Number(saved.style?.glassBrightness))) {
+      const legacyDefault = (saved.style.appearanceVersion || 0) < 2
+        && (!saved.style.theme || ['glass', 'mist'].includes(saved.style.theme)) && saved.style.glassBrightness === 93;
+      uiStyle.glassBrightness = legacyDefault ? 0 : Math.round(clamp((Number(saved.style.glassBrightness) - 92) / 8 * 100, 0, 100));
+    }
+    uiStyle.appearanceVersion = 4;
+    try { localStorage.setItem('reader.ui', JSON.stringify({ ...saved, style: uiStyle })); } catch {}
+  }
   const brightness = glassValue('glassBrightness');
   if (uiStyle.glassBrightness !== brightness) {
     uiStyle.glassBrightness = brightness;
@@ -2072,7 +2081,9 @@ function applyUiStyle() {
     transparency: glassValue('glassCardTransparency'), blur: glassValue('glassCardBlur'), refraction: glassValue('glassCardRefraction') });
   $('#glassCardAppearanceControls')?.classList.toggle('hidden', style.theme !== 'glass');
   $('#glassCardRefractionField')?.classList.toggle('hidden', style.glassCardMode !== 'liquid');
-  const glassColor = rgb => `rgb(${rgb.map(v => Math.round(v * glassValue('glassBrightness') / 100)).join(' ')})`;
+  const backgroundLevel = glassValue('glassBrightness') / 100;
+  const lightLevel = .92 + backgroundLevel * .08;
+  const glassColor = rgb => `rgb(${rgb.map(v => Math.round(v * lightLevel)).join(' ')})`;
   // 20 preserves the accepted subtly warm palette; zero is neutral white.
   const tone = glassValue('glassTone');
   const toneColor = (neutral, subtle, warm) => {
@@ -2087,10 +2098,13 @@ function applyUiStyle() {
   root.style.setProperty('--glass-bg', glassBg);
   root.style.setProperty('--glass-bg-low', glassBgLow);
   const palette = style.theme === 'dark' ? [[28, 30, 32], [24, 26, 28]] : [[248, 245, 235], [241, 237, 224]];
-  const adjusted = (rgb) => `rgb(${rgb.map(v => Math.round(clamp(style.theme === 'dark'
-    ? v + (glassValue('glassBrightness') - 93) * .6 : v * glassValue('glassBrightness') / 93, 0, 255))).join(' ')})`;
+  const adjusted = rgb => `rgb(${rgb.map(v => Math.round(clamp(v * (style.theme === 'dark' ? backgroundLevel : lightLevel / .93), 0, 255))).join(' ')})`;
   root.style.setProperty('--appearance-bg', style.theme === 'glass' ? glassBg : adjusted(palette[0]));
   root.style.setProperty('--appearance-bg-low', style.theme === 'glass' ? glassBgLow : adjusted(palette[1]));
+  root.style.setProperty('--appearance-elev', style.theme === 'dark' ? adjusted([43, 46, 49])
+    : glassColor(style.theme === 'glass' ? [255, 254, 252] : [253, 251, 245]));
+  root.style.setProperty('--night-paper', '#' + [34, 36, 38].map(v => Math.round(v * backgroundLevel).toString(16).padStart(2, '0')).join(''));
+  root.style.setProperty('--night-surface-rgb', [76, 80, 84].map(v => Math.round(v * backgroundLevel)).join(', '));
   $('#glassCrystalField')?.classList.toggle('hidden', style.theme !== 'glass');
   $('#glassToneField')?.classList.toggle('hidden', style.theme !== 'glass');
   root.dataset.nightSaturation = String(glassValue('nightSaturation'));
@@ -2103,7 +2117,9 @@ function applyUiStyle() {
   const paperMode = style.paper === 'white' ? 'white' : 'tint';
   const paperTint = getComputedStyle(root).getPropertyValue('--paper-tint').trim();
   // 截图和导出仍用实色纸底；透明只在阅读画布和它独立的玻璃底层生效。
-  root.style.setProperty('--paper', style.theme !== 'light' || paperMode === 'white' ? '#FFFFFF' : PAPER_TINT_LIGHT(paperTint));
+  const exportPaper = style.theme !== 'light' || paperMode === 'white' ? '#FFFFFF' : PAPER_TINT_LIGHT(paperTint);
+  root.style.setProperty('--paper', exportPaper);
+  root.style.setProperty('--reading-paper', glassColor([1, 3, 5].map(i => parseInt(exportPaper.slice(i, i + 2), 16))));
   $('#nightAppearanceControls')?.classList.toggle('hidden', style.theme !== 'dark');
   /* 双指缩放速度也得跟着 uiStyle 走。设置页改动那条路走 applyUiSettingsFromControls，
      但「恢复默认设置」是直接换 uiStyle 再 applyUiStyle() —— 两条路都要把值推给 viewer，
@@ -6002,10 +6018,13 @@ function initTextEdgeHandle() {
 
   /** 这一刻文字列的几何；没有消息 / 侧栏没显示 → null */
   const geo = () => {
+    // The full Alina workspace has no column-width handle or width constraint.
+    if (document.body.classList.contains('agent-full')) return null;
     const sr = side.getBoundingClientRect();
     if (sr.width < 20) return null;
     const body = area.querySelector('.ai-block:not(.hidden) > .ai-body');
-    const msg = body?.querySelector('.msg');
+    // Questions are right-aligned bubbles; the adjustable column is the answer.
+    const msg = body?.querySelector(':scope > .msg.assistant');
     if (!body || !msg) return null;
     const br = body.getBoundingClientRect();
     const mr = msg.getBoundingClientRect();
@@ -6015,8 +6034,9 @@ function initTextEdgeHandle() {
     const padR = parseFloat(cs.paddingRight) || 0;
     // 可拖到的最宽 = .ai-body 的内容宽度（拖满就两侧留白为 0）
     const contentW = Math.max(1, body.clientWidth - padL - padR);
+    const scale = br.width / body.offsetWidth || 1;
     return {
-      sr, br, contentW,
+      sr, br, contentW, scale,
       left: mr.left, right: mr.right,
       center: (mr.left + mr.right) / 2,
     };
@@ -6034,9 +6054,11 @@ function initTextEdgeHandle() {
   /** 把那一小段渐变提示条放到某条边沿的某个高度上（相对 #rightSide 定位） */
   const placeBar = (edgeX, clientY, { on = true, dragging = false } = {}) => {
     const sr = side.getBoundingClientRect();
-    const x = edgeX - sr.left - side.clientLeft;
-    const top = clamp(clientY - sr.top - side.clientTop - TEXT_EDGE_BAR_H / 2,
-      4, Math.max(4, sr.height - TEXT_EDGE_BAR_H - 4));
+    const scaleX = sr.width / side.offsetWidth || 1;
+    const scaleY = sr.height / side.offsetHeight || 1;
+    const x = (edgeX - sr.left) / scaleX - side.clientLeft + side.scrollLeft;
+    const top = clamp((clientY - sr.top) / scaleY - side.clientTop + side.scrollTop - TEXT_EDGE_BAR_H / 2,
+      4, Math.max(4, side.clientHeight - TEXT_EDGE_BAR_H - 4));
     bar.style.left = `${Math.round(x)}px`;
     bar.style.top = `${Math.round(top)}px`;
     bar.classList.toggle('on', !!on);
@@ -6053,7 +6075,7 @@ function initTextEdgeHandle() {
     if (!m) { hideBar(); return; }
     if (drag) {
       // 宽度 = 2 × 光标到列中心的距离；夹在 [下限, min(内容宽, 上限)] 之间
-      const half = drag.edge === 'right' ? (lastX - m.center) : (m.center - lastX);
+      const half = (drag.edge === 'right' ? (lastX - m.center) : (m.center - lastX)) / m.scale;
       const lo = Math.min(TEXT_COL_MIN, m.contentW);
       const hi = Math.max(lo, Math.min(m.contentW, TEXT_COL_MAX));
       drag.width = Math.round(clamp(2 * half, lo, hi));
@@ -6062,7 +6084,7 @@ function initTextEdgeHandle() {
         // 松手时再落到 uiStyle.maxWidth / localStorage。
         document.documentElement.style.setProperty('--ai-max-width', `${drag.width}px`);
       }
-      const edgeX = drag.edge === 'right' ? m.center + drag.width / 2 : m.center - drag.width / 2;
+      const edgeX = drag.edge === 'right' ? m.center + drag.width * m.scale / 2 : m.center - drag.width * m.scale / 2;
       placeBar(edgeX, lastY, { on: true, dragging: true });
       return;
     }
@@ -6114,7 +6136,7 @@ function initTextEdgeHandle() {
     e.stopPropagation();
     lastX = e.clientX;
     lastY = e.clientY;
-    drag = { edge, width: Math.round(m.right - m.left), startX: e.clientX, moved: false };
+    drag = { edge, width: Math.round((m.right - m.left) / m.scale), startX: e.clientX, moved: false };
     document.body.classList.add('text-edge-dragging');
     side.classList.add('text-edge-dragging');
     window.addEventListener('pointermove', moveDuringDrag);
@@ -14735,6 +14757,7 @@ function glassValue(key, value = uiStyle[key]) {
 function applyGlassSettingsFromControls() {
   const oldSaturation = uiStyle.nightSaturation;
   const oldBrightness = uiStyle.nightBrightness;
+  const oldBackground = uiStyle.glassBrightness;
   for (const [key, { id }] of Object.entries(GLASS_CONTROLS)) {
     const input = document.getElementById(id);
     if (input) uiStyle[key] = glassValue(key, input.value);
@@ -14743,7 +14766,8 @@ function applyGlassSettingsFromControls() {
   applyUiStyle();
   saveUi();
   updateUiRangeLabels();
-  if ((oldSaturation !== uiStyle.nightSaturation || oldBrightness !== uiStyle.nightBrightness) && uiStyle.theme === 'dark') refreshNightInk();
+  if ((oldSaturation !== uiStyle.nightSaturation || oldBrightness !== uiStyle.nightBrightness
+    || oldBackground !== uiStyle.glassBrightness) && uiStyle.theme === 'dark') refreshNightInk();
 }
 
 const refreshNightInk = debounce(() => viewer?.refreshPaper?.(), 160);

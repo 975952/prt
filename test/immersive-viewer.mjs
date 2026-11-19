@@ -158,6 +158,7 @@ try {
   for (const theme of ['dark', 'light', 'glass']) {
     const surface = await page.evaluate(async theme => {
       document.documentElement.dataset.theme = theme;
+      if (theme === 'dark') document.documentElement.style.setProperty('--night-paper', '#07090b');
       await window.__viewer.goToPage(1);
       return { paper: getComputedStyle(window.__viewer.pageEls[1]).backgroundColor,
         viewport: getComputedStyle(window.__viewer.container).backgroundColor,
@@ -165,8 +166,8 @@ try {
     }, theme);
     assert.equal(surface.paper, surface.viewport, `${theme} has one continuous immersive paper surface`);
     if (theme === 'dark') {
-      assert.equal(surface.paper, 'rgb(34, 36, 38)', 'dark immersive reading never inherits the white paper preference');
-      assert.equal(surface.renderedPaper, '#222426', 'PDF ink uses the night rendering palette');
+      assert.equal(surface.paper, 'rgb(7, 9, 11)', 'dark immersive reading uses the adjustable night paper');
+      assert.equal(surface.renderedPaper, '#07090b', 'PDF ink uses the selected night rendering palette');
       await page.screenshot({ path: path.join(scratch, 'dark-spread.png') });
     }
     await page.evaluate(() => { document.documentElement.dataset.motion = 'on'; void window.__viewer.stepPage(1); });

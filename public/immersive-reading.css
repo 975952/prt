@@ -37,4 +37,6 @@ body.immersive-reading.immersive-chrome-visible #immersiveFooter { transform: tr
 .immersive-control:focus-visible { outline: 2px solid var(--accent); }
 #immersivePage { width: 64px; min-width: 0; border: 1px solid var(--border); border-radius: 7px; padding: 6px; color: var(--fg); background: transparent; text-align: center; }
 #immersiveTotal { font-size: 13px; color: var(--fg-dim); min-width: 48px; }
-body.immersive-reading #translationCard { z-index: 62; }
+body.immersive-reading #translationCard { z-index: 61; }
+body.immersive-reading[data-immersive-card="chat"] #rightCols,
+body.immersive-reading[data-immersive-card="translate"] #translationCard { z-index: 62; }

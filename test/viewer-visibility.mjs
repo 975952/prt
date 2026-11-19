@@ -6,6 +6,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { PdfViewer } from '../public/js/pdfview.js';
+import { disposePdfDocument } from '../public/js/pdf-lifecycle.js';
 
 const viewerMethods = PdfViewer.prototype;
 const deferred = () => {
@@ -13,12 +14,13 @@ const deferred = () => {
   const promise = new Promise(done => { resolve = done; });
   return { promise, resolve };
 };
-const fakePage = () => ({ style: { setProperty() {} }, offsetTop: 0, offsetHeight: 0 });
+const fakePage = () => ({ style: { setProperty() {} }, classList: { toggle() {} }, offsetTop: 0, offsetHeight: 0 });
 const hiddenViewer = () => ({
-  pagesEl: {}, container: { clientWidth: 0, clientHeight: 0, scrollTop: 640, scrollLeft: 71 },
+  pagesEl: { classList: { toggle() {} }, style: { setProperty() {} } }, container: { clientWidth: 0, clientHeight: 0, scrollTop: 640, scrollLeft: 71 },
   pdf: {}, baseSizes: [null, { width: 612, height: 792 }], numPages: 2, scale: 2, _fitMode: true,
   offsets: [null, 8, 1630], heights: [null, 1584, 1584], pageEls: [null, fakePage(), fakePage()],
   _sizeOf: () => ({ width: 612, height: 792 }),
+  _rowStartOf: n => n,
   _captureAnchor() { throw new Error('Hidden layout captured a zero-sized anchor'); },
   _restoreAnchor() { throw new Error('Hidden layout changed the scroll position'); },
   _computeFitScale() { throw new Error('Hidden fit calculated a zero-width scale'); },
@@ -42,7 +44,7 @@ const handle = pdf => ({
 const loadWith = initPdfjs => {
   const source = viewerMethods.load.toString();
   assert.match(source, /^async load\(/, 'PdfViewer.load is an async method');
-  return Function('initPdfjs', `return (${source.replace(/^async load\(/, 'async function(')});`)(initPdfjs);
+  return Function('initPdfjs', 'disposePdfDocument', `return (${source.replace(/^async load\(/, 'async function(')});`)(initPdfjs, disposePdfDocument);
 };
 
 await test('hidden ready document retains scale, geometry and scroll', () => {

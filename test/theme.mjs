@@ -144,7 +144,7 @@ try {
     const viewer = window.__viewer;
     const canvas = viewer.rendered.get(1).canvas;
     const scroll = viewer.container.scrollTop;
-    for (const [id, value] of [['uiGlassTransparency', 81], ['uiGlassFrost', 0], ['uiGlassRadius', 18], ['uiGlassBrightness', 96]]) {
+    for (const [id, value] of [['uiGlassTransparency', 81], ['uiGlassFrost', 0], ['uiGlassRadius', 18], ['uiGlassBrightness', 50]]) {
       const input = document.getElementById(id); input.value = value;
       input.dispatchEvent(new Event('input', { bubbles: true }));
     }
@@ -156,7 +156,7 @@ try {
   });
   check('滑杆即时生效且不重建画布、不跳阅读位置', stable.sameCanvas && stable.sameScroll);
   check('所有玻璃参数及动效开关均持久化，磨砂允许 0', stable.saved.glassTransparency === 81 && stable.saved.glassFrost === 0
-    && stable.saved.glassRadius === 18 && stable.saved.glassBrightness === 96 && stable.saved.motion === false && stable.transition === '0s');
+    && stable.saved.glassRadius === 18 && stable.saved.glassBrightness === 50 && stable.saved.motion === false && stable.transition === '0s');
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0);
   const restoredGlass = await page.evaluate(() => {
@@ -212,7 +212,7 @@ try {
     await page.waitForFunction(() => {
       const v = window.__viewer, e = v.rendered.get(1);
       const theme = document.documentElement.dataset.theme;
-      return e?.renderScale === 1 && !v.renderTasks.size && e.paper === (theme === 'dark' ? '#222426' : theme === 'glass' ? 'rgba(0, 0, 0, 0)' : getComputedStyle(document.documentElement).getPropertyValue('--paper').trim());
+      return e?.renderScale === 1 && !v.renderTasks.size && e.paper === (theme === 'dark' ? getComputedStyle(document.documentElement).getPropertyValue('--night-paper').trim() : theme === 'glass' ? 'rgba(0, 0, 0, 0)' : getComputedStyle(document.documentElement).getPropertyValue('--paper').trim());
     }, { timeout: 30000 });
     await page.click('#closeSettings');
     layouts.push(await page.evaluate(() => {
@@ -254,14 +254,14 @@ try {
       const snapshot = () => {
         const paper = getComputedStyle(v.pageEls[1]), composer = getComputedStyle(document.querySelector('.composer-row'));
         return { paper: paper.backgroundColor, frost: paper.backdropFilter, radius: paper.borderRadius,
-          shadow: paper.boxShadow, sheen: getComputedStyle(v.pageEls[1], '::before').opacity,
+          shadow: getComputedStyle(document.querySelector('.paper-shadow')).boxShadow, sheen: getComputedStyle(v.pageEls[1], '::before').opacity,
           surface: composer.background, backdrop: getComputedStyle(document.body).backgroundImage };
       };
       set('uiGlassTransparency', 0); set('uiGlassSurfaceTransparency', 0); set('uiGlassFrost', 48);
       set('uiGlassRadius', 32); set('uiGlassShadow', 100); set('uiGlassBrightness', 100); set('uiGlassCrystal', 100);
       const strong = snapshot();
       set('uiGlassTransparency', 100); set('uiGlassSurfaceTransparency', 100); set('uiGlassFrost', 0);
-      set('uiGlassRadius', 0); set('uiGlassShadow', 0); set('uiGlassBrightness', 92); set('uiGlassCrystal', 0);
+      set('uiGlassRadius', 0); set('uiGlassShadow', 0); set('uiGlassBrightness', 0); set('uiGlassCrystal', 0);
       return { strong, quiet: snapshot(), sameCanvas: canvas === v.rendered.get(1).canvas, sameScroll: scroll === v.container.scrollTop,
         enabled: [...document.querySelectorAll('#glassAppearanceControls input')].every(el => !el.matches(':disabled')) };
     });
@@ -283,7 +283,7 @@ try {
   }
   const nightImage = await browser.newPage();
   await nightImage.goto(`${BASE}/?open=theme-image.pdf`, { waitUntil: 'domcontentloaded' });
-  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === '#222426' && !window.__viewer.renderTasks.size);
+  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === getComputedStyle(document.documentElement).getPropertyValue('--night-paper').trim() && !window.__viewer.renderTasks.size);
   const preserved = await nightImage.evaluate(() => {
     const c = window.__viewer.rendered.get(1).canvas, d = c.getContext('2d').getImageData(0, 0, c.width, c.height).data;
     let orange = 0, white = 0, ink = 0;
@@ -298,7 +298,7 @@ try {
   await nightImage.screenshot({ path: path.join(artifactDir, 'theme-dark-images.png') });
   await nightImage.setViewport({ width: 1500, height: 950, deviceScaleFactor: 2 });
   await nightImage.goto(`${BASE}/?open=night-composite.pdf`, { waitUntil: 'domcontentloaded' });
-  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === '#222426' && !window.__viewer.renderTasks.size);
+  await nightImage.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === getComputedStyle(document.documentElement).getPropertyValue('--night-paper').trim() && !window.__viewer.renderTasks.size);
   const composited = await nightImage.evaluate(() => {
     const c = window.__viewer.rendered.get(1).canvas, ctx = c.getContext('2d');
     const sample = (x, y) => [...ctx.getImageData(Math.floor(x / 480 * c.width), Math.floor((640 - y) / 640 * c.height), 1, 1).data];
@@ -306,7 +306,7 @@ try {
       repeated: sample(260, 490), masked: sample(260, 270), line: sample(100, 565) };
   });
   check('显式白色纸底与线条反色，重复图片和透明遮罩内的图片保持原色',
-    JSON.stringify(composited.background) === '[34,36,38,255]' && JSON.stringify(composited.line) === '[215,217,219,255]'
+    JSON.stringify(composited.background) === '[0,0,0,255]' && JSON.stringify(composited.line) === '[215,217,219,255]'
     && JSON.stringify(composited.orange) === '[200,108,62,255]' && JSON.stringify(composited.repeated) === '[200,108,62,255]'
     && JSON.stringify(composited.masked) === '[200,108,62,255]' && JSON.stringify(composited.white) === '[255,255,255,255]'
     && JSON.stringify(composited.black) === '[0,0,0,255]', JSON.stringify(composited));
@@ -328,7 +328,7 @@ try {
   const nightColors = await coloredText();
   const luminance = rgb => rgb.map(v => { const x = v / 255; return x <= .04045 ? x / 12.92 : ((x + .055) / 1.055) ** 2.4; })
     .reduce((sum, value, i) => sum + value * [.2126, .7152, .0722][i], 0);
-  const contrast = rgb => (luminance(rgb) + .05) / (luminance([34, 36, 38]) + .05);
+  const contrast = rgb => (luminance(rgb) + .05) / (luminance(composited.background.slice(0, 3)) + .05);
   check('深蓝文字可读、绿色文字降低亮度，同时保持蓝绿区别', nightColors.blue && nightColors.green
     && contrast(nightColors.blue) >= 4.5 && contrast(nightColors.green) >= 4.5
     && luminance(nightColors.green) < .5 && nightColors.blue[2] > nightColors.blue[0] + 25
@@ -363,7 +363,7 @@ try {
   await nightImage.evaluate(() => window.__viewer.setScale(6));
   await nightImage.waitForFunction(() => {
     const v = window.__viewer, e = v.rendered.get(1);
-    return e?.slice && e.renderScale === 6 && e.paper === '#222426' && !v.renderTasks.has(1);
+    return e?.slice && e.renderScale === 6 && e.paper === getComputedStyle(document.documentElement).getPropertyValue('--night-paper').trim() && !v.renderTasks.has(1);
   }, { timeout: 30000 });
   check('深色切片缩放不产生圆角接缝，文字层仍可选择', await nightImage.evaluate(() => {
     const e = window.__viewer.rendered.get(1);
@@ -371,7 +371,7 @@ try {
   }));
   await nightImage.close();
   await page.reload({ waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === '#222426');
+  await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.paper === getComputedStyle(document.documentElement).getPropertyValue('--night-paper').trim());
   check('刷新恢复深色主题和论文反色', await page.evaluate(() => document.documentElement.dataset.theme === 'dark'));
   for (const [oldTheme, newTheme] of [['sand', 'light'], ['mist', 'glass'], ['sage', 'light'], ['fjord', 'dark'], ['plum', 'dark'], ['graphite', 'dark'], ['black', 'dark']]) {
     await page.evaluate(theme => {
@@ -390,11 +390,11 @@ try {
         glassSurfaceTransparency: 80, glassBrightness: brightness, glassFrost: 32, glassShadow: 35 } }));
     }, { transparency, brightness });
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 3);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 4);
     check(custom ? '升级保留用户自定义透明度和亮度' : '升级将旧默认值迁移到微暖透光默认值', await page.evaluate(custom => {
       const s = JSON.parse(localStorage.getItem('reader.ui')).style;
-      return s.appearanceVersion === 3 && s.glassTransparency === (custom ? 41 : 16)
-        && s.glassBrightness === (custom ? 96 : 92) && s.glassSurfaceTransparency === 100;
+      return s.appearanceVersion === 4 && s.glassTransparency === (custom ? 41 : 16)
+        && s.glassBrightness === (custom ? 50 : 0) && s.glassSurfaceTransparency === 100;
     }, custom));
   }
   for (const custom of [false, true]) {
@@ -404,7 +404,7 @@ try {
         glassShadow: custom ? 29 : 48, glassCrystal: custom ? 87 : 55 } }));
     }, custom);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 3);
+    await page.waitForFunction(() => JSON.parse(localStorage.getItem('reader.ui') || '{}').style?.appearanceVersion === 4);
     check(custom ? '新悬浮外观保留已调圆角、光影与高光' : '新悬浮外观迁移上一版默认圆角、光影与高光', await page.evaluate(custom => {
       const s = JSON.parse(localStorage.getItem('reader.ui')).style;
       return s.glassRadius === (custom ? 11 : 28) && s.glassShadow === (custom ? 29 : 100)

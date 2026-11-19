@@ -3053,7 +3053,7 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
   color-scheme: light;
   --bg: var(--glass-bg, #FCFAF7);
   --bg-sunken: var(--glass-bg-low, #F6F2EB);
-  --bg-elev: #FFFEFC;
+  --bg-elev: var(--appearance-elev, #FFFEFC);
   --fg: #302E2A; --fg-dim: #625D55; --fg-faint: #797268;
   --border: #E8E2D8; --border-strong: #D4CABB;
   --accent: #756247; --accent-soft: #F0EBE2; --accent-fg: #FFFFFF;
@@ -3071,18 +3071,18 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
   --surface-rgb: 255, 255, 255;
   --bg: var(--appearance-bg, #EDEDED); --bg-sunken: var(--appearance-bg-low, #E9E9E9);
   --reader-bg: var(--bg); --reader-bg-low: var(--bg-sunken);
-  --reader-paper: color-mix(in srgb, var(--paper) calc(var(--glass-paper-opacity, .24) * 100%), transparent);
+  --reader-paper: color-mix(in srgb, var(--reading-paper, var(--paper)) calc(var(--glass-paper-opacity, .24) * 100%), transparent);
   --reader-popover: var(--bg-elev);
   --shadow: 0 12px 32px -20px rgba(0, 0, 0, calc(.14 * var(--glass-shadow-strength, 1)));
   --shadow-sm: 0 2px 8px rgba(0, 0, 0, calc(.04 * var(--glass-shadow-strength, 1)));
 }
 :root:root[data-theme="glass"] {
-  --reader-paper: rgba(255, 255, 255, var(--glass-paper-opacity, .88));
-  --reader-popover: rgba(255, 254, 252, .96);
+  --reader-paper: color-mix(in srgb, var(--reading-paper, #fff) calc(var(--glass-paper-opacity, .88) * 100%), transparent);
+  --reader-popover: color-mix(in srgb, var(--bg-elev) 96%, transparent);
 }
 :root:root[data-theme="light"] {
   color-scheme: light;
-  --bg: var(--appearance-bg, #F8F5EB); --bg-elev: #FDFBF5; --bg-sunken: var(--appearance-bg-low, #F1EDE0);
+  --bg: var(--appearance-bg, #F8F5EB); --bg-elev: var(--appearance-elev, #FDFBF5); --bg-sunken: var(--appearance-bg-low, #F1EDE0);
   --fg: #3F4038; --fg-dim: #63645A; --fg-faint: #77786C;
   --border: #E4DEC9; --border-strong: #D5CEB4;
   --accent: #556B2F; --accent-soft: #E4E8D8; --accent-fg: #FBFDF4;
@@ -3091,14 +3091,14 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 }
 :root:root[data-theme="dark"] {
   color-scheme: dark;
-  --bg: var(--appearance-bg, #1C1E20); --bg-elev: #2B2E31; --bg-sunken: var(--appearance-bg-low, #181A1C);
+  --bg: var(--appearance-bg, #1C1E20); --bg-elev: var(--appearance-elev, #2B2E31); --bg-sunken: var(--appearance-bg-low, #181A1C);
   --fg: var(--night-ink, #CBCDCF); --fg-dim: var(--night-ink-dim, #A7AAAD); --fg-faint: var(--night-ink-faint, #8C9094);
   --border: #3A3E42; --border-strong: #50555A;
   --accent: #DBDFE2; --accent-soft: #363A3E; --accent-fg: #1D2023;
   --btn: #D7DBDF; --btn-fg: #202326;
   --ok-text: #A3C7AE; --err-text: #E3A99E;
-  --surface-rgb: 76, 80, 84;
-  --reader-paper: rgba(34, 36, 38, var(--glass-paper-opacity, .24)); --reader-popover: #2B2E31;
+  --surface-rgb: var(--night-surface-rgb, 76, 80, 84);
+  --reader-paper: color-mix(in srgb, var(--night-paper, #222426) calc(var(--glass-paper-opacity, .24) * 100%), transparent); --reader-popover: var(--bg-elev);
   --sel: rgba(176, 192, 204, .30); --hit: rgba(218, 183, 100, .35); --hl: rgba(218, 183, 100, .30);
   --scroll-thumb: #4B5055; --scroll-thumb-hover: #656B71;
 }

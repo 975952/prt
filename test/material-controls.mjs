@@ -36,19 +36,19 @@ try {
   const set = (id, value) => page.$eval(`#${id}`, (n, v) => { n.value = v; n.dispatchEvent(new Event('input', { bubbles: true })); }, value);
   const mode = value => page.select('#uiGlassCardMode', value);
   const snapshot = () => page.evaluate(() => {
-    const v = window.__viewer, p = v.pageEls[1], c = v.rendered.get(1).canvas, style = getComputedStyle(p);
+    const v = window.__viewer, p = v.pageEls[1], c = v.rendered.get(1).canvas, shadow = document.querySelector('.paper-shadow[data-page="1"]');
     return { bg: getComputedStyle(document.documentElement).getPropertyValue('--glass-bg').trim(), canvas: c.toDataURL(),
-      scroll: v.container.scrollTop, scale: v.scale, shadow: style.boxShadow, highlight: getComputedStyle(p, '::before').opacity,
+      scroll: v.container.scrollTop, scale: v.scale, shadow: getComputedStyle(shadow || p).boxShadow, highlight: getComputedStyle(p, '::before').opacity,
       sideRadii: [...document.querySelectorAll('.main-row .side')].map(n => getComputedStyle(n).borderRadius) };
   });
   const initial = await snapshot();
   assert.equal(initial.bg, 'rgb(233 233 233)'); assert(initial.sideRadii.every(r => r === '0px'));
-  assert.equal(await page.$eval('#uiGlassBrightness', n => n.min), '92');
+  assert.equal(await page.$eval('#uiGlassBrightness', n => n.min), '0');
   await set('uiGlassBrightness', 60);
-  assert.equal((await snapshot()).bg, 'rgb(233 233 233)');
-  assert.equal(await page.$eval('#uiGlassBrightness', n => n.value), '92');
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassBrightness), 92);
-  assert.equal((await snapshot()).canvas, initial.canvas);
+  assert.equal((await snapshot()).bg, 'rgb(245 245 245)');
+  assert.equal(await page.$eval('#uiGlassBrightness', n => n.value), '60');
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassBrightness), 60);
+  assert.ok((await snapshot()).canvas === initial.canvas, 'changing background brightness preserves PDF pixels');
   await set('uiGlassBrightness', 100);
   await page.evaluate(() => document.activeElement?.blur()); await wait(250);
   const inputSurface = () => page.$eval('#composer .composer-row', n => {
@@ -65,7 +65,7 @@ try {
   assert.equal(focusedInput.width, restingInput.width); assert.equal(focusedInput.height, restingInput.height);
   assert.equal(await page.$eval('#chatInput', n => getComputedStyle(n).outlineStyle), 'none');
   await page.screenshot({ path: path.join(scratch, 'composer-focused.png') });
-  console.log('PASS brighter 92–100% range and visible input surface lighting without focus outlines or layout shift');
+  console.log('PASS normalized 0–100% background range and visible input surface lighting without focus outlines or layout shift');
   await set('uiGlassTone', 0); assert.equal((await snapshot()).bg, 'rgb(253 253 253)');
   await set('uiGlassTone', 100); assert.equal((await snapshot()).bg, 'rgb(255 244 224)');
   await set('uiGlassTone', 20);
@@ -75,7 +75,7 @@ try {
   await page.screenshot({ path: path.join(scratch, 'paper-floating.png') });
   assert.notEqual(low.shadow, high.shadow); assert.equal(low.highlight, '0'); assert.equal(high.highlight, '1');
   assert(!high.shadow.includes('inset'), 'paper elevation is external');
-  assert.equal(initial.canvas, high.canvas); assert.equal(initial.scroll, high.scroll); assert.equal(initial.scale, high.scale);
+  assert.ok(initial.canvas === high.canvas, 'material settings preserve PDF pixels'); assert.equal(initial.scroll, high.scroll); assert.equal(initial.scale, high.scale);
   console.log('PASS background tone, elevation/highlight, flat sidebars and unchanged PDF pixels/position');
   await set('uiGlassShadow', 76); await set('uiGlassCrystal', 70);
   await page.evaluate(() => {
@@ -131,7 +131,7 @@ try {
   });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.rendered.get(1)?.textDiv?.childElementCount > 0);
-  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassBrightness), 92);
+  assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassBrightness), 0);
   assert.equal((await snapshot()).bg, 'rgb(233 233 233)');
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.glassCardMode), 'frosted');
   console.log('PASS older dim background preferences migrate to the new minimum and retain card material');

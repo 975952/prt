@@ -54,7 +54,7 @@ try {
     const theme = document.querySelector('#uiTheme'); theme.value = 'dark';
     theme.dispatchEvent(new Event('input', { bubbles: true }));
   });
-  assert.equal(await page.$eval('.home-content', n => getComputedStyle(n).backgroundColor), 'rgb(11, 12, 14)');
+  assert.equal(await page.$eval('.home-content', n => getComputedStyle(n).backgroundColor), 'rgb(0, 0, 0)');
   await page.screenshot({ path: path.join(scratch, 'library-dark.png') });
   assert.equal(await page.$eval('#homeReadingEntry span', n => n.textContent), '回到阅读区');
   await page.goto(base + '/?topbar=static', { waitUntil: 'domcontentloaded' });

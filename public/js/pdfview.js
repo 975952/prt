@@ -68,7 +68,8 @@ function paperColor() {
 function readingPaperColor(pageEl) {
   if (pageEl?.dataset.imageOnly === 'true') return '#FFFFFF';
   const theme = document.documentElement.dataset.theme;
-  return theme === 'dark' ? NIGHT_PAPER : theme === 'glass' ? 'rgba(0, 0, 0, 0)' : paperColor();
+  return theme === 'dark' ? getComputedStyle(document.documentElement).getPropertyValue('--night-paper').trim() || NIGHT_PAPER
+    : theme === 'glass' ? 'rgba(0, 0, 0, 0)' : paperColor();
 }
 
 /** 切片向外多渲染多少像素（CSS px，上限）。滚动时不至于一屏就重画一次；
@@ -365,6 +366,7 @@ export class PdfViewer {
     this.pageEls = [];        // .page 元素，index 从 1 开始
     this.rendered = new Map();  // pageNum -> {canvas, textDiv, task, hlLayer}
     this.renderTasks = new Map();
+    this._renderContent = new Map(); // Bounded extraction cache; zoom/theme redraws reuse page text.
     this.textCache = new Map();  // pageNum -> string
     this.scanCache = new Map();  // 页面类型扫描结果缓存（同一次加载内）
     this._pageImageCache = new Map();  // `${page}:${maxDim}` -> {dataUrl,width,height}
@@ -615,6 +617,7 @@ export class PdfViewer {
     for (const i of Array.from(this.rendered.keys())) this._teardownPage(i);
     this.rendered.clear();
     this.renderTasks.clear();
+    this._renderContent.clear();
     this.textCache.clear();
     this.scanCache.clear();
     this._pageImageCache.clear();
@@ -662,6 +665,7 @@ export class PdfViewer {
     for (const i of Array.from(this.rendered.keys())) this._teardownPage(i);
     this.rendered.clear();
     this.renderTasks.clear();
+    this._renderContent.clear();
     this.textCache.clear();
     this.scanCache.clear();
     this._pageImageCache.clear();
@@ -1112,7 +1116,7 @@ export class PdfViewer {
         const pageNumber = start + index;
         await this.renderTasks.get(pageNumber);
         if (!valid()) return;
-        await this._renderPage(pageNumber, { force: true, priority: true, gen });
+        await this._renderPage(pageNumber, { soft: !!this.rendered.get(pageNumber)?.dirty, priority: true, gen });
         // A viewport rerender can acquire this page between the await and the
         // force request. Wait for that task too before copying its canvas.
         await this.renderTasks.get(pageNumber);
@@ -1127,6 +1131,7 @@ export class PdfViewer {
       // A malformed target page must not leave an opaque snapshot over the book.
       // A newer navigation owns its own snapshots and must not be cleaned here.
       if (revision === this._immersiveRevision) this._clearImmersiveOverlays();
+      if (valid()) this._schedulePrefetch(100);
     }
   }
 
@@ -1711,7 +1716,7 @@ export class PdfViewer {
 
   /** 安排一次后台预渲染（合并短时间内的多次请求） */
   _schedulePrefetch(delay = 120) {
-    if (this._destroyed || this._viewportResizing || this._immersive) return;
+    if (this._destroyed || this._viewportResizing) return;
     this._cancelPrefetch();
     this._prefetchTimer = setTimeout(() => {
       this._prefetchTimer = 0;
@@ -1733,26 +1738,31 @@ export class PdfViewer {
     this._prefetchRunning = true;
     try {
       for (let n = 0; n < 64; n++) {
-        if (this._destroyed || this._zoomPreview || this._viewportResizing || !this.pdf) return;
+        if (this._destroyed || this._zoomPreview || this._viewportResizing || !this.pdf || this._immersive && this._immersiveNavigation) return;
         const gen = this._gen;
         const [first, last] = this._visibleRange();
+        // Decoding a scan can occupy the worker for much longer than a text
+        // page. Finish the visible spread before starting speculative pages.
+        if (Array.from({ length: last - first + 1 }, (_, offset) => first + offset).some(i => this.renderTasks.has(i))) return;
+        const ahead = this._immersive ? 2 : PREFETCH_AHEAD, back = this._immersive ? 2 : PREFETCH_BACK;
+        const needsRender = i => !this.renderTasks.has(i) && (!this.rendered.has(i) || this.rendered.get(i).dirty);
         let next = 0;
         // ① 视口下方最近的一页优先（读论文就是往下翻）
-        for (let i = last + 1; i <= Math.min(this.numPages, last + PREFETCH_AHEAD); i++) {
-          if (!this.rendered.has(i) && !this.renderTasks.has(i)) { next = i; break; }
+        for (let i = last + 1; i <= Math.min(this.numPages, last + ahead); i++) {
+          if (needsRender(i)) { next = i; break; }
         }
         // ② 再看视口上方（往回翻）
         if (!next) {
-          for (let i = first - 1; i >= Math.max(1, first - PREFETCH_BACK); i--) {
-            if (!this.rendered.has(i) && !this.renderTasks.has(i)) { next = i; break; }
+          for (let i = first - 1; i >= Math.max(1, first - back); i--) {
+            if (needsRender(i)) { next = i; break; }
           }
         }
         if (!next) break;
         // 大文档后面页的尺寸可能还是第 1 页占位：先量真实尺寸再画，避免页面高度不对
         if (!this.baseSizes[next]) await this._measurePageSize(next);
-        if (this._destroyed || gen !== this._gen) return;
-        if (this.rendered.has(next) || this.renderTasks.has(next)) continue;
-        await this._renderPage(next, { gen });
+        if (this._destroyed || gen !== this._gen || this._immersive && this._immersiveNavigation) return;
+        if (!needsRender(next)) continue;
+        await this._renderPage(next, { gen, soft: !!this.rendered.get(next)?.dirty });
         await nextFrame();
       }
       this._reclaimFar();
@@ -1816,15 +1826,25 @@ export class PdfViewer {
     this.commitZoomPreview();
     this._fitViewportWidth = this.container.clientWidth;
     const anchor = this._captureAnchor();
-    this.scale = this._computeFitScale();
+    const nextScale = this._computeFitScale();
+    const changed = Math.abs(nextScale - this.scale) > .0005;
+    this.scale = nextScale;
     this._fitMode = true;
-    this._softRescale();
+    if (changed) this._softRescale();
     this.layout();
     this._restoreAnchor(anchor);
     // Fit is also a reset of horizontal panning, including a previous zoom
     // preview. Use the final layout's range rather than the old scroll offset.
     this.container.scrollLeft = Math.max(0, (this.container.scrollWidth - this.container.clientWidth) / 2);
-    this._scheduleRerender(80);
+    if (changed) this._scheduleRerender(80);
+    else {
+      const [first, last] = this._visibleRange();
+      for (let i = first; i <= last; i++) {
+        const entry = this.rendered.get(i);
+        if (entry && !this.renderTasks.has(i) && !this._hasCurrentPageBitmap(i)) entry.dirty = true;
+      }
+      this._renderVisible(true);
+    }
     this.opts.onScale?.(this.scale);
     this.opts.onStatus?.(tr("适应宽度 {0}%", Math.round(this.scale * 100)));
   }
@@ -1929,8 +1949,10 @@ export class PdfViewer {
   async refreshPage(pageNum = 1) {
     const i = Number(pageNum);
     if (!this.pdf || !Number.isInteger(i) || i < 1 || i > this.numPages) return;
-    this._teardownPage(i);
-    await this._renderPage(i, { force: true, priority: true, gen: this._gen });
+    const gen = this._gen;
+    await this.renderTasks.get(i);
+    if (gen !== this._gen) return;
+    if (!this._hasCurrentPageBitmap(i)) await this._renderPage(i, { soft: true, priority: true, gen });
     this._schedulePrefetch(80);
   }
 
@@ -2006,13 +2028,56 @@ export class PdfViewer {
     }
   }
 
+  async _pageRenderContent(i, page) {
+    const existing = this._renderContent.get(i);
+    if (existing?.page === page) {
+      this._renderContent.delete(i); this._renderContent.set(i, existing);
+      return existing.promise;
+    }
+    const record = { page, promise: null };
+    record.promise = (async () => {
+      const textContent = await page.getTextContent({ includeMarkedContent: true });
+      let imageOnly = false;
+      if (!textContent.items.some(item => typeof item.str === 'string' && item.str.trim())) {
+        const ops = await page.getOperatorList();
+        const imageOps = new Set([
+          pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintInlineImageXObject,
+          pdfjsLib.OPS.paintImageMaskXObject, pdfjsLib.OPS.paintImageXObjectRepeat,
+          pdfjsLib.OPS.paintInlineImageXObjectGroup, pdfjsLib.OPS.paintImageMaskXObjectGroup,
+          pdfjsLib.OPS.paintImageMaskXObjectRepeat,
+        ].filter(Number.isFinite));
+        imageOnly = ops.fnArray.some(op => imageOps.has(op));
+      }
+      return { textContent, imageOnly };
+    })().catch(() => {
+      if (this._renderContent.get(i) === record) this._renderContent.delete(i);
+      return { textContent: null, imageOnly: false };
+    });
+    this._renderContent.set(i, record);
+    // Keep only the nearby working set; long scanned books must not retain all extracted pages.
+    while (this._renderContent.size > KEEP_AHEAD + KEEP_BACK + 4) this._renderContent.delete(this._renderContent.keys().next().value);
+    return record.promise;
+  }
+
+  _hasCurrentPageBitmap(i) {
+    const entry = this.rendered.get(i), pageEl = this.pageEls[i];
+    if (!entry?.complete || entry.dirty || !pageEl || entry.canvas.parentElement !== pageEl
+      || Math.abs(entry.renderScale - this.scale) > .001 || entry.paper !== readingPaperColor(pageEl)) return false;
+    const isNight = document.documentElement.dataset.theme === 'dark' && pageEl.dataset.imageOnly !== 'true';
+    if (entry.isNight !== isNight || isNight && (entry.nightSaturation !== (document.documentElement.dataset.nightSaturation || '50')
+      || entry.nightBrightness !== (document.documentElement.dataset.nightBrightness || '90'))) return false;
+    const plan = this._renderPlan(i, entry.cssW, entry.cssH);
+    return Math.abs(plan.ratio - entry.ratio) <= .01 * plan.ratio
+      && !(entry.slice && !plan.slice) && this._sliceCovers(entry.slice, plan.window);
+  }
+
   async _renderPage(i, { priority = false, gen = this._gen, force = false, soft = false } = {}) {
     const t0 = this._perf ? performance.now() : 0;
     if (!this.pdf || gen !== this._gen) return;
     // 无论调用方是否带 force，都不要取消一份正在生成的文本层；等它自然结束后
     // 再由切片检查决定是否需要下一轮。这样旧热点可以继续覆盖当前页面。
-    if (this.renderTasks.has(i)) return;
-    if (!force && !soft && this.rendered.has(i)) return;
+    if (this.renderTasks.has(i)) return this.renderTasks.get(i);
+    if (!force && !soft && this._hasCurrentPageBitmap(i)) return;
     const pageEl = this.pageEls[i];
     if (!pageEl) return;
     const storedEntry = this.rendered.get(i);
@@ -2037,22 +2102,9 @@ export class PdfViewer {
       }
       if (stale() || !this.pageEls[i]) return;
 
-      let textContent = null;
-      try { textContent = await page.getTextContent({ includeMarkedContent: true }); } catch { /* text layer may be unavailable */ }
+      const { textContent, imageOnly } = await this._pageRenderContent(i, page);
       if (stale()) return;
       if (textContent && !pageEl.dataset.imageOnly) {
-        let imageOnly = false;
-        if (!textContent.items.some(item => typeof item.str === 'string' && item.str.trim())) {
-          const ops = await page.getOperatorList();
-          const imageOps = new Set([
-            pdfjsLib.OPS.paintImageXObject, pdfjsLib.OPS.paintInlineImageXObject,
-            pdfjsLib.OPS.paintImageMaskXObject, pdfjsLib.OPS.paintImageXObjectRepeat,
-            pdfjsLib.OPS.paintInlineImageXObjectGroup, pdfjsLib.OPS.paintImageMaskXObjectGroup,
-            pdfjsLib.OPS.paintImageMaskXObjectRepeat,
-          ].filter(Number.isFinite));
-          imageOnly = ops.fnArray.some(op => imageOps.has(op));
-        }
-        if (stale()) return;
         pageEl.dataset.imageOnly = String(imageOnly);
         this._paperShadows?.schedule();
       }
@@ -2082,6 +2134,7 @@ export class PdfViewer {
       // 这里靠 DOM 顺序解决：新画布插在旧画布后面，天然在上层。
       if (prevCanvas) canvas.style.visibility = 'hidden';
       const paper = readingPaperColor(pageEl);
+      const isNight = document.documentElement.dataset.theme === 'dark' && pageEl.dataset.imageOnly !== 'true';
       // CSS owns the adjustable paper surface in every theme. Keep original
       // PDF ink and image pixels opaque; only the empty canvas is transparent.
       const background = pageEl.dataset.imageOnly === 'true' ? paper : 'rgba(0, 0, 0, 0)';
@@ -2106,7 +2159,7 @@ export class PdfViewer {
       if (!reusePinLayer) pinLayer.style.transform = '';
 
       const entry = {
-        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null, paper, nightSaturation, nightBrightness,
+        canvas, textDiv, hlLayer, hitLayer, quoteLayer, pinLayer, task: null, textLayer: null, paper, isNight, nightSaturation, nightBrightness,
         slice, ratio, cssW, cssH,
         renderScale: this.scale,   // 这张位图是按哪个比例画的（软缩放拉伸时要用）
         dirty: false,
@@ -2135,7 +2188,7 @@ export class PdfViewer {
         background,
       });
       entry.task = renderTask;
-      if (paper === NIGHT_PAPER) applyNightReading(renderTask, pdfjsLib.OPS, { saturation: Number(nightSaturation), brightness: Number(nightBrightness) });
+      if (isNight) applyNightReading(renderTask, pdfjsLib.OPS, { paper, saturation: Number(nightSaturation), brightness: Number(nightBrightness) });
       else if (pageEl.dataset.imageOnly !== 'true') applyPaperReading(renderTask, pdfjsLib.OPS);
       try {
         await renderTask.promise;
@@ -2184,6 +2237,7 @@ export class PdfViewer {
          漏掉这一步，旧 transform 会和新比例同时生效（就是那个"双重缩放"）。 */
       this._resetLayerScale(entry);
       entry.dirty = false;
+      entry.complete = true;
 
       // 文本层
       try {
@@ -2230,7 +2284,8 @@ export class PdfViewer {
       // 切换主题时若旧帧正在绘制，完成后补画最新纸底，避免旧底色残留。
       const completed = this.rendered.get(i);
       if (!stale() && completed && (completed.paper !== readingPaperColor(pageEl)
-        || (completed.paper === NIGHT_PAPER && (completed.nightSaturation !== (document.documentElement.dataset.nightSaturation || '50')
+        || completed.isNight !== (document.documentElement.dataset.theme === 'dark' && pageEl.dataset.imageOnly !== 'true')
+        || (completed.isNight && (completed.nightSaturation !== (document.documentElement.dataset.nightSaturation || '50')
           || completed.nightBrightness !== (document.documentElement.dataset.nightBrightness || '90'))))) {
         completed.dirty = true;
         this._scheduleRerender(0);

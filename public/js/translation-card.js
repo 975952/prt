@@ -25,33 +25,30 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   const button = (id, label, icon, action) => el('button', {
     id, class: 'reading-card-action', type: 'button', title: label, 'aria-label': label,
     onclick: action,
-  }, iconEl(icon, { size: 16 }), el('span', { text: label }));
+  }, iconEl(icon, { size: 16 }));
   const title = head.querySelector('.pop-title');
   title?.replaceChildren(iconEl('translate', { size: 18 }), el('span', { text: tr('译文') }));
   const historyButton = button('translationCardHistory', tr('翻译记录'), 'history', () => {
     card.dataset.cardView === 'history' ? resetView() : openHistory();
   });
   head.insertBefore(historyButton, close);
-  const inputs = el('div', { class: 'reading-card-inputs' });
-  const language = el('select', { id: 'translationCardLanguage', 'aria-label': tr('翻译目标语言') },
+  const language = el('select', { id: 'translationCardLanguage', title: tr('翻译目标语言'), 'aria-label': tr('翻译目标语言') },
     el('option', { value: '中文', text: tr('中文') }), el('option', { value: 'English', text: 'English' }));
-  const languageField = el('label', { class: 'reading-card-language', for: 'translationCardLanguage' },
-    el('span', { text: tr('译成') }), language);
   language.addEventListener('change', () => void perform(onTargetLanguageChange, language.value));
   const capture = button('translationCardCapture', tr('截图翻译'), 'screenshot', () => perform(onCapture));
-  languageField.hidden = !onTargetLanguageChange; capture.hidden = !onCapture;
-  inputs.append(languageField, capture); inputs.hidden = !onTargetLanguageChange && !onCapture;
-  head.after(inputs);
-  const original = el('details', { class: 'reading-card-original', id: 'translationCardOriginal' },
-    el('summary', {}, el('span', { text: tr('原文对照') }), el('span', { class: 'reading-card-original-hint', text: tr('展开') })));
+  language.hidden = !onTargetLanguageChange; capture.hidden = !onCapture;
+  head.insertBefore(language, historyButton); head.insertBefore(capture, historyButton);
+  const original = el('div', { class: 'reading-card-original', id: 'translationCardOriginal', hidden: true });
+  let originalOpen = false;
+  const originalToggle = button('translationCardOriginalToggle', tr('原文对照'), 'list', () => {
+    originalOpen = !originalOpen; refresh();
+  });
   quote.before(original); original.append(quote);
   const meta = el('div', { class: 'reading-card-meta' });
   const locate = button('translationCardLocate', tr('定位原文'), 'book', () => current() && onLocate?.(current()));
   const status = el('span', { class: 'reading-card-status', 'aria-live': 'polite' });
-  meta.append(locate, status); original.before(meta);
+  meta.append(status); original.before(meta);
   const history = el('div', { class: 'reading-card-history', id: 'translationCardHistoryList', role: 'list', hidden: true });
-  const historyTitle = el('p', { class: 'reading-card-history-caption', text: tr('当前文档的翻译记录会自动保留。') });
-  history.append(historyTitle);
   card.insertBefore(history, card.querySelector('.translation-card-message'));
   const footer = el('div', { class: 'reading-card-footer' });
   const tools = el('div', { class: 'reading-card-tools' });
@@ -64,7 +61,7 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     await perform(onDelete, record);
     if (!records().some(row => row.id === record.id)) openHistory();
   });
-  tools.append(copy, save, retry, stop, remove);
+  tools.append(originalToggle, locate, copy, save, retry, stop, remove);
   const pager = el('div', { class: 'reading-card-pager' });
   const previous = button('translationCardPrevious', tr('上一条'), 'chevron-left', () => step(-1));
   const count = el('span', { class: 'reading-card-count' });
@@ -73,12 +70,10 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   card.insertBefore(footer, document.getElementById('translationCardResize'));
   const editor = el('form', { class: 'reading-card-editor', hidden: !onTranslate });
   const input = el('textarea', { id: 'translationCardInput', rows: 2,
-    placeholder: tr('输入或粘贴文字，继续翻译'), 'aria-label': tr('待翻译的文字') });
+    placeholder: tr('输入或粘贴文字'), 'aria-label': tr('待翻译的文字'), title: tr('Enter 翻译 · Shift+Enter 换行') });
   const submit = button('translationCardSubmit', tr('翻译'), 'arrow-up');
   submit.type = 'submit';
-  const editorActions = el('div', { class: 'reading-card-editor-actions' },
-    el('span', { class: 'reading-card-editor-hint', text: tr('Enter 翻译 · Shift+Enter 换行') }), submit);
-  editor.append(input, editorActions); footer.after(editor);
+  editor.append(input, submit); footer.after(editor);
   input.addEventListener('input', () => { saveDraft(input.value); refresh(); });
   input.addEventListener('compositionstart', () => { composing = true; });
   input.addEventListener('compositionend', () => { composing = false; });
@@ -167,10 +162,10 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     const keepInputFocus = submitting && document.activeElement === input;
     beforeSelect?.(record);
     card.dataset.entryId = record.id;
-    quote.textContent = record.quote || record.retry?.text || '';
+    quote.textContent = record.retry?.text || record.quote || '';
     content.innerHTML = render(record.text || '');
     historySelectionId = record.id; historySelectionText = String(record.text || ''); actionError = '';
-    original.open = false;
+    originalOpen = false;
     ensureVisible(); resetView();
     content.scrollTop = 0;
     if (keepInputFocus) input.focus({ preventScroll: true });
@@ -200,8 +195,8 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
       el('span', { class: 'reading-card-history-result', text: summary }));
       return item;
     });
-    history.replaceChildren(historyTitle, ...rows);
-    if (!list.length) history.append(el('p', { class: 'reading-card-empty', text: tr('选中原文后点击翻译，译文会保存在这里。') }));
+    history.replaceChildren(...rows);
+    if (!list.length) history.append(el('p', { class: 'reading-card-empty', text: tr('暂无译文') }));
   }
   function refresh() {
     if (disposed) return;
@@ -225,16 +220,19 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     retry.hidden = pending;
     previous.disabled = index <= 0; next.disabled = index < 0 || index >= list.length - 1;
     locate.disabled = !record?.page || !onLocate;
+    locate.hidden = !record?.page || !onLocate;
+    locate.title = record?.page ? tr('第{0}页', record.page) : tr('定位原文');
+    originalToggle.disabled = !quote.textContent;
+    originalToggle.setAttribute('aria-pressed', String(originalOpen));
     submit.disabled = busy || submitting || !input.value.trim();
     input.setAttribute('aria-busy', String(submitting));
-    setText(locate.querySelector('span'), record?.page ? tr('第{0}页', record.page) : tr('定位原文'));
     setText(count, index >= 0 ? `${index + 1} / ${list.length}` : String(list.length));
     setText(status, actionError || (pending ? tr('翻译中…') : record?.status === 'failed' ? tr('翻译失败')
-      : record?.status === 'stopped' ? tr('已停止') : record ? tr('自动保留到翻译记录') : ''));
+      : record?.status === 'stopped' ? tr('已停止') : ''));
     const showHistory = card.dataset.cardView === 'history';
     history.hidden = !showHistory;
-    original.hidden = showHistory || !quote.textContent;
-    meta.hidden = showHistory; footer.hidden = showHistory;
+    original.hidden = showHistory || !quote.textContent || !originalOpen;
+    meta.hidden = showHistory || !status.textContent; footer.hidden = showHistory;
     card.querySelector('.translation-card-message').hidden = showHistory;
     if (showHistory) renderHistory(list);
   }

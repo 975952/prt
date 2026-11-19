@@ -116,6 +116,22 @@ try {
   await page.evaluate(() => document.querySelector('#viewer').focus());
   await page.keyboard.press('ArrowRight'); await pause(600);
   assert.equal((await spread()).current, 7);
+  await page.mouse.move(1200, 500);
+  await page.mouse.wheel({ deltaY: 100 }); await pause(650);
+  assert.equal((await spread()).current, 9, 'wheel down turns to the next spread');
+  await page.mouse.wheel({ deltaY: -100 }); await pause(650);
+  assert.equal((await spread()).current, 7, 'wheel up turns to the previous spread');
+  await page.evaluate(() => {
+    for (let i = 0; i < 12; i++) document.querySelector('#viewer').dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 12 }));
+  });
+  await pause(650);
+  assert.equal((await spread()).current, 9, 'touchpad momentum produces one turn for the gesture');
+  await page.mouse.wheel({ deltaY: 100 }); await pause(650);
+  assert.equal((await spread()).current, 11, 'a separate wheel action still turns');
+  await page.evaluate(() => document.querySelector('#viewer').dispatchEvent(new WheelEvent('wheel', { bubbles: true, cancelable: true, deltaY: 100, ctrlKey: true })));
+  await pause(250);
+  assert.equal((await spread()).current, 11, 'Ctrl+wheel is left to zoom');
+  await page.evaluate(() => __viewer.goToPage(7));
   const textPoint = await page.$eval('#viewer .page:not(.immersive-hidden) .textLayer span', node => {
     const r = node.getBoundingClientRect(); return { x: r.left + 2, y: r.top + r.height / 2, width: r.width };
   });
@@ -169,6 +185,39 @@ try {
   });
   await page.mouse.move(750, 2); await page.click('#immersiveTranslate');
   await page.waitForSelector('#translationCard:not(.hidden)');
+  await page.mouse.move(750, 2); await page.click('#immersiveChat');
+  const cardStyles = await page.evaluate(() => {
+    const qa = document.querySelector('#rightSide'), translation = document.querySelector('#translationCard');
+    const saved = [qa.getAttribute('style'), translation.getAttribute('style')];
+    Object.assign(qa.style, { left: '400px', right: 'auto', top: '120px', width: '480px', height: '600px' });
+    Object.assign(translation.style, { left: '650px', right: 'auto', top: '160px', width: '460px', height: '520px' });
+    return saved;
+  });
+  const topCard = () => page.evaluate(() => document.elementFromPoint(720, 320)?.closest('#rightSide,#translationCard')?.id);
+  assert.equal(await topCard(), 'rightSide', 'opening QA raises it above translation');
+  await page.mouse.click(1000, 320);
+  assert.equal(await topCard(), 'translationCard', 'clicking the exposed translation card raises it');
+  await page.mouse.click(450, 145);
+  assert.equal(await topCard(), 'rightSide', 'clicking the exposed QA card raises it again');
+  await page.focus('#translationCardInput');
+  assert.equal(await topCard(), 'translationCard', 'keyboard focus raises translation');
+  await page.focus('#chatInput');
+  assert.equal(await topCard(), 'rightSide', 'keyboard focus raises QA');
+  await page.mouse.move(750, 2); await page.click('#immersiveTranslate');
+  assert.equal(await topCard(), 'translationCard', 'opening an already-visible translation raises it');
+  await page.mouse.move(750, 2); await page.click('#immersiveChat');
+  assert.equal(await topCard(), 'rightSide', 'opening an already-visible background QA raises it without closing');
+  await page.mouse.move(720, 320); await page.mouse.wheel({ deltaY: 100 }); await pause(250);
+  assert.equal((await spread()).current, 7, 'scrolling a card does not turn the book');
+  await page.screenshot({ path: path.join(scratch, 'immersive-card-stacking.png') });
+  await page.click('#immersiveChatClose');
+  await page.evaluate(saved => {
+    for (const [index, selector] of ['#rightSide', '#translationCard'].entries()) {
+      const node = document.querySelector(selector);
+      if (saved[index] === null) node.removeAttribute('style'); else node.setAttribute('style', saved[index]);
+    }
+  }, cardStyles);
+  console.log('PASS wheel gestures turn one spread, card scrolling stays local, and either floating card can come to front');
   await coversChrome('#translationCard', '#translationCard .pop-head');
   if (await page.$eval('#translationCard', node => node.dataset.cardView !== 'history')) await page.click('#translationCardHistory');
   await page.waitForFunction(() => document.querySelector('#translationCardHistoryList').textContent.includes('第二条译文'));

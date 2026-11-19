@@ -705,6 +705,7 @@ export const en = {
   "名字与交流方式，在所有对话中共用。": "Your assistant's name and communication style apply to every conversation.",
   "撤销修改": "Discard changes",
   "输入或粘贴文字，继续翻译": "Type or paste text to translate",
+  "输入或粘贴文字": "Type or paste text",
   "待翻译的文字": "Text to translate",
   "Enter 翻译 · Shift+Enter 换行": "Enter to translate · Shift+Enter for a new line",
   "翻译失败，请重试。": "Translation failed. Please try again."

@@ -89,6 +89,12 @@ try {
   await page.click('#translationCardHistory');
   await page.$$eval('.reading-card-history-row', nodes=>nodes[1].click());
   assert.equal(await page.$eval('#translationCardText',node=>node.textContent),'Previously saved translation');
+  assert.ok(await page.$eval('#translationCardOriginal',node=>node.hidden));
+  await page.click('#translationCardOriginalToggle');
+  assert.equal(await page.$eval('#translationCardOriginal',node=>node.hidden),false);
+  assert.equal(await page.$eval('#translationCardQuote',node=>node.textContent),'Older complete passage');
+  await page.click('#translationCardOriginalToggle');
+  assert.ok(await page.$eval('#translationCardOriginal',node=>node.hidden));
   await page.evaluate(version=>window.fixture.push(version,'Late streaming output must stay elsewhere'),version);
   assert.equal(await page.$eval('#translationCardText',node=>node.textContent),'Previously saved translation');
   await page.click('#translationCardCopy'); await page.click('#translationCardSave');
