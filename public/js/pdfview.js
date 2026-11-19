@@ -368,7 +368,7 @@ export class PdfViewer {
     this.renderTasks = new Map();
     this.textCache = new Map();  // pageNum -> string
     this.scanCache = new Map();  // 页面类型扫描结果缓存（同一次加载内）
-    this._pageImageCache = new Map();  // `${page}:${maxDim}` -> {dataUrl,width,height}
+    this._pageImageCache = new Map();  // `${page}:${maxDim}:${quality}:${background}` -> {dataUrl,width,height}
     this.offsets = [];        // 每页顶部相对 pages 容器的偏移
     this.heights = [];
     this.current = 1;
@@ -2253,8 +2253,8 @@ export class PdfViewer {
   }
 
   /** 渲染整页为图片（扫描件的问答 / 教学上下文用）；同一页同一尺寸会缓存 */
-  async capturePageImage(pageNum, { maxDim = 1400, quality = 0.85 } = {}) {
-    const key = `${pageNum}:${maxDim}`;
+  async capturePageImage(pageNum, { maxDim = 1400, quality = 0.85, background = paperColor() } = {}) {
+    const key = `${pageNum}:${maxDim}:${quality}:${background}`;
     const hit = this._pageImageCache.get(key);
     if (hit) return hit;
     if (!this.pdf) throw new Error(tr("没有打开的文档"));
@@ -2268,10 +2268,9 @@ export class PdfViewer {
     canvas.width = outWidth;
     canvas.height = outHeight;
     const ctx = canvas.getContext('2d', { alpha: false });
-    const paper = paperColor();
-    ctx.fillStyle = paper;
+    ctx.fillStyle = background;
     ctx.fillRect(0, 0, outWidth, outHeight);
-    await page.render({ canvasContext: ctx, viewport, background: paper }).promise;
+    await page.render({ canvasContext: ctx, viewport, background }).promise;
     let dataUrl = canvas.toDataURL('image/jpeg', quality);
     if (dataUrl.length > 750_000) dataUrl = canvas.toDataURL('image/jpeg', 0.6);
     canvas.width = 0;

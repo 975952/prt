@@ -37,6 +37,7 @@ import {
 import { readingIntent, resolveReadingRequest, resolvePageRole, snapshotReadingRequest, snapshotHistory, readingTurn,
   restoreReadingHistory, replaceReadingTurn, citedSources, stripPageLabels } from './reading-context.js';
 import { validateCitations, collectAvailablePages, planFor, pagesFromText, formatPageList, CITATION_RE } from './citation-validator.js';
+import { assessTocConfidence, mapPrintedPages, normalizePrintedPage, normalizeVisionTocResult, parseTextContentsPages } from './toc-recognition.js';
 import { compactCitationDisplay, transformCitationHtml } from './citation-display.js';
 import { runAgentLoop, agentStats, AGENT_TOOL_SPECS, AGENT_SYSTEM_NOTE, toolStepLabel, stripAgentMarkup } from './agent.js';
 import { lastPromptDebug as __promptDebug } from './prompts/index.js';
@@ -792,6 +793,10 @@ const state = {
   docProfile: null,
   docProfileDoc: null,
   docProfilePromise: null,
+  tocResult: null,
+  tocDoc: null,
+  tocPromise: null,
+  tocController: null,
   /* 扫描件的「图片阅读索引」：逐页转写后拼成的文本，教学能力当全文用（按指纹缓存在 localStorage） */
   scanDigest: null,
   scanDigestDoc: null,
@@ -2172,6 +2177,7 @@ function initViewer() {
     memoryIdle: () => learningMemory.idle(),
     // 扫描件：页型扫描 / 页图 / 图片阅读索引（自动化直接验这条链路）
     startDocProfileScan, ensureScanDigest, pickScanPages, attachPageImages, sendScopeText,
+    startTocRecognition, retryTocRecognition, get tocResult() { return state.tocResult; },
     get docProfile() { return state.docProfile; },
     set docProfile(v) { state.docProfile = v; },
     // 记忆：长期记忆 / 本篇讨论 / 会话滚动摘要（自动化验注入块与清理）
@@ -4500,6 +4506,11 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   }
   if (superseded()) return;
   const prevDocId = state.doc?.docId || null;
+  state.tocController?.abort();
+  state.tocController = null;
+  state.tocPromise = null;
+  state.tocResult = null;
+  state.tocDoc = null;
   const prevPath = state.doc?.path || '';
   const prevReady = state.viewerDocId === prevDocId;
   // B 线 P2：切走前把上一篇的右栏 DOM 与会话状态整体停放，切回来直接挂回（不重放渲染）
@@ -4744,6 +4755,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   // 后台判定页型（是否有文本层 / 是否扫描件）：不阻塞首屏，扫描件提示只在结果出来后才弹。
   // 之后「问答带不带页图」「读懂论文能不能按图理解」都依赖它。
   startDocProfileScan(docId);
+  startTocRecognition(docId);
   if (state.useFullText) warmDocText();
 }
 
@@ -4756,24 +4768,32 @@ async function renderOutline() {
   const myDoc = state.doc?.docId;
   list.innerHTML = '';
   $('#outlineCount').textContent = '';
+  setTocStatus('', false);
   if (!viewer?.pdf) return;
   let items = [];
   try { items = await viewer.getOutline(); } catch { items = []; }
   if (state.doc?.docId !== myDoc) return;
-  if (!items.length) {
-    list.append(el('li', { class: 'empty', text: tr("这篇论文没有内置目录，可用全文搜索定位内容") }));
+  if (items.length) {
+    $('#outlineCount').textContent = `(${items.length})`;
+    for (const it of items) {
+      list.append(el('li', {
+        class: `lv${Math.min(5, it.level)}`,
+        title: it.top !== null && it.top !== undefined ? tr("{0}（点它标题会顶到最上面）", it.title) : it.title,
+        text: it.title,
+        onclick: () => { if (it.page) jumpToDestWithHistory(it, { smooth: true }); },
+      }));
+    }
     return;
   }
-  $('#outlineCount').textContent = `(${items.length})`;
-  for (const it of items) {
-    list.append(el('li', {
-      class: `lv${Math.min(5, it.level)}`,
-      title: it.top !== null && it.top !== undefined ? tr("{0}（点它标题会顶到最上面）", it.title) : it.title,
-      text: it.title,
-      // 有目标 Y 就精确停在标题上；没有（Fit/FitV 这类）才退回滚到页顶
-      onclick: () => { if (it.page) jumpToDestWithHistory(it, { smooth: true }); },
-    }));
+  const cached = loadCachedToc(myDoc);
+  if (cached) {
+    state.tocResult = cached;
+    state.tocDoc = myDoc;
+    renderRecognizedOutline(cached);
+    return;
   }
+  list.append(el('li', { class: 'empty', text: tr("正在检查前页目录…") }));
+  setTocStatus(tr("检查中"), false);
 }
 
 async function renderNotes() {
@@ -12054,6 +12074,16 @@ function setHint(t) {
 // 这里升到 scan2 并让 saveCachedDocProfile 写入匹配版本，同时大文件改用抽样扫描（见 pdfview.scanDocProfile）。
 const DOC_PROFILE_VERSION = `${PROMPT_SYSTEM_VERSION}-scan2`;
 const SCAN_DIGEST_VERSION = PROMPT_SYSTEM_VERSION;
+const TOC_RECOGNITION_VERSION = 'toc1';
+const TOC_SCAN_PAGE_LIMIT = 16;
+const TOC_SCAN_BATCH_SIZE = 4;
+const TOC_VISION_SYSTEM = [
+  '你是 PDF 扫描页目录识别器，只识别给定页图，不回答、不总结。',
+  '判断这些 PDF 实际页里是否有目录（Contents / Table of Contents / 目录 / 目次）。只提取目录中清楚可读的标题、层级和标题旁印刷页码。不要把图片序号、PDF 实际页号、章节号当成印刷页码；看不清就省略该条，不要猜。',
+  '同时逐张辨认页脚或页眉中实际可见的印刷页码标签。无页码或看不清时 label 必须为 null。保留罗马数字大小写可规范化的原文。',
+  '只输出 JSON 对象：{"detected":boolean,"confidence":0到1,"pageLabels":[{"pdfPage":整数,"label":"iv"或"12"或null}],"entries":[{"title":"标题","level":1到6,"printedPage":"页码","sourcePage":目录所在PDF实际页,"confidence":0到1}]}。',
+  '每条 entry 的 sourcePage 必须是当前输入页图标注的 PDF 实际页号。层级按缩进和章节编号综合判断。没有目录时输出 detected:false 和空 entries。不要输出 Markdown 围栏或额外文字。',
+].join('\n');
 /** 扫描件一次问答带几张页图（整篇类问题） */
 const SCAN_PAGES_MAX = 5;
 /** 生成图片阅读索引时最多转写几页 */
@@ -12100,6 +12130,351 @@ function saveCachedScanDigest(docId, text) {
     const key = scanDigestCacheKey(docId);
     if (key) localStorage.setItem(key, JSON.stringify({ version: SCAN_DIGEST_VERSION, text, at: Date.now() }));
   } catch { /* 同上 */ }
+}
+
+function tocCacheKey(docId) {
+  const fp = paperFingerprint(docId);
+  return fp ? `reader.tocMap.${TOC_RECOGNITION_VERSION}:${docId}:${fp}` : '';
+}
+function loadCachedToc(docId) {
+  try {
+    const key = tocCacheKey(docId);
+    if (!key) return null;
+    const value = JSON.parse(localStorage.getItem(key) || 'null');
+    if (!value || value.version !== TOC_RECOGNITION_VERSION || !Array.isArray(value.entries)
+      || !['ready', 'review', 'needs-vision', 'not-found', 'error'].includes(value.status)) return null;
+    return value;
+  } catch { return null; }
+}
+function saveCachedToc(docId, result) {
+  try {
+    const key = tocCacheKey(docId);
+    if (key) localStorage.setItem(key, JSON.stringify({ ...result, version: TOC_RECOGNITION_VERSION, savedAt: Date.now() }));
+  } catch { /* 缓存不可用时仍可在本次阅读中使用识别结果 */ }
+}
+
+function extractTextPageLabel(text) {
+  const candidates = String(text || '').split(/\r?\n/).map((line) => line.trim())
+    .filter((line) => /^(?:\d{1,4}|[ivxlcdm]{1,8})[.)]?$/i.test(line));
+  for (let i = candidates.length - 1; i >= 0; i--) {
+    const parsed = normalizePrintedPage(candidates[i]);
+    if (parsed) return parsed.label;
+  }
+  return null;
+}
+
+function parseTocJson(value) {
+  if (typeof value !== 'string') return null;
+  const source = value.trim().replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '').slice(0, 100_000);
+  try {
+    const parsed = JSON.parse(source);
+    return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : null;
+  } catch { return null; }
+}
+
+function mergeTocEntries(...groups) {
+  const out = [];
+  const seen = new Set();
+  for (const entry of groups.flat()) {
+    if (!entry?.title || !normalizePrintedPage(entry.printedPage)) continue;
+    const key = `${String(entry.title).normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase()}\u0000${normalizePrintedPage(entry.printedPage).label}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(entry);
+    if (out.length >= 120) break;
+  }
+  return out;
+}
+
+function preserveTocCorrections(entries, previous) {
+  const keyOf = (entry) => `${String(entry.title).normalize('NFKC').replace(/\s+/g, ' ').trim().toLocaleLowerCase()}\u0000${normalizePrintedPage(entry.printedPage)?.label || ''}`;
+  const manualEntries = (previous?.entries || []).filter((entry) => Number.isInteger(entry.manualActualPage) && entry.manualActualPage > 0);
+  const manual = new Map(manualEntries.map((entry) => [keyOf(entry), entry.manualActualPage]));
+  const seen = new Set();
+  const corrected = entries.map((entry) => {
+    const key = keyOf(entry);
+    seen.add(key);
+    const actualPage = manual.get(key);
+    return Number.isInteger(actualPage) ? { ...entry, actualPage, manualActualPage: actualPage, mappingStatus: 'manual', mappingSource: 'manual' } : entry;
+  });
+  for (const entry of manualEntries) {
+    const key = keyOf(entry);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    corrected.push({ ...entry, actualPage: entry.manualActualPage, mappingStatus: 'manual', mappingSource: 'manual' });
+  }
+  return corrected.slice(0, 120);
+}
+
+function setTocStatus(message = '', canRetry = false) {
+  const status = $('#outlineStatus');
+  const retry = $('#outlineRetry');
+  if (status) status.textContent = message;
+  if (retry) {
+    if (!retry.childNodes.length) retry.append(iconEl('refresh', { size: 14 }));
+    retry.hidden = !canRetry;
+    retry.classList.toggle('hidden', !canRetry);
+    retry.disabled = !!state.tocPromise;
+    retry.onclick = () => { void retryTocRecognition(); };
+  }
+}
+
+function renderRecognizedOutline(result) {
+  if (state.doc?.docId !== state.tocDoc) return;
+  const list = $('#outlineList');
+  list.replaceChildren();
+  const entries = Array.isArray(result?.entries) ? result.entries : [];
+  $('#outlineCount').textContent = entries.length ? `(${entries.length})` : '';
+  const statusText = {
+    ready: tr("目录已识别"),
+    review: tr("目录需核对"),
+    'needs-vision': tr("需要视觉模型"),
+    'not-found': tr("未找到目录"),
+    error: tr("识别失败"),
+    checking: tr("检查中"),
+  }[result?.status] || '';
+  setTocStatus(statusText, result?.status !== 'ready' || entries.some((entry) => !(Number(entry.manualActualPage || entry.actualPage) > 0)));
+  if (!entries.length) {
+    const message = result?.status === 'checking' ? tr("正在检查前页目录…")
+      : result?.status === 'needs-vision' ? tr("扫描件目录需要可读取图片的模型")
+        : result?.status === 'error' ? tr("目录识别失败，可重试")
+          : tr("没有识别到目录，可重试");
+    list.append(el('li', { class: 'empty', text: message }));
+    return;
+  }
+  for (const [index, entry] of entries.entries()) {
+    const actualPage = Number(entry.manualActualPage || entry.actualPage) || null;
+    const li = el('li', { class: `toc-entry lv${Math.min(5, entry.level || 1)}` });
+    const go = el('button', {
+      class: 'outline-go', type: 'button', title: actualPage ? tr("跳转到 PDF 第 {0} 页", actualPage) : tr("页码未能可靠映射"),
+      text: entry.title, disabled: !actualPage,
+      onclick: () => { if (actualPage) jumpToPageWithHistory(actualPage, { smooth: true }); },
+    });
+    const printed = entry.printedPage ? `${tr("印刷页")} ${entry.printedPage}` : '';
+    const target = actualPage ? tr("PDF 第 {0} 页", actualPage) : tr("实际页待确认");
+    const meta = el('div', { class: 'outline-meta', text: [printed, target, entry.mappingSource === 'manual' ? tr("已更正") : ''].filter(Boolean).join(' · ') });
+    const edit = el('button', {
+      class: 'tbtn outline-edit', type: 'button', title: tr("更正实际页码"), 'aria-label': tr("更正实际页码"),
+      onclick: (event) => {
+        event.preventDefault(); event.stopPropagation();
+        if (li.querySelector('.outline-correct')) return;
+        const input = el('input', { type: 'number', min: '1', max: String(viewer?.numPages || 1), step: '1', value: String(actualPage || ''), 'aria-label': tr("PDF 实际页码") });
+        const save = el('button', { class: 'tbtn', type: 'button', title: tr("保存更正"), 'aria-label': tr("保存更正"), onclick: (saveEvent) => {
+          saveEvent.preventDefault(); saveEvent.stopPropagation();
+          const page = Number(input.value);
+          if (!Number.isInteger(page) || page < 1 || page > (viewer?.numPages || 0)) { input.focus(); return; }
+          entry.manualActualPage = page;
+          entry.actualPage = page;
+          entry.mappingStatus = 'manual';
+          entry.mappingSource = 'manual';
+          const assessment = assessTocConfidence({ found: true, entries, mapping: { entries }, confidence: result.modelConfidence });
+          result.confidence = assessment.score;
+          result.status = assessment.confident && entries.every((item) => Number(item.manualActualPage || item.actualPage) > 0) ? 'ready' : 'review';
+          saveCachedToc(state.tocDoc, result);
+          renderRecognizedOutline(result);
+        } }, iconEl('check', { size: 14 }));
+        const form = el('div', { class: 'outline-correct', onclick: (formEvent) => formEvent.stopPropagation() }, input, save);
+        li.querySelector('.outline-entry-main').append(form);
+        input.focus(); input.select();
+      },
+    }, iconEl('pencil', { size: 13 }));
+    li.append(el('div', { class: 'outline-entry-main' }, go, meta), edit);
+    list.append(li);
+  }
+}
+
+function applyTocResult(docId, result) {
+  if (state.doc?.docId !== docId) return;
+  state.tocDoc = docId;
+  state.tocResult = result;
+  saveCachedToc(docId, result);
+  renderRecognizedOutline(result);
+}
+
+function normalizeVisionPageLabels(payload, allowedPages, labels, authoritativePages = new Set()) {
+  if (!Array.isArray(payload?.pageLabels)) return;
+  const allowed = new Set(allowedPages);
+  for (const row of payload.pageLabels.slice(0, TOC_SCAN_BATCH_SIZE)) {
+    const page = Number(row?.pdfPage ?? row?.page);
+    if (!Number.isInteger(page) || !allowed.has(page)) continue;
+    if (authoritativePages.has(page)) continue;
+    const raw = row?.label;
+    if (raw === null || raw === '' || /^(?:unknown|unreadable|n\/?a|看不清|无)$/i.test(String(raw || '').trim())) {
+      labels[page - 1] = null;
+      continue;
+    }
+    const parsed = normalizePrintedPage(raw);
+    labels[page - 1] = parsed?.label || null;
+  }
+}
+
+function observedTocPageLabels(labels) {
+  return Object.keys(labels).map((index) => ({ pdfPage: Number(index) + 1, label: labels[index] ?? null }));
+}
+
+async function recognizeTocFromImages(docId, pages, labels, controller, authoritativePages) {
+  const merged = [];
+  let found = false;
+  let confidence = null;
+  const failedPages = [];
+  const title = state.doc?.name || '';
+  for (let start = 0; start < pages.length; start += TOC_SCAN_BATCH_SIZE) {
+    if (controller.signal.aborted || state.doc?.docId !== docId) return null;
+    const batch = pages.slice(start, start + TOC_SCAN_BATCH_SIZE);
+    for (const page of batch) {
+      if (!authoritativePages.has(page)) labels[page - 1] = null;
+    }
+    const images = [];
+    for (const page of batch) {
+      try { images.push(await viewer.capturePageImage(page, { maxDim: 1000, quality: 0.72, background: '#FFFFFF' })); }
+      catch { failedPages.push(page); }
+    }
+    if (!images.length) continue;
+    const imagePages = images.map((image) => image.page);
+    const messages = [
+      { role: 'system', content: TOC_VISION_SYSTEM },
+      { role: 'user', content: `【论文】${title}\n识别这些页图中的目录与每页可见的印刷页码。PDF 实际页号见每张图的标注。` },
+    ];
+    const answer = await chat({
+      messages: attachPageImages(messages, images), signal: controller.signal,
+      stream: false, temperature: 0,
+    });
+    if (controller.signal.aborted || state.doc?.docId !== docId) return null;
+    const payload = parseTocJson(answer);
+    const normalized = normalizeVisionTocResult(answer, imagePages);
+    if (!normalized.ok) throw new Error(tr("模型没有返回有效的目录识别结果（{0}）", normalized.reason || normalized.issues?.[0] || 'invalid-response'));
+    normalizeVisionPageLabels(payload, imagePages, labels, authoritativePages);
+    if (normalized.detected && normalized.entries.length) {
+      found = true;
+      merged.push(...normalized.entries);
+      const value = normalized.confidence ?? Math.min(...normalized.entries.map((entry) => entry.confidence ?? 0.72));
+      confidence = confidence === null ? value : Math.min(confidence, value);
+    }
+    if (found) {
+      const mapping = mapPrintedPages(mergeTocEntries(merged), labels, viewer.numPages);
+      if (mapping.complete) break;
+    }
+  }
+  return { found, entries: mergeTocEntries(merged), confidence, labels, failedPages };
+}
+
+async function startTocRecognition(docId = state.doc?.docId, { force = false } = {}) {
+  const myDoc = docId;
+  if (!myDoc || !viewer?.pdf || state.doc?.docId !== myDoc) return null;
+  if (force) state.tocController?.abort();
+  if (state.tocPromise && state.tocDoc === myDoc) return state.tocPromise;
+  if (!force && state.tocResult && state.tocDoc === myDoc) {
+    if (state.tocResult.status !== 'needs-vision' || !Settings.ready) return state.tocResult;
+  }
+  const cached = !force ? loadCachedToc(myDoc) : null;
+  if (cached) {
+    state.tocResult = cached; state.tocDoc = myDoc; renderRecognizedOutline(cached);
+    if (cached.status !== 'needs-vision' || !Settings.ready) return cached;
+  }
+  let native = [];
+  try { native = await viewer.getOutline(); } catch { /* continue with text and image recognition */ }
+  if (native.length) return null;
+
+  const previous = loadCachedToc(myDoc) || state.tocResult;
+  const controller = new AbortController();
+  state.tocController = controller;
+  state.tocDoc = myDoc;
+  const run = (async () => {
+    const initial = { version: TOC_RECOGNITION_VERSION, status: 'checking', source: '', entries: [], confidence: null, modelConfidence: null, offsets: { arabic: null, roman: null }, observedPageLabels: [], found: false };
+    state.tocResult = initial;
+    setTocStatus(tr("检查中"), false);
+    try {
+      const count = Math.min(TOC_SCAN_PAGE_LIMIT, viewer.numPages || 0);
+      const pages = [];
+      const labels = new Array(viewer.numPages || count);
+      const authoritativePages = new Set();
+      try {
+        const pdfLabels = await viewer.pdf.getPageLabels();
+        for (let page = 1; page <= count; page++) {
+          const label = normalizePrintedPage(pdfLabels?.[page - 1]);
+          if (!label) continue;
+          labels[page - 1] = label.label;
+          authoritativePages.add(page);
+        }
+      } catch { /* Older or malformed PDFs may not define page labels. */ }
+      for (let page = 1; page <= count; page++) {
+        if (controller.signal.aborted || state.doc?.docId !== myDoc) return null;
+        let text = '';
+        try { text = await viewer.getPageText(page); } catch { /* preserve as unreadable */ }
+        text = String(text || '').trim();
+        pages.push({ page, text, readable: !!text });
+        if (!authoritativePages.has(page)) labels[page - 1] = extractTextPageLabel(text);
+      }
+      const parsed = parseTextContentsPages(pages);
+      let entries = parsed.entries;
+      let found = parsed.found && entries.length > 0;
+      let source = found ? 'text' : '';
+      let modelConfidence = entries.length ? Math.min(...entries.map((entry) => entry.confidence || 0.72)) : null;
+      let mapping = mapPrintedPages(entries, labels, viewer.numPages);
+      let confidence = assessTocConfidence({ found: parsed.found, headingPages: parsed.headingPages, entries, mapping, unreadablePages: parsed.unreadablePages, confidence: modelConfidence });
+      let scanned = false;
+      let vision = null;
+      if (!confidence.confident || !found) {
+        const profile = state.docProfileDoc === myDoc ? state.docProfile : await startDocProfileScan(myDoc);
+        if (state.doc?.docId !== myDoc || controller.signal.aborted) return null;
+        scanned = !!profile?.scanned;
+      }
+      if ((!confidence.confident || !found) && scanned) {
+        if (!Settings.ready) {
+          const status = 'needs-vision';
+          const review = { ...initial, status, source: 'text', entries: preserveTocCorrections(mapping.entries, previous), offsets: mapping.offsets, observedPageLabels: observedTocPageLabels(labels), confidence: confidence.score, found: parsed.found, unreadablePages: parsed.unreadablePages };
+          applyTocResult(myDoc, review);
+          return review;
+        }
+        const sampled = Array.from({ length: count }, (_, index) => index + 1);
+        vision = await recognizeTocFromImages(myDoc, sampled, labels, controller, authoritativePages);
+        if (!vision || state.doc?.docId !== myDoc || controller.signal.aborted) return null;
+        if (vision.found) {
+          found = true; source = 'vision';
+          entries = mergeTocEntries(entries, vision.entries);
+          modelConfidence = vision.confidence;
+        }
+        mapping = mapPrintedPages(entries, vision.labels, viewer.numPages);
+        confidence = assessTocConfidence({ found, headingPages: found ? [1] : [], entries, mapping, confidence: modelConfidence });
+      }
+      if (controller.signal.aborted || state.doc?.docId !== myDoc) return null;
+      const correctedEntries = preserveTocCorrections(mapping.entries, previous);
+      const assessment = assessTocConfidence({ found, headingPages: found ? [1] : [], entries: correctedEntries, mapping: { ...mapping, entries: correctedEntries }, confidence: modelConfidence });
+      const allMapped = correctedEntries.length > 0 && correctedEntries.every((entry) =>
+        Number.isInteger(Number(entry.manualActualPage || entry.actualPage)) && Number(entry.manualActualPage || entry.actualPage) > 0);
+      const modelConfidenceLow = source === 'vision' && Number.isFinite(modelConfidence) && modelConfidence < 0.55;
+      const status = assessment.confident && allMapped && !modelConfidenceLow ? 'ready' : found ? 'review' : 'not-found';
+      const result = {
+        version: TOC_RECOGNITION_VERSION, status, source, found,
+        entries: correctedEntries, offsets: mapping.offsets, confidence: assessment.score,
+        modelConfidence, reasons: modelConfidenceLow ? [...assessment.reasons, 'low-model-confidence'] : assessment.reasons,
+        unreadablePages: scanned ? (vision?.failedPages || []) : parsed.unreadablePages,
+        pagesWithoutTextLayer: scanned ? parsed.unreadablePages : [],
+        observedPageLabels: observedTocPageLabels(labels),
+      };
+      applyTocResult(myDoc, result);
+      return result;
+    } catch (error) {
+      if (controller.signal.aborted || isAbortish(error) || state.doc?.docId !== myDoc) return null;
+      const result = { version: TOC_RECOGNITION_VERSION, status: 'error', source: '', entries: preserveTocCorrections(previous?.entries || [], previous), confidence: previous?.confidence ?? null, found: !!previous?.found, observedPageLabels: previous?.observedPageLabels || [], error: String(error?.message || error).slice(0, 300) };
+      applyTocResult(myDoc, result);
+      return result;
+    }
+  })();
+  state.tocPromise = run;
+  try { return await run; }
+  finally {
+    if (state.tocPromise === run) state.tocPromise = null;
+    if (state.tocController === controller) state.tocController = null;
+    if (state.doc?.docId === myDoc && state.tocResult) renderRecognizedOutline(state.tocResult);
+  }
+}
+
+function retryTocRecognition() {
+  const myDoc = state.doc?.docId;
+  if (!myDoc) return Promise.resolve(null);
+  if (state.tocPromise) return state.tocPromise;
+  return startTocRecognition(myDoc, { force: true });
 }
 
 /** 应用页型扫描结果：扫描件提示一次，并刷新发送范围提示 */
