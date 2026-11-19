@@ -88,6 +88,7 @@ export const en = {
   "{0}{1}\n{2}\n按住拖动：同目录调整顺序，拖到文件夹行移入；Ctrl/Shift 点击可多选": "{0}{1}\n{2}\nDrag to reorder or move to a folder. Ctrl/Shift-click to select multiple files.",
   "按住拖动框选多个文件": "Drag to select multiple files", "删除「{0}」（只删 papers/ 里的这个文件）": "Delete {0} from papers/",
   "删除「{0}」": "Delete {0}", "{0}（{1} 篇 PDF）": "{0} ({1} PDFs)",
+  "将删除文件「{0}」，不可恢复。笔记、问答会话与阅读进度会保留。": "Permanently delete the file {0}? Notes, conversations, and reading position will be kept.",
   "没有找到论文，试试其他关键词": "No papers found. Try another search.", "导入 PDF，开始阅读": "Import a PDF to start reading",
   "删除所选的 {0} 个 PDF？\n只删 papers/ 里的文件，笔记和会话保留。": "Delete {0} selected PDFs from papers/?\nYour notes and conversations will be kept.",
   "已删除 {0} 个文件{1}": "Deleted {0} files{1}", "（{0} 个失败）": " ({0} failed)",

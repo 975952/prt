@@ -186,18 +186,20 @@ try {
   await page.click('.doc-tab.active .tab-close');
   await page.waitForFunction(() => !document.body.classList.contains('reading'));
   await filter('all');
-  await page.hover(`#homeList [data-id="${last.docId}"]`);
-  await page.click(`#homeList [data-id="${last.docId}"] .home-item-x`);
-  await page.waitForFunction(id => !document.querySelector(`#homeList [data-id="${id}"] .home-item-x`), {}, last.docId);
-  check('removing history retains the file as unread', (await ids()).includes(last.docId) && fs.existsSync(path.join(papersDir, last.path)));
+  await page.hover(`#homeList [data-path="${last.path}"]`);
+  await page.click(`#homeList [data-path="${last.path}"] .home-item-x`);
+  await page.waitForSelector('.sess-confirm-mask:not(.hidden)', { visible: true });
+  await page.click('.sess-confirm-mask .sess-confirm-btn.danger');
+  await page.waitForFunction(filePath => ![...document.querySelectorAll('#homeList [data-path]')].some(row => row.dataset.path === filePath), {}, last.path);
+  check('Library deletion removes the paper card and PDF file', await page.$(`#homeList [data-path="${last.path}"]`) === null && !fs.existsSync(path.join(papersDir, last.path)));
   const removedState = await page.evaluate(() => fetch('/api/state').then(r => r.json()));
-  check('removal persists and preserves other reading history', !removedState.docs[last.docId] && !!removedState.docs[older.docId] && removedState.lastDoc === null);
+  check('file deletion preserves saved reading history', !!removedState.docs[last.docId] && !!removedState.docs[older.docId]);
   check('missing history id is rejected', await page.evaluate(() => fetch('/api/state', { method: 'DELETE' }).then(r => r.status)) === 400);
   check('removing absent history is harmless', await page.evaluate(() => fetch('/api/state?doc=absent-fixture', { method: 'DELETE' }).then(r => r.json()).then(r => r.ok && r.removed === false)));
   await page.evaluate(() => localStorage.setItem('reader.locale', 'en'));
   await page.reload({ waitUntil: 'networkidle0' });
   check('English homepage is localized', await page.$eval('#homeHeading', n => n.textContent) === 'Library');
-  check('removed history stays removed after reload', await page.$(`#homeList [data-id="${last.docId}"] .home-item-x`) === null);
+  check('deleted paper stays absent after reload', await page.$(`#homeList [data-path="${last.path}"]`) === null);
   const untranslated = await page.evaluate(() => {
     const out = [], walker = document.createTreeWalker(document.querySelector('#home'), NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {

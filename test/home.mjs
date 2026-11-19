@@ -135,7 +135,7 @@ console.log('\nA3 有最近论文 + A4 普通启动不自动打开');
   const recItem = v.items.find((i) => i.id === p0.docId);
   check('首页按文件夹列出全部论文，这一篇带页码', v.items.length === papers.length && !!recItem && new RegExp(`第 ${wantPage} 页`).test(recItem.meta),
     JSON.stringify({ total: v.items.length, rec: recItem }));
-  check('有阅读记录的条目带「移除」按钮', recItem?.hasX === true);
+  check('论文条目带删除按钮', recItem?.hasX === true);
   check('零页面报错', errs.length === 0, errs.slice(0, 2).join(' | '));
 
   /* ═══ A5 点「继续阅读」才进入，且恢复页码 ═══ */
@@ -183,8 +183,8 @@ console.log('\nA7 从首页列表进入阅读页（等价于双击 PDF）');
   await page.close();
 }
 
-/* ═══ A8 文件已删除 + 移除最近记录 ═══ */
-console.log('\nA8 最近文件已被移动/删除 + 移除最近记录');
+/* ═══ A8 文件已删除 + 取消 Library 删除 ═══ */
+console.log('\nA8 最近文件已被移动/删除 + 取消 Library 删除');
 {
   const real = papers[0];
   await setState({
@@ -201,17 +201,18 @@ console.log('\nA8 最近文件已被移动/删除 + 移除最近记录');
   check('继续阅读不指向失效记录', !v.continueText.includes('deleted-paper'), JSON.stringify(v.continueText));
   check('其余有效记录照常显示', v.items.some((i) => i.id === real.docId));
   const st = await getState();
-  check('失效记录已被清出 state.json', !st.docs?.['ghost-docid-0000'], JSON.stringify(Object.keys(st.docs || {})));
+  check('失效文件不再自动恢复，但其进度保留', st.lastDoc === null && !!st.docs?.['ghost-docid-0000'], JSON.stringify(Object.keys(st.docs || {})));
 
   const target = real.docId;
   await page.click(`#homeList .home-item[data-id="${target}"] .home-item-x`);
-  await sleep(1400);
+  await page.waitForSelector('.sess-confirm-mask:not(.hidden)', { visible: true });
+  await page.click('.sess-confirm-mask .sess-confirm-btn.ghost');
   const st2 = await getState();
-  check('点「×」后该记录从 state.json 消失', !st2.docs?.[target], JSON.stringify(Object.keys(st2.docs || {})));
-  const stillThere = papers.some((p) => p.docId === target);
-  check('**papers/ 里的文件没有被删除**（只移除记录）', stillThere);
+  check('取消删除保留阅读记录', !!st2.docs?.[target], JSON.stringify(Object.keys(st2.docs || {})));
+  const stillThere = (await api('/api/papers').then(r => r.json())).papers.some((p) => p.docId === target);
+  check('取消删除保留PDF文件', stillThere);
   const v2 = await view(page);
-  check('列表保留论文并更新为未读', v2.items.some((i) => i.id === target && !i.hasX && i.meta === '未读'), JSON.stringify(v2.items.map((i) => i.id)));
+  check('取消删除后卡片与删除按钮仍可使用', v2.items.some((i) => i.id === target && i.hasX), JSON.stringify(v2.items.map((i) => i.id)));
   check('零页面报错', errs.length === 0, errs.slice(0, 2).join(' | '));
   await page.close();
 }

@@ -47,7 +47,7 @@ import {
   sessionsOpenLatestForOutput,
   sessionsApplyMeta, sessionsGetEnterMode, sessionsSetEnterMode,
   sessionsGetHistoryMode, sessionsSetHistoryMode, sessionsGetList,
-  sessionsOpenWorkspace, sessionsCloseOverlays,
+  sessionsOpenWorkspace, sessionsCloseOverlays, sessionsConfirm,
 } from './sessions.js';
 
 /** 两个布尔开关存在 localStorage 里，重启/换论文都保留 */
@@ -2789,25 +2789,6 @@ function recentDocs() {
   return rows;
 }
 
-/** 移除一条阅读记录（只删记录，**不删 papers/ 里的文件**） */
-async function removeRecent(docId) {
-  const file = (serverState.docs || {})[docId]?.name || tr("这条记录");
-  try {
-    const r = await fetch(`/api/state?doc=${encodeURIComponent(docId)}`, { method: 'DELETE' });
-    if (!r.ok) throw new Error(`HTTP ${r.status}`);
-    const nextDocs = { ...(serverState.docs || {}) };
-    delete nextDocs[docId];
-    serverState = { ...serverState, docs: nextDocs };
-    if (serverState.lastDoc === docId) {
-      serverState = { ...serverState, lastDoc: null, lastUrl: null, lastName: null };
-    }
-    renderHome();
-    toast(tr("已移除「{0}」的最近记录（文件还在 papers/）", file), 'ok', 2600);
-  } catch (e) {
-    toast(tr("移除失败：{0}", e.message), 'err', 4000);
-  }
-}
-
 // 首页的筛选只作用于书架视图，不改变阅读工作区的当前文件夹与会话。
 const homeView = { filter: 'all', folder: null, query: '' };
 const paperTitles = createPaperTitleIndex({ storage: localStorage, readTitle: readPdfTitle,
@@ -2993,7 +2974,7 @@ function renderHome({ navigation = true } = {}) {
       const page = rec ? Math.max(1, Number(rec.page) || 1) : 0;
       const title = paperTitles.label(paper);
       const cacheKey = `${paper.docId || paper.path || paper.name}:${paper.mtime || ''}:${paper.size || ''}`;
-      const item = el('li', { class: 'home-item', dataset: { id: paper.docId } },
+      const item = el('li', { class: 'home-item', dataset: { id: paper.docId, path: paper.path || paper.name } },
         el('button', { type: 'button', class: 'home-item-go', title: `${paper.path || paper.name}${rec ? tr(" · 第 {0} 页", page) : ''}`, 'aria-label': title },
           el('span', { class: 'hi-preview', dataset: { url: paper.url, cacheKey }, 'aria-hidden': 'true' },
             el('span', { class: 'hi-placeholder' }, iconEl('book', { size: 20 })),
@@ -3001,12 +2982,12 @@ function renderHome({ navigation = true } = {}) {
           el('span', { class: 'hi-main' },
             el('span', { class: 'hi-name', text: title }),
             el('span', { class: `hi-status${rec ? '' : ' is-unread'}`, title: rec ? tr("第 {0} 页", page) : tr("未读"), 'aria-label': rec ? tr("第 {0} 页", page) : tr("未读") }))),
-        rec ? el('button', {
+        el('button', {
           type: 'button', class: 'home-item-x', 'aria-hidden': 'false',
-          title: tr("移除「{0}」的最近记录（不删除文件）", paper.name),
-          'aria-label': tr("移除「{0}」的最近记录", paper.name),
-          onclick: (e) => { e.stopPropagation(); removeRecent(paper.docId); },
-        }, iconEl('close', { size: 14 })) : null);
+          title: tr("删除「{0}」", paper.name),
+          'aria-label': tr("删除「{0}」", paper.name),
+          onclick: (e) => { e.stopPropagation(); void deletePaper(paper); },
+        }, iconEl('trash', { size: 14 })));
       item.querySelector('.home-item-go').onclick = () => openDoc({ name: paper.name, url: paper.url, docId: paper.docId, path: paper.path });
       list.append(item);
   }
@@ -4014,34 +3995,80 @@ async function doDeleteFolder(folderPath, mode) {
 }
 
 /** 删除一篇 PDF（只删文件；笔记 / 会话 / 进度留在 data/，重新导入还能看到） */
+const pendingPaperDeletes = new Set();
 async function deletePaper(p) {
-  const opened = !!state.doc && (state.doc.docId === p.docId || state.doc.url === p.url);
-  const ok = confirm(tr("删除「{0}」？\n\n只删除 papers/ 里的这个 PDF 文件", p.name)
-    + `${opened ? tr("（这篇正在阅读，删除后会回到首页）") : ''}。\n`
-    + tr("笔记、问答会话与阅读进度会保留：重新导入同一个文件仍能看到。"));
-  if (!ok) return;
+  const path = p.path || p.name;
+  if (!path || pendingPaperDeletes.has(path)) return;
+  pendingPaperDeletes.add(path);
+  const isCurrent = () => !!state.doc && (state.doc.path || state.doc.name) === path;
   try {
-    const q = new URLSearchParams({ path: p.path || p.name });
-    const r = await fetch(`/api/papers?${q}`, { method: 'DELETE' });
+    const ok = await sessionsConfirm({
+      title: tr("删除「{0}」", p.name),
+      body: tr("将删除文件「{0}」，不可恢复。笔记、问答会话与阅读进度会保留。", path),
+      okText: tr("删除"), danger: true,
+    });
+    if (!ok) return;
+    // Save the currently displayed document before removing its file; a failed
+    // save leaves the file and reader intact.
+    if (isCurrent()) {
+      await saveSessionNow();
+      await saveProgressNow({ silent: true });
+    }
+    const q = new URLSearchParams({ path });
+    const r = await runWithDeadline(signal => fetch(`/api/papers?${q}`, { method: 'DELETE', signal }), { timeoutMs: 15000 });
     let j = {};
     try { j = await r.json(); } catch { /* 非 JSON */ }
     if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
-    state.papers = state.papers.filter((x) => (x.path || x.name) !== (p.path || p.name));
-    if (opened) closeDeletedDoc();
+    state.papers = state.papers.filter((x) => (x.path || x.name) !== path);
+    tabsStore.tabs = tabsStore.tabs.filter(tab => (tab.path || tab.name) !== path);
+    if (!tabsStore.tabs.some(tab => tab.docId === tabsStore.active)) tabsStore.active = '';
+    if (isCurrent()) closeDeletedDoc();
+    dropDocView(p.docId);
+    dropPdfHandle(p.docId);
+    paperAccess.release(p.url);
+    paperTextCache.delete(p.docId);
+    state.fileSel.delete(path);
+    tabsSyncBar();
+    tabsPersist();
+    // Keep the saved per-paper progress, but prevent stale-last-document cleanup
+    // on the next boot from interpreting this intentional deletion as lost data.
+    if (serverState.lastDoc === p.docId) {
+      serverState = { ...serverState, lastDoc: null, lastUrl: null, lastName: null };
+      await queueProgressSave(serverState).catch(() => {
+        toast(tr("阅读进度保存失败，当前进度仍在内存中。"), 'err', 5000);
+      });
+    }
     renderPaperList();
     renderHome();
     toast(tr("已删除「{0}」", p.name), 'ok', 2800);
   } catch (e) {
     toast(tr("删除失败：{0}", e.message), 'err', 5000);
+  } finally {
+    pendingPaperDeletes.delete(path);
   }
 }
 
-/** 正在读的那篇被删掉：把阅读态收干净并回首页（viewer 不卸载，下次打开会重新加载） */
+/** 正在读的那篇被删掉：清理阅读态及在途加载，回到首页。 */
 function closeDeletedDoc() {
-  abortStream('paper-deleted');
+  beginDocumentNavigation();
+  homeReadingState = null;
+  cancelSearch({ clearInput: true, close: true, focus: false });
+  hideDocLoading();
+  parkChatSession();
+  abortStream('paper-deleted', 'document');
+  persistSession.cancel?.();
+  saveProgress.cancel?.();
+  // Detach the canvas without destroying a PDF still owned by an active chat.
+  const handle = viewer?.detach();
+  if (handle && state.doc?.docId) {
+    pdfHandles.set(state.doc.docId, handle);
+    dropPdfHandle(state.doc.docId);
+  } else viewer?.close();
   state.doc = null;
   syncComposerMode();
   state.viewerDocId = null;
+  displayedChatKey = '';
+  refreshChatJobState();
   document.title = 'prt';
   const nameEl = $('#docName');
   if (nameEl) { nameEl.textContent = tr("未打开文档"); nameEl.title = ''; }
@@ -14809,13 +14836,10 @@ function cleanStaleLastDoc() {
   const stale = serverState.lastDoc
     && !state.papers.some((p) => p.docId === serverState.lastDoc || p.name === serverState.lastName);
   if (!stale) return;
-  const staleId = serverState.lastDoc;
-  const docs = { ...(serverState.docs || {}) };
-  delete docs[serverState.lastDoc];
-  serverState = { ...serverState, docs, lastDoc: null, lastUrl: null, lastName: null };
-  fetch(`/api/state?doc=${encodeURIComponent(staleId)}`, {
-    method: 'DELETE',
-  }).catch(() => { /* 清不掉也不影响首页显示：recentDocs() 本来就会过滤掉它 */ });
+  // Missing files are already excluded by recentDocs(). Keep their progress
+  // so importing the same paper again can restore it, even after a failed save.
+  serverState = { ...serverState, lastDoc: null, lastUrl: null, lastName: null };
+  queueProgressSave(serverState).catch(() => { /* 下次启动重试清理指针，不删除阅读进度 */ });
 }
 
 function saveOnUnload(url, text) {

@@ -1381,7 +1381,8 @@ function resolveConfirm(ok) {
   if (fn) fn(!!ok);
 }
 
-function sessionsConfirm({ title = tr("确认"), body = '', okText = tr("确定"), cancelText = tr("取消"), danger = false } = {}) {
+export function sessionsConfirm({ title = tr("确认"), body = '', okText = tr("确定"), cancelText = tr("取消"), danger = false } = {}) {
+  if (st.confirmResolve) resolveConfirm(false);
   ensureConfirm();
   st.ui.confirmTitle.textContent = title;
   st.ui.confirmBody.textContent = body;

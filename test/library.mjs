@@ -106,6 +106,8 @@ try {
     const li = [...document.querySelectorAll('#fileList li[data-name]')].find((n) => n.dataset.name === name);
     li?.querySelector('.file-row-x')?.click();
   }, nameA);
+  await page.waitForSelector('.sess-confirm-mask:not(.hidden)', { visible: true });
+  await page.click('.sess-confirm-mask .sess-confirm-btn.danger');
   await sleep(1200);
   const afterDelete = await listPapers();
   const delView = await page.evaluate((name) => ({
