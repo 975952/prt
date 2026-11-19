@@ -121,6 +121,9 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     document.body.classList.toggle('agent-landing', landing);
     ui.agentNavNew.setAttribute('aria-current', landing ? 'page' : 'false');
     ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
+    const readingEntry = byId('agentReadingEntry');
+    const readingActions = document.querySelector('.agent-visible-actions');
+    (landing ? ui.agentLaunchActions : readingActions).prepend(readingEntry);
     if (landing) { closePapers(); hideHandoff(); }
     disabled(); positionHandoff();
     if (composerFrame) { cancelAnimationFrame(composerFrame); composerFrame = 0; }

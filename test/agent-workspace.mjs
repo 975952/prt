@@ -904,7 +904,7 @@ try {
   page = await newPage('paper', 'zh-CN');
   await full({ landing: true });
   check('first Chinese visit displays the default Chinese name without an inline editor',
-    await page.$eval('#agentLandingName', node => node.textContent.includes('小林'))
+    await page.$eval('#agentLandingName', node => node.textContent.includes('Alina'))
     && await page.$eval('#agentNameInput', input => input.value) === 'Alina' && !await visible('#agentNameInput'));
   await history();
   check('full history hides the duplicated conversation entrances', !await visible('#agentIdentity')

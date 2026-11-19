@@ -1,4 +1,3 @@
-import { locale } from './i18n.js';
 
 // Assistant identity is shared by every reader window. Reading defaults never
 // writes preferences, so merely opening a window cannot overwrite another one.
@@ -48,12 +47,12 @@ export function writeAgentProfile(profile) {
 
 export function agentDisplayName(profile = readAgentProfile()) {
   const { name } = normalizeAgentProfile(profile);
-  return locale === 'zh-CN' && name === DEFAULT_AGENT_PROFILE.name ? '小林' : name;
+  return name;
 }
 
 export function buildAgentProfilePrompt(profile = readAgentProfile()) {
   const normalized = normalizeAgentProfile(profile);
-  const identity = normalized.name === DEFAULT_AGENT_PROFILE.name ? 'Alina（小林）' : normalized.name;
+  const identity = normalized.name;
   const preferences = JSON.stringify({ ...normalized, name: identity });
   return `Assistant expression preferences (shared across this application):
 ${preferences}

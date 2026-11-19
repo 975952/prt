@@ -64,6 +64,10 @@ try {
   await page.screenshot({ path: path.join(scratch, 'library-entry.png') });
   await page.locator('#homeAgent').click();
   await page.waitForFunction(() => document.body.classList.contains('agent-full'));
+  assert.equal(await page.$eval('#agentLandingName', n => n.textContent), 'Alina');
+  const tops = await page.$$eval('#agentLaunchActions > button', nodes => nodes.map(n => n.getBoundingClientRect().top));
+  assert.equal(tops.length, 3);
+  assert.ok(Math.max(...tops) - Math.min(...tops) < 2);
   for (const selector of ['#agentReadingEntry', '#agentNavNew']) {
     assert.ok(await page.$eval(selector, n => n.getBoundingClientRect().height > 30 && getComputedStyle(n).visibility !== 'hidden'));
   }
@@ -73,6 +77,8 @@ try {
   assert.equal(await page.$('#agentNewSessionEntry'), null);
   assert.ok(await page.$('#agentNavNew [data-agent-icon="chat-new"] svg'));
   await page.evaluate(() => window.__ctx.openAgentWorkspace({ landing: false }));
+  await pause(350);
+  assert.ok(await page.evaluate(() => Math.abs(document.querySelector('#agentReadingEntry').getBoundingClientRect().left - document.querySelector('#composer .composer-row').getBoundingClientRect().left) < 2));
   assert.equal(await page.$eval('#sessBar', n => getComputedStyle(n).display), 'none');
   const oldSid = await page.evaluate(() => window.__ctx.activeSession);
   await page.locator('#agentNavNew').click();

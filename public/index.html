@@ -36,8 +36,8 @@
   </div>
   <nav class="workspace-nav" id="workspaceNav" aria-label="工作区切换" data-no-drag>
     <button class="tbtn" id="homeBtn" type="button" title="Library" aria-label="Library"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 19.2V5.2A2.2 2.2 0 0 1 6.2 3H20v14.6H6.2A2.2 2.2 0 0 0 4 19.8z"/><path d="M4 19.2a2.2 2.2 0 0 0 2.2 2.2H20v-3.8"/></svg><span>Library</span></button>
-    <button class="tbtn agent-open" id="homeAgent" type="button" title="打开小林" aria-label="打开小林"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>小林</span></button>
-    <button class="tbtn agent-open" id="agentBtn" type="button" title="打开小林" aria-label="打开小林" aria-expanded="false"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>小林</span></button>
+    <button class="tbtn agent-open" id="homeAgent" type="button" title="打开Alina" aria-label="打开Alina"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>Alina</span></button>
+    <button class="tbtn agent-open" id="agentBtn" type="button" title="打开Alina" aria-label="打开Alina" aria-expanded="false"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>Alina</span></button>
   </nav>
   <button class="tbtn" id="settingsBtn" title="设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="6.4"/><path d="M12 2.2v3.4"/><path d="M12 18.4v3.4"/><path d="M2.2 12h3.4"/><path d="M18.4 12h3.4"/><path d="m5.1 5.1 2.4 2.4"/><path d="m16.5 16.5 2.4 2.4"/><path d="m18.9 5.1-2.4 2.4"/><path d="m7.5 16.5-2.4 2.4"/></svg></button>
   <!-- 全屏：有桌面壳时走 IPC 让窗口真正无边框全屏（盖住任务栏）；浏览器里降级用 Fullscreen API。
@@ -212,7 +212,7 @@
     <header class="agent-identity" id="agentIdentity" hidden>
       <div class="agent-heading">
         <span class="agent-mark" data-agent-icon="alina" aria-hidden="true"></span>
-        <span class="agent-name-display" id="agentNameDisplay" data-agent-name>小林</span>
+        <span class="agent-name-display" id="agentNameDisplay" data-agent-name>Alina</span>
       </div>
       <div class="agent-identity-actions">
         <button class="agent-action agent-landing-back" id="agentLandingBack" type="button"><span data-agent-icon="chevron-left" aria-hidden="true"></span><span>起始页</span></button>
@@ -221,7 +221,7 @@
       </div>
     </header>
     <section class="agent-landing-hero" id="agentLanding" aria-labelledby="agentLandingName" hidden>
-      <h1 id="agentLandingName" data-agent-name>小林</h1>
+      <h1 id="agentLandingName" data-agent-name>Alina</h1>
       <p>今天想读什么？</p>
     </section>
     <nav class="agent-visible-actions" aria-label="会话与阅读">
@@ -466,7 +466,7 @@
           <div class="settings-pane-sub">名字与交流方式，在所有对话中共用。</div>
           <form id="agentProfileForm" class="agent-settings-form">
             <label class="field" for="agentNameInput"><span>助手的名字</span><input id="agentNameInput" type="text" maxlength="32" autocomplete="off" /></label>
-            <p class="modal-note" id="agentNameAlias" hidden>中文称呼：小林</p>
+            <p class="modal-note" id="agentNameAlias" hidden>中文称呼：Alina</p>
             <label class="field" for="agentPersonalityInput"><span>性格</span><input id="agentPersonalityInput" type="text" maxlength="180" autocomplete="off" placeholder="例如：温和、敏锐、表达清楚" /></label>
             <label class="field" for="agentGenderSelect"><span>性别（可选）</span><select id="agentGenderSelect"><option value="">不设定</option><option value="女">女</option><option value="男">男</option><option value="custom">自定义</option></select></label>
             <label class="field" id="agentGenderCustomField" for="agentGenderCustom" hidden><span>自定义性别</span><input id="agentGenderCustom" type="text" maxlength="40" autocomplete="off" /></label>

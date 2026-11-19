@@ -19,8 +19,8 @@ try {
   const { streamChat } = await import('../public/js/ai.js');
   assert.deepEqual(readAgentProfile(), DEFAULT_AGENT_PROFILE);
   assert.equal(writes, 0, 'opening the app must not persist defaults');
-  assert.equal(agentDisplayName(), '小林');
-  assert.match(buildAgentProfilePrompt(), /Alina（小林）/);
+  assert.equal(agentDisplayName(), 'Alina');
+  assert.match(buildAgentProfilePrompt(), /Alina/);
   assert.equal(agentDisplayName({ name: '自定义名字' }), '自定义名字');
   const english = spawnSync(process.execPath, ['--input-type=module', '-e',
     `const { agentDisplayName } = await import(${JSON.stringify(new URL('../public/js/agent-profile.js', import.meta.url).href)}); console.log(agentDisplayName());`],
