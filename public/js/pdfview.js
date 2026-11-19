@@ -1938,6 +1938,7 @@ export class PdfViewer {
     for (let i = lo; i <= hi; i++) {
       const entry = this.rendered.get(i);
       if (entry?.dirty) { hasDirty = true; continue; }
+      if (entry && !entry.textGeometryReady && !this.renderTasks.has(i)) void this._prepareTextGeometry(i, entry);
       if (!entry && !this.renderTasks.has(i)) this._renderPage(i, { gen });
     }
     if (hasDirty) this._scheduleRerender(0);
@@ -2077,7 +2078,7 @@ export class PdfViewer {
     // 无论调用方是否带 force，都不要取消一份正在生成的文本层；等它自然结束后
     // 再由切片检查决定是否需要下一轮。这样旧热点可以继续覆盖当前页面。
     if (this.renderTasks.has(i)) return this.renderTasks.get(i);
-    if (!force && !soft && this._hasCurrentPageBitmap(i)) return;
+    if (!force && !soft && this._hasCurrentPageBitmap(i)) return this._prepareTextGeometry(i, this.rendered.get(i));
     const pageEl = this.pageEls[i];
     if (!pageEl) return;
     const storedEntry = this.rendered.get(i);
@@ -2251,18 +2252,8 @@ export class PdfViewer {
         entry.textLayer = tl;
         await tl.render();
         if (!stale()) {
-          await this._bindRealFonts(textDiv, page, textContent);
-          if (!stale()) {
-            this._freezeTextLayerMetrics(textDiv, entry);
-            this._normalizeTextScale(textDiv);
-            this._nudgeTextLayer(textDiv, page);
-            /* 顺序在最后：命中盒铺满必须按**最终**的字形盒子算（字体、字距、垂直补偿都定了）。
-               返回值是这一页的命中表（页面内局部坐标），`charPosAt()` 直接用它做几何命中，
-               不再每次鼠标移动都逐 span 读 DOM。 */
-            entry.hitBoxes = this._tileTextHitBoxes(textDiv) || null;
-            entry.selectionRuns = null;
-            this._paintCites(i);
-          }
+          entry.textSource = { page, textContent };
+          await this._prepareTextGeometry(i, entry);
         }
       } catch (e) {
         if (!stale()) console.warn(`第 ${i} 页文本层构建失败`, e);
@@ -2971,6 +2962,31 @@ export class PdfViewer {
 
   /* ------------------------------------------------------------ 选区 */
 
+  async _prepareTextGeometry(i, entry) {
+    if (!entry || entry.textGeometryReady || !entry.textSource) return;
+    if (entry.textGeometryTask) return entry.textGeometryTask;
+    const rect = entry.textDiv.getBoundingClientRect();
+    // Book prefetch rasterizes hidden pages. Measuring their zero-size text
+    // boxes would break font widths and make short drags jump to other rows.
+    if (!rect.width || !rect.height) return;
+    const gen = this._gen;
+    const { page, textContent } = entry.textSource;
+    const task = (async () => {
+      await this._bindRealFonts(entry.textDiv, page, textContent);
+      if (gen !== this._gen || this.rendered.get(i) !== entry) return;
+      this._freezeTextLayerMetrics(entry.textDiv, entry);
+      this._normalizeTextScale(entry.textDiv);
+      this._nudgeTextLayer(entry.textDiv, page);
+      entry.hitBoxes = this._tileTextHitBoxes(entry.textDiv) || null;
+      entry.selectionRuns = null;
+      entry.textGeometryReady = true;
+      entry.textSource = null;
+      this._paintCites(i);
+    })();
+    entry.textGeometryTask = task;
+    try { await task; } finally { entry.textGeometryTask = null; }
+  }
+
   _selectionRunsForPage(page) {
     const entry = this.rendered.get(page);
     if (!entry?.textDiv) return [];
@@ -2978,6 +2994,7 @@ export class PdfViewer {
     // Reading order uses actual text bounds, independently of the span boxes
     // used to make pointer hit targets. Keep all coordinates in the layer's scale.
     const layer = entry.textDiv.getBoundingClientRect();
+    if (!layer.width || !layer.height) return [];
     const scale = layerScale(entry.textDiv);
     const boxes = [...entry.textDiv.querySelectorAll('span:not(.markedContent)')].flatMap((span) => {
       const node = span.firstChild;
@@ -3008,7 +3025,9 @@ export class PdfViewer {
     const endpoints = [pageOf(sel.anchorNode), pageOf(sel.focusNode)].filter(Boolean);
     const lowPage = endpoints.length === 2 ? Math.min(...endpoints) : 1;
     const highPage = endpoints.length === 2 ? Math.max(...endpoints) : this.numPages;
-    const runs = [...this.rendered.keys()].filter((page) => page >= lowPage && page <= highPage).sort((a, b) => a - b)
+    const spread = this._immersive ? this._rowStartOf(this.current) : null;
+    const runs = [...this.rendered.keys()].filter((page) => page >= lowPage && page <= highPage
+      && (spread === null || page >= spread && page <= spread + 1)).sort((a, b) => a - b)
       .flatMap((page) => this._selectionRunsForPage(page));
     const indices = new Map(runs.map((run, index) => [run.node, index]));
     const point = (node, offset) => indices.has(node) ? { index: indices.get(node), offset } : null;
@@ -3223,6 +3242,7 @@ export class PdfViewer {
       const spans = container.querySelectorAll('span:not(.markedContent)');
       const ctx = this._measureCtx || (this._measureCtx = document.createElement('canvas').getContext('2d'));
       const pr = pageEl.getBoundingClientRect();
+      if (!pr.width || !pr.height) return;
       const rows = [];
       for (const span of spans) {
         const text = span.textContent || '';
@@ -3375,6 +3395,7 @@ export class PdfViewer {
       const boxes = entry.hitBoxes;
       if (!boxes || !boxes.length) continue;   // 文本层还没建好（或整页没有文字）
       const pr = pageEl.getBoundingClientRect();
+      if (!pr.width || !pr.height) continue;
       const dx = clientX < pr.left ? pr.left - clientX : (clientX > pr.right ? clientX - pr.right : 0);
       const dy = clientY < pr.top ? pr.top - clientY : (clientY > pr.bottom ? clientY - pr.bottom : 0);
       const d = dx * dx + dy * dy;
@@ -3435,6 +3456,13 @@ export class PdfViewer {
     if (!sel || sel.rangeCount === 0) return false;
     // 只修 PDF 阅读区里的选区：笔记/问答里的输入框不走这条
     if (!this.pagesEl?.contains(sel.anchorNode) && !this.pagesEl?.contains(sel.focusNode)) return false;
+    if (this._immersive && anchor && focus && Math.hypot(focus.x - anchor.x, focus.y - anchor.y) >= 4) {
+      const a = this.charPosAt(anchor.x, anchor.y), f = this.charPosAt(focus.x, focus.y);
+      if (!a || !f) return false;
+      if (sel.anchorNode === a.node && sel.anchorOffset === a.offset && sel.focusNode === f.node && sel.focusOffset === f.offset) return false;
+      try { sel.setBaseAndExtent(a.node, a.offset, f.node, f.offset); } catch { return false; }
+      return true;
+    }
     if (sel.isCollapsed) {
       if (!allowCollapsed || !anchor || !focus) return false;
       // 只处理「真的拖过」的那种：原地单击不该凭空造出选区

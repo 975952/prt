@@ -173,6 +173,8 @@ window.addEventListener('prt-desktop', ({ detail }) => {
   if (detail.type === 'open-result') completeRequest(detail);
   if (detail.type === 'close-request') void closeWindow(detail);
 });
+// Retire the startup-only acknowledgement before accepting any editable state.
+window.__prtCloseHandlerReady = true;
 bus?.addEventListener('message', ({ data }) => {
   if (data.type === 'open-result') completeRequest(data);
   if (data.type === 'focus' && data.key === windowId) window.focus();

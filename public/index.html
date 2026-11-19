@@ -1,9 +1,76 @@
 <!DOCTYPE html>
-<html lang="zh-CN">
+<html lang="zh-CN" data-startup="loading">
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>prt</title>
+<!-- Keep layout measurable while the chosen workspace is restored off-screen. -->
+<style>
+  html[data-startup] { background: var(--startup-bg, #e8e6e3); }
+  html[data-startup] body { background: var(--startup-bg, #e8e6e3) !important; }
+  html[data-startup] body > :not(#startupStatus),
+  html[data-startup] body > :not(#startupStatus) * { visibility: hidden !important; transition: none !important; animation: none !important; }
+  #startupStatus { position: fixed; inset: 0; z-index: 2147483647; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 16px; background: var(--startup-bg, #e8e6e3); color: var(--startup-fg, #636363); font: 14px/1.6 system-ui, sans-serif; }
+  #startupStatus[hidden] { display: none; }
+  #startupRetry { padding: 7px 18px; border: 1px solid currentColor; border-radius: 9px; color: inherit; background: transparent; font: inherit; cursor: pointer; }
+  #startupRetry[hidden] { display: none; }
+  #startupWindowBar { position: absolute; inset: 0 0 auto; height: 36px; display: flex; justify-content: flex-end; user-select: none; }
+  #startupWindowBar[hidden] { display: none; }
+  #startupWindowBar button { display: grid; place-items: center; width: 46px; height: 36px; padding: 0; border: 0; border-radius: 0; background: transparent; color: inherit; cursor: default; }
+  #startupWindowBar button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
+  #startupWindowBar button[data-startup-control="close"]:hover { background: #c42b1c; color: #fff; }
+</style>
+<script src="/js/startup.js"></script>
+<script>
+  // A missing bootstrap asset must still leave a usable retry and allow a
+  // successfully loaded app module to reveal its completed workspace.
+  if (!window.__prtStartup) {
+    window.__prtStartup = {
+      finish() {
+        document.getElementById('startupStatus')?.remove();
+        document.documentElement.removeAttribute('data-startup');
+        window.dispatchEvent(new Event('prt-startup-ready'));
+      },
+      fail() {
+        if (!document.documentElement.hasAttribute('data-startup')) return;
+        document.documentElement.dataset.startup = 'error';
+        let english = true;
+        try { english = localStorage.getItem('reader.locale') !== 'zh-CN'; } catch {}
+        document.getElementById('startupMessage').textContent = english ? 'Could not finish opening.' : '暂时未能完成加载';
+        const retry = document.getElementById('startupRetry');
+        retry.textContent = english ? 'Retry' : '重试'; retry.hidden = false; retry.onclick = () => location.reload();
+      },
+    };
+    document.addEventListener('DOMContentLoaded', () => window.__prtStartup.fail(), { once: true });
+  }
+  // The shell is frameless: keep basic window actions usable even when either
+  // external script fails. Once windows.js takes over, only its save handshake
+  // may acknowledge closing; the early handler never writes application data.
+  if (window.__PRT_WINDOW_ID && typeof window.ipc?.postMessage === 'function') {
+    const post = (type, extra = {}) => window.ipc.postMessage(JSON.stringify({ ...extra, type }));
+    window.addEventListener('prt-desktop', ({ detail }) => {
+      if (!window.__prtCloseHandlerReady && detail?.type === 'close-request'
+        && Number.isSafeInteger(detail.request) && detail.request > 0) post('close-commit', { request: detail.request });
+    });
+    document.addEventListener('DOMContentLoaded', () => {
+      const bar = document.getElementById('startupWindowBar');
+      if (!bar) return;
+      bar.hidden = false;
+      let english = true;
+      try { english = localStorage.getItem('reader.locale') !== 'zh-CN'; } catch {}
+      for (const button of bar.querySelectorAll('[data-startup-control]')) {
+        const type = button.dataset.startupControl;
+        const label = type === 'close' ? (english ? 'Close' : '关闭') : (english ? 'Minimize' : '最小化');
+        button.title = label; button.setAttribute('aria-label', label);
+        button.onclick = () => post(type);
+      }
+      bar.onpointerdown = event => {
+        if (event.button !== 0 || event.target.closest('button')) return;
+        event.preventDefault(); post('drag');
+      };
+    }, { once: true });
+  }
+</script>
 <link rel="stylesheet" href="/style.css" />
 <link rel="stylesheet" href="/tabs.css" />
 <link rel="stylesheet" href="/agent-workspace.css" />
@@ -23,6 +90,13 @@
 <link rel="icon" type="image/svg+xml" href="/icon.svg" />
 </head>
 <body>
+<div id="startupStatus" role="status" aria-live="polite">
+  <div id="startupWindowBar" hidden>
+    <button id="startupMinimize" type="button" data-startup-control="minimize"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="M4.5 12h15"/></svg></button>
+    <button id="startupClose" type="button" data-startup-control="close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.5" aria-hidden="true"><path d="m4.5 4.5 15 15M19.5 4.5l-15 15"/></svg></button>
+  </div>
+  <span id="startupMessage"></span><button id="startupRetry" type="button" hidden></button>
+</div>
 
 <!-- 顶栏**常驻**（body.topbar-static 由 app.js 的 initTopbar() 钉死）：
      早期那套「鼠标移到屏幕顶边才滑下来」的自动隐藏连同 #topbarHot 热区一起删除了。 -->

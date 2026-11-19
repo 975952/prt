@@ -34,13 +34,13 @@ const ui = createTranslationCard({ getRecords:()=>records.filter(row=>row.docId=
  onStop:record=>{record.status='stopped'; stopped.push(record.id); save();},
  onRetry:record=>{record.status='pending'; record.text=''; save();}, onLocate:()=>{},
  getTargetLanguage:()=>targetLanguage, onTargetLanguageChange:next=>{targetLanguage=next;},
- onCapture:()=>{captureCount++;card.classList.add('hidden');},
- onTranslate:async({text,targetLang})=>{
+ onCapture:()=>{captureCount++;},
+ onTranslate:async({text,targetLang,images})=>{
    await Promise.resolve();
    if(launchError){launchError=false;throw new Error('Fixture launch failed');}
    const record={id:'input-'+(++inputSequence),block:'translate',docId:documentKey,page:0,quote:text,text:'',status:'pending',retry:{text}};
    records.push(record);save();ui.select(record);
-   return new Promise(resolve=>inputJobs.push({text,targetLang,record,resolve}));
+   return new Promise(resolve=>inputJobs.push({text,targetLang,images,record,resolve}));
  }
 });
 document.getElementById('translationCardClose').onclick=()=>card.classList.add('hidden');
@@ -50,13 +50,13 @@ window.fixture={ui, start(){ const version=++streamVersion; card.dataset.entryId
  push(version,text){ if(version===streamVersion) content.textContent=text; },
  complete(text){const row=records.find(row=>row.id==='live');row.text=text;row.status='complete';save();ui.refresh();},
  switchDocument(key){documentKey=key;ui.open();}, failLaunch(){launchError=true;},
- finishInput(status='complete'){
+ finishInput(status='complete',recovery={}){
    const job=inputJobs.findLast(row=>row.resolve);if(!job)throw new Error('No pending input');
    job.record.status=status;job.record.text=status==='complete'?'Translated: '+job.text:'';save();ui.refresh();
-   job.resolve({status});job.resolve=null;
+   job.resolve({status,...recovery});job.resolve=null;
  },
  state:()=>({copied,saved,stopped,ids:records.map(row=>row.id),version:streamVersion,targetLanguage,captureCount,
-   jobs:inputJobs.map(({text,targetLang,record})=>({text,targetLang,id:record.id,status:record.status}))}), save };
+   jobs:inputJobs.map(({text,targetLang,images,record})=>({text,targetLang,images,id:record.id,status:record.status}))}), save };
 ui.openHistory();
 </script></body></html>`;
 const server = http.createServer((req, res) => {
@@ -81,7 +81,7 @@ try {
   assert.equal(await page.evaluate(()=>window.fixture.state().targetLanguage),'English');
   await page.click('#translationCardCapture');
   assert.equal(await page.evaluate(()=>window.fixture.state().captureCount),1);
-  assert.ok(await page.$eval('#translationCard',node=>node.classList.contains('hidden')));
+  assert.ok(await page.$eval('#translationCard',node=>!node.classList.contains('hidden')), 'capture delegates visibility to the capture lifecycle');
   await page.evaluate(()=>window.fixture.ui.openHistory());
   const version=await page.evaluate(()=>window.fixture.start());
   await page.evaluate(version=>window.fixture.push(version,'Streaming partial'),version);
@@ -140,7 +140,7 @@ try {
   await page.waitForFunction(()=>!document.getElementById('translationCardSubmit').disabled);
   assert.equal(await page.$eval('#translationCardInput',node=>node.value),'Translate again in this card');
   assert.deepEqual(await page.evaluate(()=>window.fixture.state().jobs[0]),
-    {text:'First sentence\nSecond line',targetLang:'English',id:'input-1',status:'complete'});
+    {text:'First sentence\nSecond line',targetLang:'English',images:[],id:'input-1',status:'complete'});
   await page.keyboard.down('Control');await page.keyboard.press('Enter');await page.keyboard.up('Control');
   await page.waitForFunction(()=>window.fixture.state().jobs.length===2);
   assert.equal(await page.$eval('#translationCard',node=>node.dataset.entryId),'input-2');
@@ -181,6 +181,48 @@ try {
   await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===5);
   await page.evaluate(()=>window.fixture.finishInput());
   await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
+  const addShot = label => page.evaluate(label => window.fixture.ui.addCapture({
+    shot:{dataUrl:'data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aX1cAAAAASUVORK5CYII=',width:1,height:1},page:3,label,
+  }), label);
+  const beforeShot = await page.evaluate(() => ({text:document.getElementById('translationCardText').textContent,version:window.fixture.state().version}));
+  await addShot('First screenshot');
+  assert.equal(await page.$$eval('#translationCardAttachments img',nodes=>nodes.length),1);
+  assert.deepEqual(await page.evaluate(() => ({text:document.getElementById('translationCardText').textContent,version:window.fixture.state().version})),beforeShot,
+    'attaching a screenshot preserves existing result and stream ownership');
+  assert.equal(await page.evaluate(()=>document.activeElement.id),'translationCardInput');
+  assert.ok(await page.evaluate(()=>document.getElementById('translationCardText')===window.originalTranslationContent));
+  await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===6);
+  const imageOnly = await page.evaluate(()=>window.fixture.state().jobs[5]);
+  assert.equal(imageOnly.text,'');assert.equal(imageOnly.images.length,1);assert.equal(imageOnly.images[0].label,'First screenshot');
+  assert.equal(await page.$$eval('#translationCardAttachments img',nodes=>nodes.length),0);
+  await addShot('New screenshot');await page.type('#translationCardInput','New text draft');
+  await page.evaluate(()=>window.fixture.finishInput('failed'));
+  await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
+  assert.equal(await page.$eval('#translationCardInput',node=>node.value),'New text draft');
+  assert.deepEqual(await page.$$eval('#translationCardAttachments img',nodes=>nodes.map(node=>node.alt)),['First screenshot','New screenshot']);
+  await page.click('.reading-card-attachment .reading-card-action');
+  assert.deepEqual(await page.$$eval('#translationCardAttachments img',nodes=>nodes.map(node=>node.alt)),['New screenshot']);
+  await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===7);
+  assert.equal(await page.evaluate(()=>window.fixture.state().jobs[6].text),'New text draft');
+  await page.evaluate(()=>window.fixture.finishInput('stopped'));
+  await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
+  assert.equal(await page.$eval('#translationCardInput',node=>node.value),'New text draft');
+  assert.equal(await page.$$eval('#translationCardAttachments img',nodes=>nodes.length),1);
+  await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===8);
+  await page.evaluate(()=>window.fixture.switchDocument('other'));
+  await page.evaluate(()=>window.fixture.finishInput('failed'));
+  await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
+  assert.equal(await page.$eval('#translationCardInput',node=>node.value),'Other document draft');
+  assert.equal(await page.$$eval('#translationCardAttachments img',nodes=>nodes.length),0);
+  await page.evaluate(()=>window.fixture.switchDocument('fixture'));
+  assert.equal(await page.$eval('#translationCardInput',node=>node.value),'New text draft');
+  assert.equal(await page.$$eval('#translationCardAttachments img',nodes=>nodes.length),1);
+  await addShot('Remaining screenshot');
+  await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===9);
+  await page.evaluate(()=>window.fixture.finishInput('failed',{remainingText:'',remainingImages:window.fixture.state().jobs[8].images.slice(1)}));
+  await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
+  assert.equal(await page.$eval('#translationCardInput',node=>node.value),'');
+  assert.deepEqual(await page.$$eval('#translationCardAttachments img',nodes=>nodes.map(node=>node.alt)),['Remaining screenshot']);
   await page.screenshot({path:path.join(scratch,'translation-card-dark.png')});
   await page.setViewport({width:400,height:700});
   await page.$eval('#translationCard',node=>{node.style.left='12px';node.style.top='60px';node.style.width='';node.style.height='';});
@@ -188,6 +230,6 @@ try {
   assert.ok(await page.$eval('#translationCard',node=>node.scrollWidth<=node.clientWidth+1));
   assert.ok(await page.$eval('#translationCard',node=>node.scrollHeight<=node.clientHeight+1));
   assert.deepEqual(errors,[]);
-  console.log('PASS repeated direct translation, editable pending drafts, IME/newline controls, failure recovery, document drafts, stable card identity/position, target language/capture, history/stream ownership, copy/note/retry/stop/delete, reload retention and narrow card layout');
+  console.log('PASS direct and screenshot translation, editable pending drafts, partial failure/cancel recovery, document-owned screenshots, IME/newline controls, stable card identity/position, history/stream ownership, copy/note/retry/stop/delete, reload retention and narrow card layout');
   console.log(scratch);
 } finally { await browser?.close(); server.closeAllConnections(); await new Promise(resolve=>server.close(resolve)); }

@@ -935,7 +935,6 @@ let serverState = {};
   initTabs();
   if (tabsFeatureEnabled()) await bootTabWorkspace();
   else await maybeReopenLast();
-  finishWindowBoot();
   checkConfigWarning();
   if (sessionStorage.getItem('reader.reopenLanguageSettings')) {
     const resume = JSON.parse(sessionStorage.getItem('reader.languageResume') || 'null');
@@ -945,13 +944,38 @@ let serverState = {};
         sessionsHideEntryCard();
         await switchSession(resume.sid, { force: true });
       }
-      if (resume.page) viewer.goToPage(resume.page);
+      if (resume.page) await viewer.goToPage(resume.page);
     }
     sessionStorage.removeItem('reader.reopenLanguageSettings');
     await openSettings();
     showSettingsPane('language');
   }
-})();
+  await prepareStartupDisplay();
+  window.__prtStartup?.finish();
+  finishWindowBoot();
+})().catch(error => window.__prtStartup?.fail(error));
+
+/** Boot restores sessions and panels after loading the PDF. Publish only the
+ * final layout and visible bitmaps, including a saved page beyond page one. */
+async function prepareStartupDisplay() {
+  await document.fonts.ready;
+  await nextFrame();
+  if (!viewer?.pdf || !document.body.classList.contains('reading') || document.body.classList.contains('agent-full')) return;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (viewer._fitMode) viewer.fitWidth();
+    await nextFrame();
+    const width = viewer.container.clientWidth, height = viewer.container.clientHeight, scale = viewer.scale;
+    const [first, last] = viewer._visibleRange();
+    await Promise.all(Array.from({ length: last - first + 1 }, (_, i) => viewer.refreshPage(first + i)));
+    await nextFrame();
+    const current = viewer._visibleRange();
+    if (width === viewer.container.clientWidth && height === viewer.container.clientHeight && scale === viewer.scale
+      && first === current[0] && last === current[1]) {
+      if (Array.from({ length: last - first + 1 }, (_, i) => viewer._hasCurrentPageBitmap(first + i)).every(Boolean)) return;
+    }
+  }
+  throw new Error('The initial reading layout could not settle.');
+}
 
 
 /* ------------------------------------------------------------ B 线：多标签工作区（P1 冷切换） */
@@ -1030,6 +1054,7 @@ async function sessionWriteRequest(url, options, scope, sid) {
   return response;
 }
 function beginDocumentNavigation() {
+  state.stopRegion?.();
   documentViewSeq += 1;
   sessionNavigationSeq += 1;
   return (state.openSeq = (state.openSeq || 0) + 1);
@@ -2800,6 +2825,7 @@ function showHome() {
 
 function setView(view) {
   const home = view === 'home';
+  if (home) state.stopRegion?.();
   document.body.classList.toggle('reading', !home);
   $('#home')?.classList.toggle('hidden', !home);
   tabsSyncBar();
@@ -5893,9 +5919,9 @@ function initReadingTools() {
     beforeSelect: hideTranslationCard, render: renderMarkdown, onCopy: copyText,
     getTargetLanguage: selectedTranslateTarget,
     getDocumentKey: () => state.doc?.docId || '',
-    onTranslate: ({ text, targetLang }) => doTranslateText({ text, targetLang, inCard: true }),
+    onTranslate: translateCardDraft,
     onTargetLanguageChange: value => { $('#translateTargetLang').value = value; $('#translateTargetLang').dispatchEvent(new Event('change', { bubbles: true })); },
-    onCapture: () => { hideTranslationCard(); state.startRegion?.('translate'); },
+    onCapture: () => state.startRegion?.('translate', { inCard: true }),
     onSave: async record => {
       const root = translationRoot(record); if (!root) return;
       const entry = { root }; openAnswerNoteEditor(entry); await confirmAnswerNote(entry);
@@ -5918,9 +5944,34 @@ function initReadingTools() {
       }
       applyPanels(); applyResponsiveLayout();
     },
-    onExit: () => { hideTranslationCard(); saveProgress(); },
+    onExit: () => { state.stopRegion?.(); hideTranslationCard(); saveProgress(); },
     onError: error => toast(tr('阅读模式切换失败：{0}', error.message || String(error)), 'err'),
   });
+}
+async function translateCardDraft({ text, targetLang, images = [] }) {
+  const docId = state.doc?.docId || '', openSeq = state.openSeq, viewSeq = documentViewSeq;
+  let cardVersion = translationCardVersion;
+  const current = () => docId === (state.doc?.docId || '') && openSeq === state.openSeq
+    && viewSeq === documentViewSeq && cardVersion === translationCardVersion
+    && !$('#translationCard').classList.contains('hidden') && $('#translationCard').dataset.cardView !== 'history';
+  const selectCard = record => {
+    if (!current()) return;
+    translationCardUI?.select(record);
+    cardVersion = translationCardVersion;
+  };
+  if (text) {
+    const result = await doTranslateText({ text, targetLang, inCard: true, selectCard });
+    if (result?.status !== 'complete') return result || false;
+  }
+  for (let index = 0; index < images.length; index++) {
+    const result = current()
+      ? await doTranslateShot({ ...images[index], targetLang, docId, inCard: true, selectCard })
+      : { status: 'stopped' };
+    if (result?.status !== 'complete') return {
+      ...(result || { status: 'failed' }), remainingText: '', remainingImages: images.slice(index),
+    };
+  }
+  return { status: 'complete' };
 }
 function hideTranslationCard() {
   translationCardVersion += 1;
@@ -11910,7 +11961,8 @@ function translationCacheScope({ page = null, context = '' } = {}) {
     cfg.activeProfile || '', cfg.baseURL || '', cfg.model || '', cfg.visionModel || '', cfg.temperature]));
 }
 
-async function doTranslateText({ text, targetLang = '', force = false, task = null, segments = [], inCard = false } = {}) {
+async function doTranslateText({ text, targetLang = '', force = false, task = null, segments = [], inCard = false,
+  selectCard = record => translationCardUI?.select(record) } = {}) {
   if (!task && !await allowEdit(tr("译文"))) return false;
   const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
   if (!raw) return false;
@@ -11943,7 +11995,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
       && JSON.stringify(x.retry.segments || []) === JSON.stringify(sourceSegments));
     if (existing) {
       const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
-      if (inCard) translationCardUI?.select(existing);
+      if (inCard) selectCard(existing);
       else row?.scrollIntoView({ block: 'nearest' });
       toast(tr("这段文字翻过，直接用原结果"), 'ok', 1800);
       if (task?.item.entry) deleteTranslationEntry(task.item.entry.root);
@@ -11954,7 +12006,7 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   const entry = translationTaskEntry(task) || addEntry({ block: 'translate', tag: 'translation', page: null, quote,
     retry: retryOf(), reveal: !task && !inCard });
   if (task) task.item.entry = entry;
-  if (inCard) translationCardUI?.select(entry.root.__sessionRecord);
+  if (inCard) selectCard(entry.root.__sessionRecord);
   entry.root.classList.add('msg-text-translate');
   if (cached) {
     entry.body.innerHTML = renderMarkdown(cached);
@@ -12096,17 +12148,18 @@ function translateShotRetryPayload({ docId, sid, page, label, refId = '', target
  * 与划词翻译的区别：选区来自像素而不是文本层，所以图表、公式、扫描页也能翻。
  * 目标语言跟随输入框旁「译成」的选择（用户 m10802：之前写死中文，切 English 也出中文）。
  */
-async function doTranslateShot({ shot, page = null, label = tr("截图"), refId = '', sid = null, docId = '', targetLang = '', task = null } = {}) {
-  if (!task && !await allowEdit(tr("译文"))) return;
+async function doTranslateShot({ shot, page = null, label = tr("截图"), refId = '', sid = null, docId = '', targetLang = '', task = null, inCard = false,
+  selectCard = record => translationCardUI?.select(record) } = {}) {
+  if (!task && !await allowEdit(tr("译文"))) return false;
   const dataUrl = String(shot?.dataUrl || '');
-  if (!dataUrl) return;
+  if (!dataUrl) return false;
   if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
   const curDocId = state.doc?.docId || null;
   const targetDoc = String(docId || '') || curDocId;
-  if (!targetDoc) { toast(tr("先打开一篇论文，再框选截图翻译"), 'err'); return; }
-  if (targetDoc !== curDocId) { toast(tr("这张截图属于另一篇论文，请切回原论文后重试"), 'err', 3200); return; }
-  if (!ensureReady()) return;
-  if (!task) revealTranslatePanel();
+  if (!targetDoc) { toast(tr("先打开一篇论文，再框选截图翻译"), 'err'); return false; }
+  if (targetDoc !== curDocId) { toast(tr("这张截图属于另一篇论文，请切回原论文后重试"), 'err', 3200); return false; }
+  if (!ensureReady()) return false;
+  if (!task && !inCard) revealTranslatePanel();
   const openSeq = state.openSeq;
   const isCurrent = task?.isCurrent || (() => targetDoc === (state.doc?.docId || '') && openSeq === state.openSeq);
   const lang = resolveTranslateTarget(targetLang);
@@ -12118,9 +12171,10 @@ async function doTranslateShot({ shot, page = null, label = tr("截图"), refId 
 
   const entry = translationTaskEntry(task) || addEntry({
     block: 'translate', tag: 'translation', page: pageNo, quote: label0,
-    thumbs: [dataUrl], retry: retryOf(finalRef), reveal: !task,
+    thumbs: [dataUrl], retry: retryOf(finalRef), reveal: !task && !inCard,
   });
   if (task) task.item.entry = entry;
+  if (inCard) selectCard(entry.root.__sessionRecord);
   const retryUnfinished = () => task && translationBatches.get(targetDoc) === task.batch
     ? resumeTranslationBatch(task.batch) : retryTranslateShot(retryOf(finalRef));
   // 译文块默认隐藏 .acts（「最纯净的界面」）：截图翻译失败/被停止时要让重试按钮可见
@@ -12190,6 +12244,7 @@ async function doTranslateShot({ shot, page = null, label = tr("截图"), refId 
 /** 重试截图翻译：按附件 id 取回原图再跑（原图已被清理时提示重新框选） */
 function retryTranslateShot(payload) {
   const p = payload && typeof payload === 'object' ? payload : {};
+  const inCard = !$('#translationCard').classList.contains('hidden');
   const docId = p.docId || state.doc?.docId || '';
   if (!docId || docId !== state.doc?.docId) { toast(tr("这张截图属于另一篇论文，请切回原论文后重试"), 'err', 3200); return; }
   const sid = typeof p.sid === 'string' ? p.sid : activeSidFor(docId);
@@ -12201,7 +12256,7 @@ function retryTranslateShot(payload) {
     if (docId !== state.doc?.docId || openSeq !== state.openSeq) return;
     if (!dataUrl) { toast(tr("截图文件已不在，请重新框选翻译"), 'ok', 5200); return; }
     await doTranslateShot({ shot: { dataUrl, width: 0, height: 0 }, page: p.page || null, label: p.label || tr("截图"),
-      refId, sid, docId, targetLang: p.targetLang || '' });
+      refId, sid, docId, targetLang: p.targetLang || '', inCard });
   })();
 }
 
@@ -13964,8 +14019,9 @@ function initRegion() {
   let autoTimer = null;
   /** 框选目标：chat = 加进问答附件；translate = 截图翻译（2026-11-03） */
   let regionIntent = 'chat';
+  let capture = null;
 
-  const stop = () => {
+  const hideSelection = () => {
     overlay.classList.add('hidden');
     hint.classList.add('hidden');
     rect.style.display = 'none';
@@ -13979,13 +14035,25 @@ function initRegion() {
     lastPointer = null;
     startDocY = 0;
   };
+  const stop = () => {
+    hideSelection();
+    capture = null;
+    document.body.classList.remove('reading-capture-active');
+  };
   state.stopRegion = stop;
 
   /** 进入 / 退出截图模式。输入框边的 ✂ 默认加进问答；译文面板的「截图翻译」传 'translate' */
-  const startRegion = (intent) => {
+  const startRegion = (intent, { inCard = false } = {}) => {
     if (!overlay.classList.contains('hidden')) { stop(); return; }
+    if (capture || regionCaptureCount) return;
     if (!viewer?.pdf) { toast(tr("先打开一篇 PDF"), 'err'); return; }
     regionIntent = intent === 'translate' ? 'translate' : 'chat';
+    const docId = state.doc?.docId, openSeq = state.openSeq;
+    const session = { intent: regionIntent, inCard,
+      current: () => capture === session && docId === state.doc?.docId && openSeq === state.openSeq };
+    capture = session;
+    // Keep the live DOM and page geometry intact throughout selection and rendering.
+    document.body.classList.add('reading-capture-active');
     state.regionIntent = regionIntent;
     overlay.classList.remove('hidden');
     hint.classList.remove('hidden');
@@ -14039,6 +14107,7 @@ function initRegion() {
   if (regionBtn) regionBtn.onclick = () => startRegion();
 
   overlay.addEventListener('mousedown', (e) => {
+    if (e.button !== 0 || !capture) return;
     startX = e.clientX;
     startDocY = docYOf(e.clientY);
     dragging = true;
@@ -14057,16 +14126,25 @@ function initRegion() {
 
   overlay.addEventListener('mouseup', async (e) => {
     if (!dragging) return;
+    const session = capture;
     const cx = e.clientX;
     const endDocY = docYOf(e.clientY);
     const topDoc = Math.min(startDocY, endDocY);
     const bottomDoc = Math.max(startDocY, endDocY);
     const leftVp = Math.min(startX, cx);
     const rightVp = Math.max(startX, cx);
-    stop();
-    if (rightVp - leftVp < 14 || bottomDoc - topDoc < 14) return;
-    if (regionIntent === 'translate') await captureToTranslate(topDoc, bottomDoc, leftVp, rightVp);
-    else await captureToChat(topDoc, bottomDoc, leftVp, rightVp);
+    hideSelection();
+    try {
+      if (!session?.current() || rightVp - leftVp < 14 || bottomDoc - topDoc < 14) return;
+      if (session.intent === 'translate') await captureToTranslate(topDoc, bottomDoc, leftVp, rightVp, session);
+      else await captureToChat(topDoc, bottomDoc, leftVp, rightVp, session);
+    } finally {
+      if (capture === session) {
+        stop();
+        const input = session.inCard ? $('#translationCardInput') : $('#chatInput');
+        if (input?.getClientRects().length) input.focus({ preventScroll: true });
+      }
+    }
   });
 }
 
@@ -14193,22 +14271,26 @@ async function captureRegionShot(topDoc, bottomDoc, leftVp, rightVp) {
   }
 }
 
-async function captureToChat(topDoc, bottomDoc, leftVp, rightVp) {
+async function captureToChat(topDoc, bottomDoc, leftVp, rightVp, session) {
   if (state.busy) return;
   const owner = currentComposerOwner();
   // 注意：截图本身不需要 API Key（图只是先放进附件区），
   // 所以这里绝不能调 ensureReady()，否则没配密钥时截图会被静默拦掉
   const captured = await captureRegionShot(topDoc, bottomDoc, leftVp, rightVp);
-  if (!captured) return;
+  if (!captured || !session.current()) return;
   addImageToChat(captured.shot, captured.page, captured.label, { allowBusy: true, owner });
 }
 
 /** 截图翻译：截图先进下方输入框（和问答一样），再按 Enter / 发送翻译图中文字（2026-11-03 用户 m05190） */
-async function captureToTranslate(topDoc, bottomDoc, leftVp, rightVp) {
+async function captureToTranslate(topDoc, bottomDoc, leftVp, rightVp, session) {
   if (regionCaptureCount) return;
   const owner = currentComposerOwner('translate');
   const captured = await captureRegionShot(topDoc, bottomDoc, leftVp, rightVp);
-  if (!captured) return;
+  if (!captured || !session.current()) return;
+  if (session.inCard) {
+    translationCardUI?.addCapture(captured, state.doc?.docId || '');
+    return;
+  }
   addImageToChat(captured.shot, captured.page, captured.label, { allowBusy: true, owner });
   flashHint(tr("截图已放进输入框 · 按 Enter 翻译截图，可同时输入要翻译的文字"));
 }
@@ -15194,7 +15276,7 @@ function initShortcuts() {
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
 
     if (e.key === 'Escape') {
-      if (!$('#regionOverlay').classList.contains('hidden')) { e.preventDefault(); state.stopRegion?.(); return; }
+      if (document.body.classList.contains('reading-capture-active')) { e.preventDefault(); state.stopRegion?.(); return; }
       if (!$('#settingsModal').classList.contains('hidden')) { closeSettings(); return; }
       if (!$('#noteBox').classList.contains('hidden')) { saveNoteBox(); return; }
       if (immersiveReading?.active) {
