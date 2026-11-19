@@ -12,12 +12,12 @@ const papers = [
   { id: 'p2', name: 'two.pdf', title: 'Synthetic comparative methods', path: 'Unsorted/two.pdf' },
 ];
 const basePlan = { folders: [
-  { path: 'Research/Custom topic', description: 'A broad synthetic topic' },
-  { path: 'Field not predefined/New idea', description: 'Another broad synthetic topic' },
-], maxDepth: 2, paperCount: 10 };
+  { path: 'Custom topic', description: 'A broad synthetic topic' },
+  { path: 'New idea', description: 'Another broad synthetic topic' },
+], maxDepth: 1, paperCount: 10 };
 const classifyPaperBatch = options => requestClassification({ plan: basePlan, ...options });
 const parsePaperClassifications = (output, inputs, plan = basePlan) => parseClassification(output, inputs, plan);
-const row = (id = 'p1', patch = {}) => ({ id, folder: 'Research/Custom topic', confidence: 0.91, reason: 'Based on the supplied title', ...patch });
+const row = (id = 'p1', patch = {}) => ({ id, folder: 'Custom topic', confidence: 0.91, reason: 'Based on the supplied title', ...patch });
 const answer = items => JSON.stringify({ items });
 const parse = items => parsePaperClassifications(answer(items), papers);
 const rejectsCode = (fn, code) => assert.throws(fn, error => error.name === 'PaperClassificationError' && error.code === code);
@@ -26,20 +26,20 @@ globalThis.fetch = () => { throw new Error('This suite must not make network req
 try {
   await check('classification prompt is registered with version and no topic whitelist', () => {
     assert.equal(PAPER_CLASSIFIER_BATCH_SIZE, 12); assert.equal(PAPER_CLASSIFIER_MIN_CONFIDENCE, 0.75);
-    assert.equal(getManifest()['organizer.classify'], '2.0.0');
-    assert.equal(getManifest()['organizer.plan'], '1.0.0'); assert.equal(getManifest()['organizer.summarize'], '1.0.0');
+    assert.equal(getManifest()['organizer.classify'], '3.0.0');
+    assert.equal(getManifest()['organizer.plan'], '2.0.0'); assert.equal(getManifest()['organizer.summarize'], '1.0.0');
     const def = getPromptDef('organizer.classify'); assert.equal(def.historyMax, 0); assert.deepEqual(def.memory, []);
     const sys = def.system.map(block => block.text).join('\n');
     assert.match(sys, /不可信资料/); assert.match(sys, /不能声称已经创建目录/); assert.match(sys, /不要套用固定学科清单/);
   });
   await check('safe model proposals preserve IDs and input order regardless of response order', () => {
-    const result = parse([row('p2', { folder: 'Field not predefined/New idea' }), row()]);
+    const result = parse([row('p2', { folder: 'New idea' }), row()]);
     assert.deepEqual(result.map(item => item.id), ['p1', 'p2']);
-    assert.equal(result[1].folder, 'Field not predefined/New idea'); assert.ok(result.every(item => item.selected));
+    assert.equal(result[1].folder, 'New idea'); assert.ok(result.every(item => item.selected));
   });
   await check('unknown and low-confidence proposals cannot be selected automatically', () => {
     const result = parse([row('p1', { confidence: 0.749 }), row('p2', { folder: '', confidence: 1 })]);
-    assert.equal(result[0].folder, 'Research/Custom topic'); assert.equal(result[0].selected, false);
+    assert.equal(result[0].folder, 'Custom topic'); assert.equal(result[0].selected, false);
     assert.equal(result[1].folder, ''); assert.equal(result[1].confidence, 0); assert.equal(result[1].selected, false);
     assert.equal(parse([row('p1', { confidence: 0.75 })])[0].selected, true);
   });
@@ -71,9 +71,9 @@ try {
       const result = parse([row('p1', { folder })])[0];
       assert.equal(result.folder, '', JSON.stringify(folder)); assert.equal(result.selected, false); assert.equal(result.confidence, 0);
     }
-    for (const folder of ['新方向/实验', 'CONference/Notes', 'topic.2026/Methods', 'a'.repeat(255)]) {
+    for (const folder of ['新方向', 'CONference', 'topic.2026', 'a'.repeat(255)]) {
       assert.equal(parsePaperClassifications(answer([row('p1', { folder })]), papers,
-        { folders: [{ path: folder }], maxDepth: 2, paperCount: 2 })[0].selected, true);
+        { folders: [{ path: folder }], maxDepth: 1, paperCount: 2 })[0].selected, true);
     }
   });
   await check('manual folder validation retains the existing separator convention', () => {
@@ -178,7 +178,7 @@ try {
     }
     for (const folders of [[{ path: 'A' }, { path: 'A/B' }], [{ path: 'A/B' }, { path: 'C' }], [{ path: 'A/B/C' }],
       Array.from({ length: 9 }, (_, i) => ({ path: `A/Topic ${i}` }))]) rejectsCode(() => inspect(folders, 2), 'plan');
-    assert.equal(inspect([{ path: 'A/B', description: 'One scope' }, { path: 'C/D', description: 'Another scope' }], 2).folders.length, 2);
+    rejectsCode(() => inspect([{ path: 'A/B' }, { path: 'C/D' }], 2), 'plan');
     rejectsCode(() => inspect([{ path: 'A' }, { path: 'B' }], 1, 1), 'plan');
     for (const output of ['[]', '{"folders":[],"items":[]}', '{"folders":["A"]}', '{}']) {
       rejectsCode(() => parsePaperFolderPlan(output, { paperCount: 2 }), 'plan');

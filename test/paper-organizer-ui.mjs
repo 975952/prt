@@ -11,7 +11,7 @@ import puppeteer from 'puppeteer-core';
 import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
 import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 import { writeTitlePdf } from './fixtures/make-title-pdf.mjs';
-import { startOrganizerTestModel } from './_organizer-test-model.mjs';
+import { startOrganizerTestModel, organizerModelInput } from './_organizer-test-model.mjs';
 
 const desktop = process.argv.includes('--desktop');
 fs.mkdirSync(SANDBOX, { recursive: true });
@@ -19,8 +19,8 @@ const scratch = fs.mkdtempSync(path.join(SANDBOX, `paper-organizer-ui-${desktop 
 const dataDir = assertIsolatedDataDir(path.join(scratch, 'data')), papersDir = path.join(scratch, 'papers');
 fs.mkdirSync(dataDir); fs.mkdirSync(papersDir);
 const activeName = 'Linear Algebra Notes.pdf', conflictName = 'Numerical Analysis Methods.pdf';
-const targetConflict = `数学/数值分析/${conflictName}`, movedActive = `Reading/Linear algebra/${activeName}`;
-const retryTarget = `Reviewed/Numerical analysis/${conflictName}`;
+const targetConflict = `数值分析/${conflictName}`, movedActive = `Linear algebra/${activeName}`;
+const retryTarget = `Reviewed analysis/${conflictName}`;
 const fixtures = [
   [activeName, 'Linear Algebra Notes'], [conflictName, 'Numerical Analysis Methods'],
   ['metadata-paper.pdf', 'Computer Vision Image Recognition'], ['Unclassified Notes.pdf', 'Synthetic unclassified notes'],
@@ -52,7 +52,6 @@ async function organizer() {
     && document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false');
   assert.equal(await page.$eval('#paperOrganizerScope', node => node.value), 'all');
   await page.select('#paperOrganizerScope', 'root');
-  await page.select('#paperOrganizerDepth', '2');
 }
 async function closeOrganizer() {
   await page.locator('#paperOrganizer .po-actions > button:first-child').click();
@@ -97,17 +96,16 @@ async function screenshotLayout(width) {
 
 try {
   model = await startOrganizerTestModel(record => {
-    const input = JSON.parse(record.body.messages.at(-1).content);
-    if (input.task === 'plan') return model.reply(record, { folders: ['Abstract structures/Proof methods', '数学/数值分析',
-      'Visual reasoning/Scene understanding', 'Uncertain/Review'].map(path => ({ path, description: `Synthetic scope for ${path}` })) });
-    assert.equal(input.task, 'classify');
-    model.reply(record, { items: input.papers.map(paper => ({ id: paper.id,
-      folder: paper.path === activeName ? 'Abstract structures/Proof methods'
-        : paper.path === conflictName ? '数学/数值分析'
-        : paper.path === 'metadata-paper.pdf' ? 'Visual reasoning/Scene understanding' : 'Uncertain/Review',
-      confidence: ['Unclassified Notes.pdf', '12345.pdf'].includes(paper.path) ? 0.3 : 0.94,
-      reason: `Synthetic AI category based on ${paper.title}`,
-    })) });
+    const input = organizerModelInput(record);
+    if (input.task === 'first-page') return model.reply(record, { evidence: '' });
+    assert.equal(input.task, 'group');
+    const groups = [], unknown = [];
+    for (const paper of input.papers) {
+      const folder = paper.name === activeName ? 'Proof methods' : paper.name === conflictName ? '数值分析'
+        : paper.name === 'metadata-paper.pdf' ? 'Visual reasoning' : '';
+      if (!folder) unknown.push(paper.index); else groups.push({ folder, papers: [paper.index] });
+    }
+    model.reply(record, { groups, unknown });
   });
   const probe = http.createServer(); await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
@@ -188,21 +186,6 @@ try {
   assert.equal(moveRequests().length, 0);
   pass('changing preview scope and closing it preserves every file');
 
-  await organizer();
-  metadataReading = true;
-  await page.locator('#paperOrganizerRead').click();
-  await page.waitForFunction(() => document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false'
-    && /已识别/.test(document.querySelector('#paperOrganizer .po-status').textContent));
-  metadataReading = false;
-  assert.ok(maxPdfReads > 0 && maxPdfReads <= 2, `observed ${maxPdfReads} concurrent PDF reads`);
-  assert.equal(await page.$eval(`${row('metadata-paper.pdf')} .po-target input`, node => node.value), '');
-  assert.equal(await page.$eval(`${row('metadata-paper.pdf')} .po-paper-title`, node => node.textContent), 'Computer Vision Image Recognition');
-  assert.equal(model.requests.length, 0, 'title extraction alone does not classify');
-  assert.equal(moveRequests().length, 0);
-  for (const [relative, hash] of originalHashes) assert.equal(digest(relative), hash);
-  pass('optional title reading extracts metadata with at most two PDF reads without inventing categories or moving files');
-  await closeOrganizer();
-
   await page.locator(`#homeList [data-path=${JSON.stringify(activeName)}] .home-item-go`).click();
   await page.waitForFunction(docId => window.__state?.viewerDocId === docId && window.__viewer?.pdf, {}, activePaper.docId);
   await page.evaluate(async () => {
@@ -241,22 +224,16 @@ try {
   await page.locator('#paperOrganizerClassify').click();
   await page.waitForFunction(() => document.querySelector('#paperOrganizer').getAttribute('aria-busy') === 'false'
     && [...document.querySelectorAll('#paperOrganizerList .po-target input')].some(node => node.value));
-  assert.equal(model.requests.length, 2);
-  const planInput = JSON.parse(model.requests[0].body.messages.at(-1).content);
-  const classificationInput = JSON.parse(model.requests[1].body.messages.at(-1).content);
   assert.equal(model.requests[0].body.model, 'organizer-ui-synthetic');
-  assert.equal(planInput.task, 'plan'); assert.equal(classificationInput.task, 'classify');
-  assert.ok(classificationInput.classificationInstructions.includes('SYNTHETIC_CUSTOM_RULE'));
-  assert.ok(planInput.existingFolders.includes('数学/数值分析'));
-  assert.ok(classificationInput.allowedFolders.some(folder => folder.path === '数学/数值分析'));
-  assert.equal(classificationInput.papers.find(paper => paper.path === 'metadata-paper.pdf').title, 'Computer Vision Image Recognition');
-  assert.equal(await page.$eval(`${row(activeName)} .po-target input`, node => node.value), 'Abstract structures/Proof methods');
-  assert.equal(await page.$eval(`${row(conflictName)} .po-target input`, node => node.value), '数学/数值分析');
+  const classificationInput = JSON.parse(model.requests[0].body.messages.at(-1).content);
+  assert.equal(classificationInput.task, 'group');
+  assert.ok(classificationInput.preferences.includes('SYNTHETIC_CUSTOM_RULE'));
+  assert.equal(await page.$eval(`${row(activeName)} .po-target input`, node => node.value), 'Proof methods');
+  assert.equal(await page.$eval(`${row(conflictName)} .po-target input`, node => node.value), '数值分析');
   assert.equal(await page.$eval(`${row('Unclassified Notes.pdf')} input[type="checkbox"]`, node => node.checked), false);
   assert.equal(moveRequests().length, 0);
-  assert.equal(requests.filter(request => request.path === '/api/chat').length, 2);
-  pass('explicit AI planning and constrained classification use the configured model, custom instructions and extracted titles without moving files');
-  await editTarget(activeName, 'Reading/Linear algebra');
+  pass('filename-first categories use the configured model and preferences without moving files');
+  await editTarget(activeName, 'Linear algebra');
   await selectOnly([activeName, conflictName]);
   await applyAndWait(2);
   assert.equal(await page.$eval(row(activeName), node => node.dataset.status), 'done');
@@ -265,9 +242,9 @@ try {
   assert.equal(digest(conflictName), originalHashes.get(conflictName));
   assert.equal(digest(targetConflict), originalHashes.get(targetConflict));
   assert.ok(moveRequests().every(item => item.body.conflict === 'error'));
-  assert.ok(!exists(`数学/数值分析/Numerical Analysis Methods (2).pdf`));
+  assert.ok(!exists(`数值分析/Numerical Analysis Methods (2).pdf`));
   pass('edited destination moves the chosen PDF while a conflicting target preserves both files and reports failure');
-  await editTarget(conflictName, 'Reviewed/Numerical analysis');
+  await editTarget(conflictName, 'Reviewed analysis');
   await applyAndWait(1);
   assert.equal(await page.$eval(row(conflictName), node => node.dataset.status), 'done');
   assert.equal(exists(conflictName), false); assert.equal(digest(retryTarget), originalHashes.get(conflictName));

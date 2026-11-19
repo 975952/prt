@@ -2,7 +2,7 @@
  * The caller supplies the app's chat client and reviews accepted proposals. */
 import { t as tr } from './i18n.js';
 import { runWithDeadline } from './task-deadline.js';
-import { paperClassificationMessages, paperFolderPlanningMessages, paperTopicSummaryMessages } from './prompts/capabilities/organizer.js';
+import { paperClassificationMessages, paperFolderPlanningMessages, paperTopicSummaryMessages, paperGroupingMessages, paperFirstPageMessages } from './prompts/capabilities/organizer.js';
 
 export const PAPER_CLASSIFIER_BATCH_SIZE = 12;
 export const PAPER_CLASSIFIER_MIN_CONFIDENCE = 0.75;
@@ -11,6 +11,13 @@ export const PAPER_PLANNER_MAX_PAPERS = 5000;
 const fail = (code, message) => Object.assign(new Error(message), { name: 'PaperClassificationError', code });
 const record = value => !!value && typeof value === 'object' && !Array.isArray(value);
 const text = (value, limit) => typeof value === 'string' ? value.slice(0, limit) : '';
+
+/** The organizer creates only siblings directly inside the library. */
+export function validateCategory(value) {
+  const result = validateTargetFolder(value);
+  return result.valid && result.folder.includes('/')
+    ? { ...result, valid: false, error: tr('分类只用一层文件夹，请勿输入 / 或反斜线。') } : result;
+}
 
 /** A relative folder only: no traversal, absolute paths or Windows devices. */
 export function validateTargetFolder(value) {
@@ -66,10 +73,10 @@ function parseJson(output) {
 }
 
 function folderLimit(paperCount, maxDepth) {
-  if (!Number.isInteger(paperCount) || paperCount < 0 || paperCount > PAPER_PLANNER_MAX_PAPERS || ![1, 2].includes(maxDepth)) {
+  if (!Number.isInteger(paperCount) || paperCount < 0 || paperCount > PAPER_PLANNER_MAX_PAPERS || maxDepth !== 1) {
     throw fail('plan', tr('分类目录规划参数无效，请重新规划'));
   }
-  return Math.min(paperCount, maxDepth === 2 ? 8 : 6);
+  return Math.min(paperCount, 6);
 }
 
 /** All classification batches must use one validated vocabulary and depth. */
@@ -204,4 +211,108 @@ export async function classifyPaperBatch({ papers, plan, instructions = '', sign
   const messages = paperClassificationMessages({ papers: inputs, folders: validated.folders, instructions: text(instructions, 2000) });
   const output = await requestModel(messages, { chat, signal, timeoutMs });
   return parsePaperClassifications(output, inputs, validated);
+}
+
+export function parsePaperGroups(output, papers) {
+  const parsed = parseJson(output), seen = new Set(), names = new Set();
+  if (!record(parsed) || Object.keys(parsed).some(key => !['groups', 'unknown'].includes(key))
+    || !Array.isArray(parsed.groups) || parsed.groups.length > Math.min(6, papers.length)
+    || !Array.isArray(parsed.unknown)) throw fail('schema', tr('AI 分类结果结构无效，请重试'));
+  const take = index => {
+    if (!Number.isInteger(index) || index < 1 || index > papers.length || seen.has(index)) {
+      throw fail('identity', tr('AI 分类结果包含未知或重复的论文标识，请重试'));
+    }
+    seen.add(index); return papers[index - 1].id;
+  };
+  const groups = parsed.groups.map(group => {
+    if (!record(group) || Object.keys(group).some(key => !['folder', 'papers'].includes(key))
+      || typeof group.folder !== 'string' || !validateCategory(group.folder).valid || group.folder.length > 80
+      || !Array.isArray(group.papers) || !group.papers.length) throw fail('plan', tr('AI 返回了无效的分类目录，请重新规划'));
+    const key = group.folder.normalize('NFKC').toLocaleLowerCase();
+    if (names.has(key)) throw fail('plan', tr('分类目录层级不一致或名称重复，请重新规划'));
+    names.add(key); return { folder: group.folder, ids: group.papers.map(take) };
+  });
+  const unknown = parsed.unknown.map(take);
+  if (seen.size !== papers.length) throw fail('identity', tr('AI 未覆盖全部文件，请重新分类'));
+  return { groups, unknown };
+}
+
+/** Name-only first pass; only unresolved papers may access page one. No file mutations. */
+export async function groupPaperCollection({ papers, instructions = '', chat, signal, readFirstPage,
+  timeoutMs = 180000, onProgress = () => {}, onUpdate = () => {} } = {}) {
+  const inputs = paperInputs(papers, PAPER_PLANNER_MAX_PAPERS).map(paper => ({ ...paper, title: '', path: '' }));
+  const request = messages => requestModel(messages, { chat, signal, timeoutMs });
+  const evidence = new Map(), errors = new Map(), textPages = new Map();
+  const inspectImage = async (original, page) => {
+    if (typeof page.getImage !== 'function') return '';
+    onProgress({ stage: 'image', name: original.name });
+    const shot = await runWithDeadline(requestSignal => page.getImage({ signal: requestSignal }), { signal, timeoutMs: 30000 });
+    if (!shot?.dataUrl) return '';
+    const parsed = parseJson(await request(paperFirstPageMessages({ name: original.name, image: shot.dataUrl })));
+    if (!record(parsed) || typeof parsed.evidence !== 'string' || Object.keys(parsed).some(key => key !== 'evidence')) {
+      throw fail('schema', tr('AI 分类结果结构无效，请重试'));
+    }
+    return parsed.evidence.trim().slice(0, 1000);
+  };
+  const group = async () => {
+    onProgress({ stage: 'group' });
+    if (inputs.length <= PAPER_PLANNER_CHUNK_SIZE) {
+      return parsePaperGroups(await request(paperGroupingMessages({ instructions: text(instructions, 2000),
+        papers: inputs.map((paper, index) => ({ index: index + 1, name: paper.name,
+          ...(evidence.has(paper.id) ? { evidence: evidence.get(paper.id) } : {}) })) })), inputs);
+    }
+    // Large libraries still use one shared vocabulary covering the entire collection.
+    const enriched = inputs.map(paper => ({ ...paper, title: evidence.get(paper.id) || '' }));
+    const plan = await planPaperFolders({ papers: enriched, instructions, chat, signal, timeoutMs });
+    const groups = plan.folders.map(folder => ({ folder: folder.path, ids: [] })), unknown = [];
+    for (let at = 0; at < enriched.length; at += PAPER_CLASSIFIER_BATCH_SIZE) {
+      const items = await classifyPaperBatch({ papers: enriched.slice(at, at + PAPER_CLASSIFIER_BATCH_SIZE), plan,
+        instructions, chat, signal, timeoutMs });
+      for (const item of items) {
+        if (item.selected) groups.find(group => group.folder === item.folder).ids.push(item.id);
+        else unknown.push(item.id);
+      }
+    }
+    return { groups: groups.filter(group => group.ids.length), unknown };
+  };
+  if (!inputs.length) return { groups: [], unknown: [], errors };
+  let result = await group(); onUpdate(result);
+  const unresolved = [...result.unknown];
+  for (let index = 0; index < unresolved.length && readFirstPage; index++) {
+    if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
+    const id = unresolved[index], original = papers.find(paper => paper.id === id);
+    onProgress({ stage: 'page', name: original.name, completed: index, total: unresolved.length });
+    try {
+      const page = await runWithDeadline(requestSignal => readFirstPage(original, { signal: requestSignal }), { signal, timeoutMs: 30000 });
+      let detail = '';
+      // Feed extracted text directly into the shared grouping request. Do not
+      // spend one extra model round-trip per ordinary text PDF.
+      if (String(page.text || '').replace(/\s/g, '').length >= 20) {
+        detail = text(page.text, 4000); textPages.set(id, page);
+      } else detail = await inspectImage(original, page);
+      if (detail) evidence.set(id, detail);
+      else errors.set(id, tr('第一页仍无法判断，请手动分类'));
+    } catch (error) {
+      if (signal?.aborted || error.name === 'AbortError') throw error;
+      errors.set(id, tr('第一页读取失败：{0}', error.message || String(error)));
+    }
+  }
+  if (evidence.size) { result = await group(); onUpdate(result); }
+  let imageUpdates = 0;
+  // A text layer can be present but garbled or merely a publisher's imprint.
+  // Only pages still unknown after the shared text pass need their image.
+  for (const id of result.unknown) {
+    if (!textPages.has(id)) continue;
+    const original = papers.find(paper => paper.id === id);
+    try {
+      const detail = await inspectImage(original, textPages.get(id));
+      if (detail) { evidence.set(id, detail); imageUpdates++; }
+      else errors.set(id, tr('第一页仍无法判断，请手动分类'));
+    } catch (error) {
+      if (signal?.aborted || error.name === 'AbortError') throw error;
+      errors.set(id, tr('第一页读取失败：{0}', error.message || String(error)));
+    }
+  }
+  if (imageUpdates) { result = await group(); onUpdate(result); }
+  return { ...result, errors };
 }

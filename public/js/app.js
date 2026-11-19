@@ -21,7 +21,7 @@ import { createLibraryReader } from './chat-source.js';
 import { createPaperTitleIndex } from './paper-titles.js';
 import { createPaperOrganizer } from './paper-organizer.js';
 import { createOrganizerHistory } from './organizer-history.js';
-import { classifyPaperBatch, planPaperFolders } from './paper-classifier.js';
+import { groupPaperCollection } from './paper-classifier.js';
 import { CARD_MATERIAL_DEFAULTS, updateTranslationMaterial } from './glass-material.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
@@ -3752,15 +3752,18 @@ async function openPaperOrganizer() {
     getPapers: async () => { await refreshPaperList(); return state.papers; },
     getFolders: () => state.folders,
     getLabel: paper => paperTitles.label(paper),
-    readTitle: readPdfTitle,
     checkAIReady: () => {
       if (!Settings.ready) throw new Error(tr("请先在设置中配置 AI 模型，再运行分类。"));
     },
-    planFolders: options => planPaperFolders({ ...options,
-      chat: request => streamChat({ idleMs: Number(Settings.data.idleMs) || 60000, ...request }),
-    }),
-    classifyBatch: options => classifyPaperBatch({ ...options,
-      chat: request => streamChat({ idleMs: Number(Settings.data.idleMs) || 60000, ...request }),
+    groupCollection: options => groupPaperCollection({ ...options,
+      chat: request => streamChat({ idleMs: Number(Settings.data.idleMs) || 120000, ...request }),
+      readFirstPage: async (paper, { signal }) => {
+        const reader = await createLibraryReader(paper, { signal, page: 1 });
+        let text = '';
+        try { text = await reader.getPageText(1, { signal }); }
+        catch (error) { if (signal.aborted || error.name === 'AbortError') throw error; }
+        return { text, getImage: extra => reader.capturePageImage(1, { ...extra, maxDim: 1600 }) };
+      },
     }),
     movePaper: organizePaperMove,
     runMoves: (tasks, execute, options) => organizerHistory.runBatch(tasks, execute, options),

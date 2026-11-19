@@ -1,7 +1,10 @@
 /** A loopback-only model double. Requests still pass through the real prt API. */
 import http from 'node:http';
 
-export const organizerModelInput = record => JSON.parse(record.body.messages.at(-1).content);
+export const organizerModelInput = record => {
+  const content = record.body.messages.at(-1).content;
+  return JSON.parse(Array.isArray(content) ? content.find(part => part.type === 'text').text : content);
+};
 export const organizerModelTask = record => organizerModelInput(record).task;
 
 export async function startOrganizerTestModel(initialResponder) {

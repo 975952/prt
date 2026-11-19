@@ -1,8 +1,7 @@
 import { t as tr } from './i18n.js';
 import { el, debounce } from './util.js';
 import { iconEl } from './icons.js';
-import { PAPER_CLASSIFIER_BATCH_SIZE, PAPER_PLANNER_MAX_PAPERS, parsePaperFolderPlan, validateTargetFolder } from './paper-classifier.js';
-import { runWithDeadline } from './task-deadline.js';
+import { PAPER_PLANNER_MAX_PAPERS, parsePaperFolderPlan, validateCategory as validateTargetFolder } from './paper-classifier.js';
 export { validateTargetFolder };
 
 const paperPath = paper => String(paper.path || paper.name || '').replace(/\\/g, '/');
@@ -13,21 +12,18 @@ const PAGE_SIZE = 40;
 
 /** Preview first; this component never moves a file until Apply is clicked. */
 export function createPaperOrganizer({ getPapers = () => [], getFolders = () => [],
-  getLabel = paper => paper.name, readTitle, planFolders, classifyBatch, checkAIReady = () => {}, movePaper, runMoves, onComplete = () => {} } = {}) {
+  getLabel = paper => paper.name, groupCollection, checkAIReady = () => {}, movePaper, runMoves, onComplete = () => {} } = {}) {
   let rows = [], page = 0, opening = 0, loading = false, reading = false, moving = false;
-  let stopped = false, activeReads = 0, lastFocus = null, operation = null;
+  let stopped = false, lastFocus = null, operation = null;
   let existingFolders = [], activePlan = null;
   const nodes = new Map();
   const heading = el('h2', { id: 'paperOrganizerTitle', text: tr('整理 PDF') });
-  const description = el('p', { class: 'po-description', text: tr('AI 先统一规划少量主题目录，再为论文归类。预览中可整类改名或合并，确认后再移动。') });
+  const description = el('p', { class: 'po-description', text: tr('按名字分类，相似内容放一起。只用一层文件夹，确认后移动。') });
   const scope = el('select', { id: 'paperOrganizerScope', 'aria-label': tr('整理范围') },
     el('option', { value: 'all', text: tr('全部论文') }), el('option', { value: 'root', text: tr('根目录未归类') }));
   const search = el('input', { type: 'search', id: 'paperOrganizerSearch', placeholder: tr('搜索标题或文件路径'), 'aria-label': tr('搜索标题或文件路径') });
-  const read = el('button', { type: 'button', class: 'po-button', id: 'paperOrganizerRead', text: tr('补充识别标题'), onclick: enrichTitles });
   const instructions = el('input', { type: 'text', id: 'paperOrganizerInstructions', maxLength: 1000,
     placeholder: tr('例如：合并相近主题，不要按具体模型或单篇论文建文件夹'), 'aria-label': tr('分类要求（可选）') });
-  const depth = el('select', { id: 'paperOrganizerDepth', 'aria-label': tr('分类层级') },
-    el('option', { value: '1', text: tr('一级主题（推荐）') }), el('option', { value: '2', text: tr('二级分类') }));
   const classify = el('button', { type: 'button', class: 'po-button primary', id: 'paperOrganizerClassify', text: tr('AI 分类'), onclick: classifyPapers });
   const selection = el('input', { type: 'checkbox', id: 'paperOrganizerSelect', onchange: () => {
     for (const row of currentPage()) if (movable(row)) setSelected(row, selection.checked);
@@ -49,12 +45,12 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   const apply = el('button', { type: 'button', class: 'po-button primary', id: 'paperOrganizerApply', text: tr('移动选中的文件'), onclick: applyMoves });
   const dialog = el('dialog', { class: 'paper-organizer', id: 'paperOrganizer', 'aria-labelledby': heading.id },
     el('div', { class: 'po-heading' }, iconEl('folder'), heading), description,
-    el('div', { class: 'po-toolbar' }, scope, search, read),
-    el('div', { class: 'po-ai-toolbar' }, el('label', { for: instructions.id, text: tr('分类要求（可选）') }), instructions, depth, classify),
-    el('p', { class: 'po-note', text: tr('AI 分类会读取标题，并将文件名、标题和相对目录发送给设置中的模型。纯图片文件依据已有标题或文件名判断。') }),
+    el('div', { class: 'po-toolbar' }, scope, search, classify),
+    el('details', { class: 'po-options' }, el('summary', { text: tr('分类偏好') }),
+      el('div', { class: 'po-ai-toolbar' }, instructions)),
+    el('p', { class: 'po-note', text: tr('先发送文件名；无法判断时才发送第一页文字或图片。每次重新分类覆盖旧方案。') }),
     planPreview, el('div', { class: 'po-list-head' }, el('label', {}, selection, tr('选择本页可移动项')), count), list, datalist,
     el('div', { class: 'po-page' }, prev, pagination, next), status,
-    el('p', { class: 'po-note', text: tr('同名冲突会保留原文件。停止只影响后续文件，已完成的移动不会撤销。') }),
     el('div', { class: 'po-actions' }, cancel, stop, apply));
   document.body.append(dialog);
   dialog.addEventListener('cancel', event => { event.preventDefault(); close(); });
@@ -70,12 +66,16 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     status.textContent = tr('分类要求已更新，请重新运行 AI 分类。'); render();
   };
   instructions.addEventListener('input', resetPlan);
-  depth.addEventListener('change', resetPlan);
 
   function filtered() {
     const terms = search.value.trim().toLocaleLowerCase().split(/\s+/).filter(Boolean);
     return rows.filter(row => (scope.value === 'all' || !parentFolder(row.from))
-      && terms.every(term => `${row.title} ${row.from}`.toLocaleLowerCase().includes(term)));
+      && terms.every(term => `${row.title} ${row.from}`.toLocaleLowerCase().includes(term)))
+      .sort((a, b) => {
+        const groups = activePlan?.plan.folders.map(folder => folder.path) || [];
+        const rank = row => row.target ? (groups.indexOf(row.target) < 0 ? groups.length : groups.indexOf(row.target)) : groups.length + 1;
+        return rank(a) - rank(b) || (a.target || '').localeCompare(b.target || '') || (a.order ?? 0) - (b.order ?? 0);
+      });
   }
   function currentPage() { return filtered().slice(page * PAGE_SIZE, (page + 1) * PAGE_SIZE); }
   function targetOf(row) {
@@ -91,16 +91,16 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     row.selected = selected;
     if (selected && row.aiState === 'review') {
       row.edited = true;
-      row.reason = tr('已确认此建议，AI 不会覆盖');
+      row.reason = tr('已手动调整；重新分类会替换');
     }
   }
-  function planKey() { return JSON.stringify([scope.value, search.value.trim(), instructions.value.trim(), depth.value]); }
+  function planKey() { return JSON.stringify([scope.value, search.value.trim(), instructions.value.trim()]); }
   function pendingRows() {
-    return filtered().filter(row => !row.done && !row.edited && (row.aiState !== 'complete' || activePlan?.key !== planKey()));
+    return filtered();
   }
   function clearSuggestion(row) {
     row.target = ''; row.selected = false; row.aiState = 'pending'; row.error = '';
-    row.reason = tr('等待 AI 分类，或手动指定文件夹');
+    row.reason = '';
   }
   function updateFolders() {
     const folders = new Set(existingFolders);
@@ -129,7 +129,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
         if (target.folder === folder) return;
         for (const row of members) {
           row.target = target.folder; row.edited = true; row.error = '';
-          row.reason = tr('已手动指定，AI 不会覆盖'); row.selected = movable(row);
+          row.reason = tr('已手动调整；重新分类会替换'); row.selected = movable(row);
         }
         if (activePlan?.key === planKey()) {
           const planned = activePlan.plan.folders.map(item => item.path === folder ? { ...item, path: target.folder } : item);
@@ -157,6 +157,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     ui.root.dataset.status = row.done ? 'done' : row.error ? 'error' : row.moving ? 'moving' : '';
     ui.reason.textContent = row.done ? tr('已移动到：{0}', row.newPath) : row.moving ? tr('正在移动…')
       : row.error || (!target.valid && row.target ? target.error : row.reason);
+    ui.reason.hidden = !ui.reason.textContent;
     ui.title.textContent = row.title;
     ui.title.title = row.title;
   }
@@ -164,10 +165,9 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     const busy = loading || reading || moving, shown = currentPage(), eligible = shown.filter(movable);
     const selected = eligible.filter(row => row.selected).length;
     scope.disabled = busy; search.disabled = busy;
-    read.disabled = busy || activeReads > 0 || typeof readTitle !== 'function' || !shown.some(row => !row.done);
-    instructions.disabled = depth.disabled = busy;
-    classify.disabled = busy || activeReads > 0 || typeof classifyBatch !== 'function' || typeof planFolders !== 'function' || !pendingRows().length;
-    classify.textContent = tr('AI 分类 {0} 篇', pendingRows().length);
+    instructions.disabled = busy;
+    classify.disabled = busy || typeof groupCollection !== 'function' || !pendingRows().length;
+    classify.textContent = activePlan ? tr('重新分类') : tr('开始分类');
     selection.disabled = busy || !eligible.length;
     selection.checked = !!eligible.length && selected === eligible.length;
     selection.indeterminate = selected > 0 && selected < eligible.length;
@@ -175,8 +175,9 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     const visible = filtered(), pages = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
     count.textContent = tr('{0} 篇 · 已选择 {1} 篇', visible.length, selectedRows().length);
     pagination.textContent = tr('第 {0} / {1} 页', page + 1, pages);
+    pagination.parentElement.hidden = pages <= 1;
     prev.disabled = busy || page === 0; next.disabled = busy || page + 1 >= pages;
-    apply.disabled = busy || activeReads > 0 || !selectedRows().length || typeof movePaper !== 'function';
+    apply.disabled = busy || !selectedRows().length || typeof movePaper !== 'function';
     apply.textContent = tr('移动选中的 {0} 个文件', selectedRows().length);
     stop.hidden = !moving && !reading;
     stop.disabled = stopped;
@@ -188,13 +189,18 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     const total = filtered().length;
     page = Math.max(0, Math.min(page, Math.max(0, Math.ceil(total / PAGE_SIZE) - 1)));
     nodes.clear(); list.replaceChildren();
+    let previousGroup = null;
     for (const row of currentPage()) {
+      const group = row.target || tr('待分类');
+      if (group !== previousGroup && activePlan) {
+        list.append(el('div', { class: 'po-section-title', text: group })); previousGroup = group;
+      }
       const checkbox = el('input', { type: 'checkbox', 'aria-label': tr('选择 {0}', row.title), onchange: () => { setSelected(row, checkbox.checked); sync(); } });
       const title = el('strong', { class: 'po-paper-title', text: row.title });
       const reason = el('p', { class: 'po-reason' });
       const target = el('input', { type: 'text', value: row.target, list: datalist.id,
-        placeholder: tr('选择或输入目标文件夹'), 'aria-label': tr('目标文件夹：{0}', row.title),
-        oninput: () => { row.target = target.value; row.edited = true; row.error = ''; row.reason = tr('已手动指定，AI 不会覆盖'); row.selected = movable(row); sync(); renderPlan(); } });
+        placeholder: tr('分类名称'), 'aria-label': tr('目标文件夹：{0}', row.title),
+        oninput: () => { row.target = target.value; row.edited = true; row.error = ''; row.reason = tr('已手动调整；重新分类会替换'); row.selected = movable(row); sync(); renderPlan(); } });
       const root = el('div', { class: 'po-row', role: 'listitem', dataset: { path: row.from } }, checkbox,
         el('div', { class: 'po-paper' }, title, el('span', { class: 'po-source', text: row.from, title: row.from })),
         el('div', { class: 'po-target' }, target, reason));
@@ -207,25 +213,13 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
   function requestStop() {
     stopped = true;
     operation?.controller.abort();
-    status.textContent = moving ? tr('正在等待当前文件完成；之后停止，已移动文件会保留。') : tr('已停止分类和标题读取；已完成的建议保留，文件未移动。');
+    status.textContent = moving ? tr('正在等待当前文件完成；之后停止，已移动文件会保留。') : tr('已停止分类；本次已完成的建议保留，文件未移动。');
     sync();
   }
   function close() {
     if (moving) { requestStop(); return; }
     if (reading) requestStop();
     dialog.close();
-  }
-  async function enrichTitles() {
-    if (loading || moving || reading || activeReads || typeof readTitle !== 'function') return;
-    const tasks = currentPage().filter(row => !row.done), task = beginOperation();
-    activePlan = null;
-    for (const row of rows) if (!row.done && !row.edited) clearSuggestion(row);
-    try {
-      await readTitles(tasks, task, { force: true });
-      if (isCurrent(task)) status.textContent = tr('已识别 {0} / {1} 篇', tasks.length, tasks.length);
-    } catch (error) {
-      if (isCurrent(task)) status.textContent = tr('标题读取失败：{0}', error.message || String(error));
-    } finally { finishOperation(task); }
   }
   function beginOperation() {
     const task = { controller: new AbortController(), opening };
@@ -238,106 +232,61 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     operation = null; reading = false;
     if (dialog.open) { updateFolders(); render(); }
   }
-  async function readTitles(targets, task, { force = false } = {}) {
-    if (typeof readTitle !== 'function') return;
-    const tasks = targets.filter(row => force || !row.titleRead);
-    let index = 0, finished = 0;
-    const worker = async () => {
-      while (isCurrent(task) && index < tasks.length) {
-        const row = tasks[index++];
-        activeReads++;
-        let settled = false;
-        const readingTitle = Promise.resolve().then(() => readTitle(row.paper.url, row.paper.name, { signal: task.controller.signal }));
-        readingTitle.finally(() => { settled = true; activeReads--; if (dialog.open) sync(); }).catch(() => {});
-        try {
-          const title = await runWithDeadline(() => readingTitle, { signal: task.controller.signal, timeoutMs: 12000 });
-          if (!isCurrent(task)) return;
-          row.titleRead = true;
-          if (typeof title === 'string' && title.trim()) {
-            row.title = title.trim().slice(0, 320);
-            row.error = '';
-            if (!row.edited) row.reason = tr('标题已读取，等待 AI 分类');
-          } else if (!row.edited) row.reason = tr('未读到标题，AI 将依据文件名判断');
-        } catch (error) {
-          if (!isCurrent(task)) return;
-          // A provider that ignores cancellation must not accumulate workers.
-          if (error.name === 'TimeoutError' && !settled) {
-            task.controller.abort();
-            status.textContent = tr('标题读取超时，已停止后续识别');
-            return;
-          }
-          row.titleRead = true;
-          if (!row.edited) row.reason = tr('未读到标题，AI 将依据文件名判断');
-        }
-        finished++;
-        if (isCurrent(task)) { status.textContent = tr('正在读取标题 {0} / {1}…', finished, tasks.length); sync(); }
-      }
-    };
-    await Promise.all([worker(), worker()]);
-  }
   async function classifyPapers() {
-    if (loading || moving || reading || activeReads || typeof classifyBatch !== 'function' || typeof planFolders !== 'function') return;
+    if (loading || moving || reading || typeof groupCollection !== 'function') return;
     try { await checkAIReady(); }
     catch (error) { status.textContent = error.message || String(error); return; }
     if (!dialog.open || loading || reading || moving) return;
-    const planningRows = filtered().filter(row => !row.done);
-    if (planningRows.length > PAPER_PLANNER_MAX_PAPERS) {
+    const tasks = pendingRows();
+    if (tasks.length > PAPER_PLANNER_MAX_PAPERS) {
       status.textContent = tr('一次最多整理 {0} 篇，请先缩小范围。', PAPER_PLANNER_MAX_PAPERS); return;
     }
-    const key = planKey();
-    if (activePlan?.key !== key) {
-      activePlan = null;
-      for (const row of planningRows) if (!row.edited) clearSuggestion(row);
+    // A new run replaces the whole preview, including manual edits and selections.
+    activePlan = null;
+    for (const row of rows) {
+      if (row.done) { row.from = row.newPath; row.done = false; }
+      clearSuggestion(row); row.edited = false; row.order = 0;
     }
-    const tasks = pendingRows(), task = beginOperation();
-    let finished = 0, uncertain = 0;
-    const preferences = instructions.value.trim();
+    page = 0;
+    const key = planKey(), task = beginOperation(); render();
+    const accept = result => {
+      if (!isCurrent(task)) return;
+      const byId = new Map(tasks.map(row => [row.from, row]));
+      for (const row of tasks) clearSuggestion(row);
+      let order = 0;
+      for (const group of result.groups) for (const id of group.ids) {
+        const row = byId.get(id);
+        if (!row) continue;
+        row.target = group.folder; row.order = order++; row.aiState = 'complete'; row.selected = movable(row);
+      }
+      for (const id of result.unknown) {
+        const row = byId.get(id);
+        if (row) { row.aiState = 'review'; row.reason = tr('待确认'); row.order = order++; }
+      }
+      activePlan = { key, plan: { folders: result.groups.map(group => ({ path: group.folder })), maxDepth: 1, paperCount: tasks.length } };
+      planPreview.open = false;
+      updateFolders(); render();
+    };
     try {
-      if (!activePlan) {
-        await readTitles(planningRows, task);
-        if (!isCurrent(task)) return;
-        status.textContent = tr('AI 正在为整批论文规划统一目录…');
-        const plan = await planFolders({ papers: planningRows.map(row => ({ id: row.from, name: row.paper.name, title: row.title, path: row.from })),
-          folders: updateFolders(), instructions: preferences, maxDepth: Number(depth.value), signal: task.controller.signal,
-          onProgress: progress => {
-            if (isCurrent(task)) status.textContent = progress.stage === 'summarize'
-              ? tr('正在汇总全库主题 {0} / {1}…', progress.completed, progress.total) : tr('AI 正在为整批论文规划统一目录…');
-          } });
-        if (!isCurrent(task)) return;
-        activePlan = { key, plan };
-        planPreview.open = true;
-        updateFolders(); render();
-      }
-      for (let start = 0; start < tasks.length && isCurrent(task); start += PAPER_CLASSIFIER_BATCH_SIZE) {
-        const batch = tasks.slice(start, start + PAPER_CLASSIFIER_BATCH_SIZE);
-        for (const row of batch) clearSuggestion(row);
-        await readTitles(batch, task);
-        if (!isCurrent(task)) return;
-        status.textContent = tr('AI 正在分类 {0}–{1} / {2} 篇…', start + 1, start + batch.length, tasks.length);
-        const proposals = await classifyBatch({ papers: batch.map(row => ({ id: row.from, name: row.paper.name, title: row.title, path: row.from })),
-          folders: updateFolders(), plan: activePlan.plan, instructions: preferences, signal: task.controller.signal });
-        if (!isCurrent(task)) return;
-        const byId = new Map(proposals.map(proposal => [proposal.id, proposal]));
-        for (const row of batch) {
-          const proposal = byId.get(row.from);
-          const valid = proposal && validateTargetFolder(proposal.folder).valid;
-          row.target = valid ? proposal.folder : '';
-          row.aiState = valid && proposal.selected ? 'complete' : 'review';
-          row.selected = !!(valid && proposal.selected && movable(row));
-          row.reason = valid && proposal.selected ? tr('AI 建议：{0}', proposal.reason)
-            : tr('需确认：{0}', proposal?.reason || tr('信息不足，请手动选择文件夹'));
-          if (row.aiState === 'review') uncertain++;
-        }
-        finished += batch.length;
-        updateFolders(); render();
-      }
-      if (isCurrent(task)) status.textContent = tr('AI 已分类 {0} 篇，{1} 篇需确认。检查建议后再移动。', finished, uncertain);
+      const result = await groupCollection({ papers: tasks.map(row => ({ ...row.paper, id: row.from, path: row.from, name: fileName(row.from) })),
+        instructions: instructions.value.trim(), signal: task.controller.signal, onUpdate: accept,
+        onProgress: progress => {
+          if (!isCurrent(task)) return;
+          status.textContent = progress.stage === 'group' ? tr('正在按主题分类…')
+            : progress.stage === 'image' ? tr('正在查看第一页图片：{0}', progress.name) : tr('正在读取第一页：{0}', progress.name);
+        } });
+      if (!isCurrent(task)) return;
+      accept(result);
+      for (const row of tasks) if (!row.target && result.errors?.has(row.from)) row.reason = result.errors.get(row.from);
+      status.textContent = tr('{0} 个分类，{1} 篇待确认。确认后移动。', result.groups.length, result.unknown.length);
     } catch (error) {
-      if (isCurrent(task)) status.textContent = tr('AI 分类失败：{0}。已完成的建议保留，可重试剩余项。', error.message || String(error));
+      if (isCurrent(task)) status.textContent = error.name === 'TimeoutError'
+        ? tr('模型响应超时，已完成的分类保留。可重新分类。')
+        : tr('分类失败：{0}。可重新分类。', error.message || String(error));
     } finally { finishOperation(task); }
   }
   async function applyMoves() {
-    if (loading || reading || moving || activeReads || typeof movePaper !== 'function') return;
+    if (loading || reading || moving || typeof movePaper !== 'function') return;
     const tasks = selectedRows().map(row => ({ row, from: row.from, to: targetOf(row).folder }));
     if (!tasks.length) return;
     moving = true; stopped = false; const moves = []; let failures = 0;
@@ -383,9 +332,9 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
         const paper = papers[index], from = paperPath(paper);
         if (!from || seen.has(from)) continue;
         seen.add(from);
-        const title = String(getLabel(paper) || paper.name || from);
-        const row = { paper, from, title, target: '', reason: tr('等待 AI 分类，或手动指定文件夹'),
-          selected: false, edited: false, done: false, error: '', aiState: 'pending', titleRead: false };
+        const title = String(paper.name || getLabel(paper) || from).replace(/\.pdf$/i, '');
+        const row = { paper, from, title, target: '', reason: '',
+          selected: false, edited: false, done: false, error: '', aiState: 'pending' };
         rows.push(row);
         if (index % 100 === 99) { if (index === 99) render(); await pause(); if (revision !== opening || !dialog.open) return; }
       }
