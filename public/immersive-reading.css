@@ -1,4 +1,8 @@
 #immersiveTopbar, #immersiveFooter, #immersiveChatHead { display: none; }
+#immersiveTransitionCover { position: fixed; inset: 0; z-index: 2147483647; background: var(--bg); opacity: 1; pointer-events: auto; transition: opacity 100ms ease-out; }
+#immersiveTransitionCover[hidden] { display: none; }
+#immersiveTransitionCover.leaving { opacity: 0; }
+@media (prefers-reduced-motion: reduce) { #immersiveTransitionCover { transition-duration: 0s; } }
 #sessBtn, #sessBtn:hover { cursor: default; background: transparent; box-shadow: none; }
 body:not(.reading) #immersiveBtn, body.agent-full #immersiveBtn { display: none; }
 body.immersive-reading { overflow: hidden; }

@@ -182,14 +182,16 @@ try {
     const input = document.querySelector('#chatInput'); input.value = text;
     await window.__ctx.send();
   }, original);
-  const sourceClosed = await page.evaluate(() => {
+  const sourceState = await page.evaluate(() => {
     const row = document.querySelector('.ai-block[data-block="translate"] .msg');
     const details = row.querySelector('.translation-original');
     const source = row.querySelector('.translation-source');
-    return { closed: !details.open, visible: source.checkVisibility(), text: source.textContent };
+    return { open: details.open, visible: source.checkVisibility(), text: source.textContent };
   });
-  assert.ok(sourceClosed.closed && !sourceClosed.visible, 'the original starts collapsed');
-  assert.equal(sourceClosed.text, original, 'the complete original is retained');
+  assert.ok(sourceState.open && sourceState.visible, 'the original starts expanded');
+  assert.equal(sourceState.text, original, 'the complete original is retained');
+  await page.click('.ai-block[data-block="translate"] .msg .translation-original > summary');
+  assert.ok(await page.$eval('.ai-block[data-block="translate"] .msg .translation-original', node => !node.open), 'the original can be collapsed');
   await page.click('.ai-block[data-block="translate"] .msg .translation-original > summary');
   const sourceView = await page.evaluate(() => {
     const row = document.querySelector('.ai-block[data-block="translate"] .msg');
@@ -232,7 +234,15 @@ try {
   assert.ok(sourceEnd.visible, 'the final words can be brought fully into view');
   assert.ok(sourceEnd.overflow <= 1, 'expanded original does not widen the application');
   await (await page.$('#rightSide')).screenshot({ path: path.join(scratch, 'reading-translation.png') });
-  console.log('PASS translation original is collapsed by default and is readable through its final paragraph');
+  await page.click('.ai-block[data-block="translate"] .msg .translation-original > summary');
+  await page.waitForFunction(() => document.querySelector('#translationCardOriginalToggle').getAttribute('aria-pressed') === 'false');
+  assert.equal(await page.$eval('#translationCardOriginalToggle', node => node.getAttribute('aria-pressed')), 'false');
+  assert.equal(await page.evaluate(() => localStorage.getItem('reader.translationOriginalOpen.v1')), '0');
+  await page.click('.ai-block[data-block="translate"] .msg .translation-original > summary');
+  await page.waitForFunction(() => document.querySelector('#translationCardOriginalToggle').getAttribute('aria-pressed') === 'true');
+  assert.equal(await page.$eval('#translationCardOriginalToggle', node => node.getAttribute('aria-pressed')), 'true');
+  assert.equal(await page.evaluate(() => localStorage.getItem('reader.translationOriginalOpen.v1')), '1');
+  console.log('PASS translation original opens by default, retains its text and remains readable through its final paragraph');
 
   mode = 'fail-partial';
   await page.evaluate(async () => {

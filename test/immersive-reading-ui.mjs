@@ -79,8 +79,25 @@ try {
   await page.screenshot({ path: path.join(scratch, 'reader-sidebar.png') });
   await page.evaluate(async () => { __viewer.setTwoUp(false); __viewer.setScale(1.1, { keepCenter: false }); __viewer._fitMode = false; await __viewer.goToPage(3); });
   const original = await page.evaluate(() => ({ scale: __viewer.scale, twoUp: __viewer._twoUp }));
+  await page.evaluate(() => {
+    const setImmersive = __viewer.setImmersive.bind(__viewer);
+    window.modeSwitchHold = null;
+    __viewer.setImmersive = async on => {
+      const hold = window.modeSwitchHold;
+      if (hold?.on === !!on) await new Promise(resolve => { hold.waiting = true; hold.release = resolve; });
+      return setImmersive(on);
+    };
+    window.armModeSwitchHold = on => { window.modeSwitchHold = { on: !!on, waiting: false, release: null }; };
+    window.releaseModeSwitchHold = () => { const hold = window.modeSwitchHold; window.modeSwitchHold = null; hold?.release?.(); };
+  });
+  await page.evaluate(() => window.armModeSwitchHold(true));
   await page.click('#immersiveBtn');
+  await page.waitForFunction(() => window.modeSwitchHold?.waiting && !document.getElementById('immersiveTransitionCover').hidden);
+  assert.equal(await page.evaluate(() => document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.id), 'immersiveTransitionCover',
+    'the transition cover hides the intermediate entry layout');
+  await page.evaluate(() => window.releaseModeSwitchHold());
   await page.waitForFunction(() => document.body.classList.contains('immersive-reading') && __viewer.immersive && document.body.classList.contains('immersive-chrome-visible'));
+  await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   await pause(500);
   const spread = () => page.evaluate(() => {
     const view = __viewer.container.getBoundingClientRect();
@@ -241,8 +258,14 @@ try {
   assert.ok(await page.evaluate(() => __viewer.immersive && document.body.classList.contains('immersive-reading')), 'Escape cancels screenshot without leaving book view');
   await page.screenshot({ path: path.join(scratch, 'immersive-spread.png') });
   console.log('PASS floating chat retains draft and translation card reopens saved records');
+  await page.evaluate(() => window.armModeSwitchHold(false));
   await page.mouse.move(750, 2); await page.click('#immersiveExit');
+  await page.waitForFunction(() => window.modeSwitchHold?.waiting && !document.getElementById('immersiveTransitionCover').hidden);
+  assert.equal(await page.evaluate(() => document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.id), 'immersiveTransitionCover',
+    'the transition cover hides the intermediate exit layout');
+  await page.evaluate(() => window.releaseModeSwitchHold());
   await page.waitForFunction(() => !document.body.classList.contains('immersive-reading') && !__viewer.immersive);
+  await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   assert.deepEqual(await page.evaluate(() => ({ scale: __viewer.scale, twoUp: __viewer._twoUp })), original);
   assert.equal(await page.evaluate(() => __viewer.current), 7);
   assert.equal(await page.evaluate(() => document.body.classList.contains('window-fullscreen')), false);
@@ -251,6 +274,7 @@ try {
   assert.equal(await page.evaluate(() => __viewer.immersive), false, 'ordinary fullscreen must not enable book mode');
   await page.click('#immersiveBtn');
   await page.waitForFunction(() => document.body.classList.contains('immersive-chrome-visible'));
+  await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   await page.click('#immersiveExit');
   await page.waitForFunction(() => !__viewer.immersive);
   assert.ok(await page.evaluate(() => document.body.classList.contains('window-fullscreen')), 'exit must preserve fullscreen already active before book mode');
@@ -260,6 +284,7 @@ try {
   await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId);
   await page.click('#immersiveBtn');
   await page.waitForFunction(() => document.body.classList.contains('immersive-chrome-visible'));
+  await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   await page.click('#immersiveTranslate');
   if (await page.$eval('#translationCard', node => node.dataset.cardView !== 'history')) await page.click('#translationCardHistory');
   await page.waitForFunction(() => document.querySelector('#translationCardHistoryList').textContent.includes('第二条译文'));

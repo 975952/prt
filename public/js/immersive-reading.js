@@ -20,7 +20,8 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
   const page = el('input', { id: 'immersivePage', type: 'number', min: '1', 'aria-label': tr('页码') });
   const total = el('span', { id: 'immersiveTotal' });
   const bottom = el('nav', { id: 'immersiveFooter', class: 'immersive-chrome', 'aria-label': tr('翻页') }, prev, page, total, next);
-  body.append(top, bottom);
+  const transitionCover = el('div', { id: 'immersiveTransitionCover', hidden: true, 'aria-hidden': 'true' });
+  body.append(top, bottom, transitionCover);
   viewerElement.tabIndex = -1;
   const side = document.getElementById('rightSide');
   const columns = document.getElementById('rightCols');
@@ -100,10 +101,30 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     if (left !== box.left) { side.style.right = 'auto'; side.style.left = `${left}px`; }
     if (top !== box.top) side.style.top = `${top}px`;
   }
+  function paintFrame() {
+    return new Promise(resolve => {
+      let timer = 0;
+      const frame = requestAnimationFrame(() => { clearTimeout(timer); resolve(); });
+      timer = setTimeout(() => { cancelAnimationFrame(frame); resolve(); }, 120);
+    });
+  }
+  async function finishTransition() {
+    await paintFrame(); await paintFrame();
+    transitionCover.classList.add('leaving');
+    await new Promise(resolve => {
+      const timer = setTimeout(done, 140);
+      function done() { clearTimeout(timer); resolve(); }
+      transitionCover.addEventListener('transitionend', done, { once: true });
+    });
+    transitionCover.hidden = true;
+    transitionCover.classList.remove('leaving');
+  }
   window.addEventListener('resize', fitChatCard);
   async function setActive(on) {
     if (busy || active === !!on || (on && !getViewer()?.pdf)) return;
     busy = true;
+    transitionCover.hidden = false;
+    transitionCover.classList.remove('leaving');
     try {
       if (on) {
         beforeEnter?.();
@@ -144,7 +165,10 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
       if (ownedFullscreen) await leaveFullscreen?.();
       try { await getViewer()?.setImmersive(false); } catch { /* Keep the normal controls available for retry. */ }
       onError?.(error);
-    } finally { busy = false; }
+    } finally {
+      await finishTransition();
+      busy = false;
+    }
   }
   page.addEventListener('change', async () => {
     try { await getViewer()?.goToPage(Number(page.value)); } catch (error) { onError?.(error); }

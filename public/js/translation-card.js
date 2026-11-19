@@ -2,6 +2,20 @@ import { el, escapeHtml } from './util.js';
 import { iconEl } from './icons.js';
 import { t as tr } from './i18n.js';
 
+const ORIGINAL_OPEN_KEY = 'reader.translationOriginalOpen.v1';
+export const TRANSLATION_ORIGINAL_OPEN_EVENT = 'prt:translation-original-open';
+
+export function getTranslationOriginalOpen() {
+  try { return localStorage.getItem(ORIGINAL_OPEN_KEY) !== '0'; }
+  catch { return true; }
+}
+
+export function setTranslationOriginalOpen(open) {
+  const value = !!open;
+  try { localStorage.setItem(ORIGINAL_OPEN_KEY, value ? '1' : '0'); } catch { /* Keep the in-memory preference. */ }
+  window.dispatchEvent(new CustomEvent(TRANSLATION_ORIGINAL_OPEN_EVENT, { detail: value }));
+}
+
 /** A view onto the reader's saved translation records, never a second store.
  * The original stream target, drag handle and resize handle keep their identity.
  */
@@ -40,9 +54,9 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   language.hidden = !onTargetLanguageChange; capture.hidden = !onCapture;
   head.insertBefore(language, historyButton); head.insertBefore(capture, historyButton);
   const original = el('div', { class: 'reading-card-original', id: 'translationCardOriginal', hidden: true });
-  let originalOpen = false;
+  let originalOpen = getTranslationOriginalOpen();
   const originalToggle = button('translationCardOriginalToggle', tr('原文对照'), 'list', () => {
-    originalOpen = !originalOpen; refresh();
+    setTranslationOriginalOpen(!originalOpen);
   });
   quote.before(original); original.append(quote);
   const meta = el('div', { class: 'reading-card-meta' });
@@ -250,7 +264,6 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     quote.textContent = record.retry?.text || record.quote || '';
     content.innerHTML = render(record.text || '');
     historySelectionId = record.id; historySelectionText = String(record.text || ''); actionError = '';
-    originalOpen = false;
     ensureVisible(); resetView();
     content.scrollTop = 0;
     if (keepInputFocus) input.focus({ preventScroll: true });
@@ -328,11 +341,16 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     if (frame || disposed) return;
     frame = requestAnimationFrame(() => { frame = 0; refresh(); });
   }
+  const syncOriginalPreference = event => {
+    originalOpen = !!event.detail;
+    refresh();
+  };
+  window.addEventListener(TRANSLATION_ORIGINAL_OPEN_EVENT, syncOriginalPreference);
   const observer = new MutationObserver(scheduleRefresh);
   observer.observe(card, { attributes: true, attributeFilter: ['class', 'data-entry-id'], childList: false });
   observer.observe(content, { childList: true, characterData: true, subtree: true });
   observer.observe(quote, { childList: true, characterData: true, subtree: true });
   refresh();
   return { open, openHistory, select, refresh, resetView, addCapture, addPassages,
-    dispose() { disposed = true; observer.disconnect(); if (frame) cancelAnimationFrame(frame); } };
+    dispose() { disposed = true; observer.disconnect(); window.removeEventListener(TRANSLATION_ORIGINAL_OPEN_EVENT, syncOriginalPreference); if (frame) cancelAnimationFrame(frame); } };
 }

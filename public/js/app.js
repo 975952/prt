@@ -13,7 +13,7 @@ import { renderPaperDiscovery, normalizePaperDiscovery } from './paper-discovery
 import { isPaperNavigationRequest, normalizePaperSearchPlan, PAPER_SEARCH_PLAN_PROMPT } from './paper-request.js';
 import { AGENT_PROFILE_KEY, readAgentProfile, writeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
-import { createTranslationCard } from './translation-card.js';
+import { createTranslationCard, getTranslationOriginalOpen, setTranslationOriginalOpen, TRANSLATION_ORIGINAL_OPEN_EVENT } from './translation-card.js';
 import { createImmersiveReading } from './immersive-reading.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle, paperAccess } from './pdfview.js';
 import { disposePdfDocument } from './pdf-lifecycle.js';
@@ -83,6 +83,7 @@ const AI_BLOCKS = [
   { id: 'translate', title: tr("译文"), hint: tr("翻译选文、粘贴的文字或截图") },
   { id: 'chat', title: tr("问答"), hint: tr("围绕论文提问，或选中一段文字深入讨论") },
 ];
+const translationOriginalSyncs = new WeakMap();
 
 
 /** 只许待在右栏的面板（= PANEL_DEFS 里 dock:'right' 的那两个） */
@@ -5919,6 +5920,12 @@ function translationRoot(record) {
 }
 function initReadingTools() {
   let layoutBeforeBook = null;
+  window.addEventListener(TRANSLATION_ORIGINAL_OPEN_EVENT, event => {
+    const open = !!event.detail;
+    document.querySelectorAll('.translation-original').forEach(details => {
+      if (details.open !== open) { translationOriginalSyncs.set(details, open); details.open = open; }
+    });
+  });
   $('#readerImport').onclick = () => $('#fileInput').click();
   translationCardUI = createTranslationCard({
     getRecords: () => state.sessionEntries.filter(row => row.block === 'translate' && (!row.docId || row.docId === state.doc?.docId)),
@@ -6920,6 +6927,11 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
           onclick: () => navigateEntrySource(root, page, sourceText),
         }) : null,
       );
+      original.open = getTranslationOriginalOpen();
+      original.addEventListener('toggle', () => {
+        if (translationOriginalSyncs.get(original) === original.open) { translationOriginalSyncs.delete(original); return; }
+        setTranslationOriginalOpen(original.open);
+      });
       direction.append(original);
     } else {
       direction.append(caption);
