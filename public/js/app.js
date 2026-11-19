@@ -5830,6 +5830,12 @@ function showBubble(sel) {
   const right = sel?.source === 'right';
   b.dataset.source = right ? 'right' : 'body';
   // 同一套气泡：右栏里翻译 / 写笔记无意义（笔记需要正文锚点），只换文案
+  const addTranslate = b.querySelector('button[data-act="add-translate"]');
+  if (addTranslate) {
+    addTranslate.title = immersiveReading?.active
+      ? tr("加入译文：每段单独翻译，逐一显示在译文卡片")
+      : tr("分段加入译文，跳过图注或脚注，最后合并翻译");
+  }
   const add = b.querySelector('button[data-act="add"]');
   if (add) {
     const label = add.querySelector('span');
@@ -11900,6 +11906,18 @@ async function addToTranslate(sel) {
     id: uid(), kind: 'text', text: part.cleanText || cleanText(part.text || ''), docId,
   })).filter((part) => part.text);
   if (!pieces.length) return;
+  /* 翻书模式：可见的译文区就是浮动卡片，没有右栏草稿可攒。
+     逐段单独翻译，每段各成一条译文（卡片里用「上一条 / 下一条」翻看），
+     否则内容只会进到被隐藏的右栏草稿里，卡片看起来毫无反应（用户反馈）。 */
+  if (immersiveReading?.active) {
+    for (const piece of pieces) {
+      const part = { ...sel, text: piece.text, cleanText: piece.text, page: piece.page || null,
+        endPage: piece.endPage || piece.page || null, pages: piece.pages || (piece.page ? [piece.page] : []),
+        rectsByPage: piece.rectsByPage || {} };
+      await doTranslate(part);
+    }
+    return;
+  }
   const owner = { docId, mode: 'translate' };
   revealTranslatePanel();
   await loadComposerDraft(owner).catch(() => {});

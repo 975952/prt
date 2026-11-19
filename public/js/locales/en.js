@@ -546,6 +546,7 @@ export const en = {
   "全文搜索　Ctrl+F": "Search paper · Ctrl+F", "全部": "All", "关闭": "Close", "关闭搜索并返回阅读区": "Close search and return to reading",
   "关闭设置": "Close settings", "关闭译文": "Close translation", "关闭（自动保存）": "Close (autosaved)", "写点想法…（留空也会保存这段文字）": "Add a thought… (leave blank to save just the passage)",
   "写笔记（只在页边留一个小书签，不加黄色高亮）": "Add a note (marks the page margin)", "分段加入译文，跳过图注或脚注，最后合并翻译": "Collect passages to translate together, skipping captions or footnotes",
+  "加入译文：每段单独翻译，逐一显示在译文卡片": "Add to translation: each passage is translated separately in the translation card",
   "切换文件夹": "Switch folder", "划词译文": "Selection translation", "删除这一条": "Delete item", "加入译文": "Add to translation", "历史面板": "History panel",
   "双指缩放": "Pinch to zoom", "发送": "Send", "发送范围": "Context", "只搜索当前打开的论文": "Search the current paper only", "同一文件夹共用": "Shared within a folder",
   "回到首页（书架）": "Go to library", "回答与译文字号": "Answer and translation text size", "图片模型（可选）": "Image model (optional)", "填写接口服务提供的模型名": "Model name from your service provider",
