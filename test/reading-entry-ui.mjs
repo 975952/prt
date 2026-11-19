@@ -65,9 +65,8 @@ try {
   await page.locator('#homeAgent').click();
   await page.waitForFunction(() => document.body.classList.contains('agent-full'));
   assert.equal(await page.$eval('#agentLandingName', n => n.textContent), 'Alina');
-  const tops = await page.$$eval('#agentLaunchActions > button', nodes => nodes.map(n => n.getBoundingClientRect().top));
-  assert.equal(tops.length, 3);
-  assert.ok(Math.max(...tops) - Math.min(...tops) < 2);
+  const launchCards = await page.$$eval('#agentLaunchActions > button', nodes => nodes.length);
+  assert.equal(launchCards, 2, 'reading resume belongs in the sidebar, not among launch cards');
   await page.hover('#agentStartSearch'); await pause(350);
   const hoverTransform = await page.$eval('#agentStartSearch', n => getComputedStyle(n).transform);
   assert.ok(await page.$eval('#agentStartSearch', n => { const m = new DOMMatrixReadOnly(getComputedStyle(n).transform); return m.a > 1 && m.m42 === 0; }), 'hover gently enlarges without vertical movement');
@@ -80,13 +79,22 @@ try {
     assert.ok(await page.$eval(selector, n => n.getBoundingClientRect().height > 30 && getComputedStyle(n).visibility !== 'hidden'));
   }
   assert.equal(await page.$eval('#agentReadingEntry .agent-launch-title', n => n.textContent), '打开上次阅读区');
+  assert.equal(await page.$eval('#agentReadingEntry .agent-resume-name', n => n.textContent), 'Reading');
+  assert.ok(await page.evaluate(() => {
+    const card = document.querySelector('#agentReadingEntry').getBoundingClientRect();
+    const side = document.querySelector('#agentNav').getBoundingClientRect();
+    const primary = document.querySelector('.agent-nav-primary').getBoundingClientRect();
+    const chats = document.querySelector('.agent-nav-recents').getBoundingClientRect();
+    return card.bottom <= side.bottom && card.top > chats.top && primary.top < chats.top;
+  }), 'the resume card stays below the chat list in the sidebar');
+  await page.screenshot({ path: path.join(scratch, 'alina-sidebar-reading.png') });
   await page.locator('#agentSidebarToggle').click();
   assert.ok(await page.$eval('#agentNavNew', n => n.getBoundingClientRect().width > 30));
   assert.equal(await page.$('#agentNewSessionEntry'), null);
   assert.ok(await page.$('#agentNavNew [data-agent-icon="chat-new"] svg'));
   await page.evaluate(() => window.__ctx.openAgentWorkspace({ landing: false }));
   await pause(350);
-  assert.ok(await page.evaluate(() => Math.abs(document.querySelector('#agentReadingEntry').getBoundingClientRect().left - document.querySelector('#composer .composer-row').getBoundingClientRect().left) < 2));
+  assert.ok(await page.evaluate(() => document.querySelector('#agentReadingEntry').closest('#agentNav') !== null));
   assert.equal(await page.$eval('#sessBar', n => getComputedStyle(n).display), 'none');
   const oldSid = await page.evaluate(() => window.__ctx.activeSession);
   await page.locator('#agentNavNew').click();
@@ -111,6 +119,11 @@ try {
   await page.locator('#homeBtn').click();
   await page.waitForFunction(() => !document.body.classList.contains('reading'));
   assert.equal(await page.$eval('#homeReadingEntry span', n => n.textContent), '回到阅读区');
+  assert.equal(await page.$eval('#homeReadingEntry .home-reading-title', n => n.textContent), 'Reading');
+  assert.ok(await page.evaluate(() => ['#homeOrganize', '#homeOpen'].every(selector => {
+    const button = document.querySelector(selector);
+    return getComputedStyle(button).backgroundColor !== 'rgba(0, 0, 0, 0)';
+  })), 'Library organize and open actions use filled buttons');
   await page.locator('#homeReadingEntry').click();
   await page.waitForFunction(() => document.body.classList.contains('reading'));
   assert.deepEqual(await page.evaluate(() => ({ scale: window.__viewer.scale, docId: window.__state.doc.docId })), before);

@@ -98,7 +98,7 @@ async function capture(name, trigger, { screenshot = false } = {}) {
     const frame = () => {
       const current = window.__viewer?.current, entry = window.__viewer?.rendered?.get(current);
       for (const animation of document.documentElement.getAnimations({ subtree: true })) track(animation);
-      const viewGroups = ['alina-surface', 'alina-composer', 'alina-messages', 'alina-identity', 'alina-paper', 'alina-outline', 'alina-tabs', 'alina-tools']
+      const viewGroups = ['root', 'alina-surface', 'alina-composer', 'alina-messages', 'alina-identity', 'alina-paper', 'alina-outline', 'alina-tabs', 'alina-tools']
         .flatMap(name => ['group', 'old', 'new'].map(part => {
           const pseudo = `::view-transition-${part}(${name})`, style = getComputedStyle(document.documentElement, pseudo);
           return { name, part, animation: style.animationName, transform: style.transform, opacity: style.opacity,
@@ -211,6 +211,12 @@ try {
   // Choreography assertions are based on user-visible moving surfaces, not timer names.
   const dockFrames = cold.frames.filter(frame => frame.phase === 'dock' && frame.body.includes('agent-docked'));
   const values = (name, part) => dockFrames.flatMap(frame => frame.viewGroups.filter(group => group.name === name && group.part === part));
+  for (const part of ['old', 'new']) {
+    const rootSnapshots = values('root', part);
+    assert.ok(rootSnapshots.length && rootSnapshots.every(group => group.animation === 'none'),
+      `The whole-window ${part} snapshot must not animate: ${JSON.stringify(rootSnapshots)}`);
+  }
+  pass('root snapshots stay still while named surfaces move');
   const surfaceMotion = values('alina-surface', 'group').filter(group => group.transform && group.transform !== 'none');
   assert.ok(surfaceMotion.length > 2 && new Set(surfaceMotion.map(group => group.transform)).size > 1,
     `The named Alina surface should visibly travel, got ${JSON.stringify(surfaceMotion)}`);

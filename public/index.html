@@ -247,11 +247,19 @@
           <header class="home-head">
             <h1 id="homeHeading">Library</h1>
             <div class="home-head-actions">
-              <button type="button" class="workspace-action reading-entry" id="homeReadingEntry"><span>打开上次阅读区</span></button>
-              <button type="button" class="workspace-action" id="homeOrganize"><span>整理 PDF</span></button>
-              <button type="button" class="workspace-action" id="homeOpen"><span>打开 PDF</span></button>
+              <button type="button" class="workspace-action workspace-action-primary" id="homeOrganize"><span>整理 PDF</span></button>
+              <button type="button" class="workspace-action workspace-action-primary" id="homeOpen"><span>打开 PDF</span></button>
             </div>
           </header>
+          <button type="button" class="home-reading-card reading-entry" id="homeReadingEntry">
+            <span class="home-reading-kicker">打开上次阅读区</span>
+            <span class="home-reading-icon" data-agent-icon="book" aria-hidden="true"></span>
+            <span class="home-reading-copy">
+              <span class="home-reading-title">还没有阅读记录</span>
+              <span class="home-reading-meta"></span>
+            </span>
+            <span class="home-reading-action">继续 →</span>
+          </button>
           <section class="home-recent" id="homeRecent" aria-label="Library">
             <div class="home-library-toolbar">
               <label class="home-search"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><circle cx="10.8" cy="10.8" r="6.4"/><path d="M15.6 15.6 20.8 20.8"/></svg><input id="homeSearch" type="search" placeholder="搜索论文或文件夹" aria-label="搜索论文或文件夹" autocomplete="off" /></label>
@@ -279,12 +287,22 @@
   <aside class="agent-nav" id="agentNav" aria-label="全局会话导航">
     <nav class="agent-nav-primary" aria-label="会话导航">
       <button type="button" class="agent-nav-button agent-nav-new" id="agentNavNew"><span data-agent-icon="chat-new" aria-hidden="true"></span><span>新对话</span></button>
+      <button type="button" class="agent-nav-button" id="agentPapersToggle" aria-expanded="false" aria-controls="agentPaperPicker"><span data-agent-icon="book" aria-hidden="true"></span><span>打开论文</span></button>
       <button type="button" class="agent-nav-button" id="agentHistory"><span data-agent-icon="history" aria-hidden="true"></span><span>历史会话</span></button>
     </nav>
     <section class="agent-nav-recents" aria-labelledby="agentNavRecentHeading">
       <h2 id="agentNavRecentHeading">最近会话</h2>
       <div id="agentNavRecent"><p class="agent-nav-empty">对话会出现在这里</p></div>
     </section>
+    <nav class="agent-nav-foot" aria-label="阅读区">
+      <button type="button" class="agent-sidebar-resume reading-entry" id="agentReadingEntry">
+        <span class="agent-resume-icon" data-agent-icon="book" aria-hidden="true"></span>
+        <span class="agent-resume-kicker agent-launch-title">打开上次阅读区</span>
+        <span class="agent-resume-name">还没有阅读记录</span>
+        <span class="agent-resume-meta"></span>
+        <span class="agent-resume-arrow" data-agent-icon="chevron-right" aria-hidden="true"></span>
+      </button>
+    </nav>
   </aside>
   <div class="splitter" id="splitRight" title="拖动调整宽度"></div>
 
@@ -296,7 +314,6 @@
       </div>
       <div class="agent-identity-actions">
         <button class="agent-action agent-landing-back" id="agentLandingBack" type="button"><span data-agent-icon="chevron-left" aria-hidden="true"></span><span>起始页</span></button>
-        <button class="agent-action" id="agentPapersToggle" type="button" aria-expanded="false" aria-controls="agentPaperPicker"><span data-agent-icon="book" aria-hidden="true"></span><span>打开论文</span></button>
         <button class="agent-action agent-expand" id="agentExpand" type="button" title="展开助手" aria-label="展开助手"><span data-agent-icon="popout" aria-hidden="true"></span></button>
       </div>
     </header>
@@ -304,9 +321,6 @@
       <h1 id="agentLandingName" data-agent-name>Alina</h1>
       <p>今天想读什么？</p>
     </section>
-    <nav class="agent-visible-actions" aria-label="会话与阅读">
-      <button type="button" class="workspace-action reading-entry" id="agentReadingEntry"><span class="agent-launch-icon" data-agent-icon="book" aria-hidden="true"></span><span class="agent-launch-copy"><span class="agent-launch-title">打开上次阅读区</span><span class="agent-launch-detail">回到原文，接着阅读</span></span><span class="agent-launch-arrow" data-agent-icon="chevron-right" aria-hidden="true"></span></button>
-    </nav>
     <section class="agent-paper-picker" id="agentPaperPicker" aria-label="选择论文" hidden>
       <div class="agent-picker-heading"><label for="agentPaperSearch">从书架打开</label><button class="agent-action agent-icon-button" id="agentPapersClose" type="button" title="收起论文列表" aria-label="收起论文列表"><span data-agent-icon="close" aria-hidden="true"></span></button></div>
       <input id="agentPaperSearch" type="search" placeholder="搜索论文名称或文件夹…" aria-label="搜索论文名称或文件夹" autocomplete="off" />

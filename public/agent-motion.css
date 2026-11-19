@@ -2,7 +2,7 @@
 html[data-agent-motion]::view-transition { pointer-events: none; }
 html[data-agent-motion]::view-transition-group(*) { animation-duration: 720ms; animation-timing-function: cubic-bezier(.4, 0, .2, 1); }
 html[data-agent-motion]::view-transition-old(root),
-html[data-agent-motion]::view-transition-new(root) { animation-duration: 320ms; }
+html[data-agent-motion]::view-transition-new(root) { animation: none !important; }
 html[data-agent-motion]::view-transition-group(alina-surface) { z-index: 4; }
 html[data-agent-motion]::view-transition-group(alina-composer) { z-index: 7; }
 html[data-agent-motion]::view-transition-old(alina-surface),

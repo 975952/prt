@@ -92,9 +92,21 @@ try {
   });
   await page.evaluate(() => window.armModeSwitchHold(true));
   await page.click('#immersiveBtn');
+  await page.waitForFunction(() => window.modeSwitchHold?.waiting);
+  await page.evaluate(() => document.getElementById('immersiveBtn').click());
+  await page.evaluate(() => window.releaseModeSwitchHold());
+  await page.waitForFunction(() => !document.body.classList.contains('immersive-reading') && !__viewer.immersive);
+  await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
+  console.log('PASS an exit requested during entry is queued and finishes in normal reading mode');
+  await page.evaluate(() => window.armModeSwitchHold(true));
+  await page.click('#immersiveBtn');
   await page.waitForFunction(() => window.modeSwitchHold?.waiting && !document.getElementById('immersiveTransitionCover').hidden);
-  assert.equal(await page.evaluate(() => document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.id), 'immersiveTransitionCover',
-    'the transition cover hides the intermediate entry layout');
+  assert.deepEqual(await page.evaluate(() => {
+    const cover = document.getElementById('immersiveTransitionCover'), rect = cover.getBoundingClientRect();
+    const reader = document.querySelector('.viewer-wrap').getBoundingClientRect();
+    return { contained: rect.left >= reader.left && rect.top >= reader.top && rect.right <= reader.right && rect.bottom <= reader.bottom,
+      pointerEvents: getComputedStyle(cover).pointerEvents, intercepts: document.elementFromPoint(innerWidth / 2, innerHeight / 2) === cover };
+  }), { contained: true, pointerEvents: 'none', intercepts: false }, 'the mode switch cover stays inside the reader and does not block clicks');
   await page.evaluate(() => window.releaseModeSwitchHold());
   await page.waitForFunction(() => document.body.classList.contains('immersive-reading') && __viewer.immersive && document.body.classList.contains('immersive-chrome-visible'));
   await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
@@ -261,8 +273,12 @@ try {
   await page.evaluate(() => window.armModeSwitchHold(false));
   await page.mouse.move(750, 2); await page.click('#immersiveExit');
   await page.waitForFunction(() => window.modeSwitchHold?.waiting && !document.getElementById('immersiveTransitionCover').hidden);
-  assert.equal(await page.evaluate(() => document.elementFromPoint(innerWidth / 2, innerHeight / 2)?.id), 'immersiveTransitionCover',
-    'the transition cover hides the intermediate exit layout');
+  assert.deepEqual(await page.evaluate(() => {
+    const cover = document.getElementById('immersiveTransitionCover'), rect = cover.getBoundingClientRect();
+    const reader = document.querySelector('.viewer-wrap').getBoundingClientRect();
+    return { contained: rect.left >= reader.left && rect.top >= reader.top && rect.right <= reader.right && rect.bottom <= reader.bottom,
+      pointerEvents: getComputedStyle(cover).pointerEvents, intercepts: document.elementFromPoint(innerWidth / 2, innerHeight / 2) === cover };
+  }), { contained: true, pointerEvents: 'none', intercepts: false }, 'exit transition stays inside the reader and does not block clicks');
   await page.evaluate(() => window.releaseModeSwitchHold());
   await page.waitForFunction(() => !document.body.classList.contains('immersive-reading') && !__viewer.immersive);
   await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);

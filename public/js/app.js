@@ -729,6 +729,9 @@ let agentLandingActive = false;
 let agentGlobalLanding = null;
 let agentNavigationBusy = false;
 let conversationMoveBusy = false;
+let pendingMainView = null;
+let mainViewDrain = null;
+let activeMainView = null;
 let moveTargetNavigation = '';
 let agentHandoff = null;
 let agentName = '';
@@ -1238,6 +1241,10 @@ function unparkDocView(docId) {
     const meta = state.blockMeta?.[block.id];
     if (!saved || !meta?.body) continue;
     meta.body.replaceChildren(...saved.nodes);
+    const originalOpen = getTranslationOriginalOpen();
+    for (const details of meta.body.querySelectorAll('.translation-original')) {
+      if (details.open !== originalOpen) { translationOriginalSyncs.set(details, originalOpen); details.open = originalOpen; }
+    }
     try { meta.body.scrollTop = saved.scrollTop || 0; } catch { /* ignore */ }
   }
   const liveChat = chatViews.get(currentChatKey());
@@ -1796,8 +1803,9 @@ function initTopbar() {
   document.body.classList.add('topbar-static');
   const home = $('#homeBtn');
   if (home) home.onclick = () => {
-    if (agentNavigationBusy) return;
-    if (!document.body.classList.contains('reading')) void returnToReader();
+    const intendedView = pendingMainView?.view || activeMainView;
+    const reading = intendedView ? intendedView !== 'library' : document.body.classList.contains('reading');
+    if (!reading) void returnToReader();
     else showHome();
   };
   // sessions.js owns the header menu; one click must open only one surface.
@@ -2520,7 +2528,35 @@ function rememberReadingWorkspace() {
   });
 }
 
-async function returnToReader() {
+function requestMainView(view, options) {
+  pendingMainView = { view, options };
+  return flushMainViewNavigation();
+}
+function flushMainViewNavigation() {
+  if (mainViewDrain || agentNavigationBusy || conversationMoveBusy) return mainViewDrain || Promise.resolve();
+  mainViewDrain = (async () => {
+    while (pendingMainView && !agentNavigationBusy && !conversationMoveBusy) {
+      const next = pendingMainView;
+      pendingMainView = null;
+      activeMainView = next.view;
+      try {
+        if (next.view === 'library') await performShowHome();
+        else if (next.view === 'alina') await performOpenAgentWorkspace(next.options);
+        else await performReturnToReader();
+      } catch (error) {
+        toast(tr('切换界面失败：{0}', error.message), 'err', 5000);
+      } finally {
+        activeMainView = null;
+      }
+    }
+  })().finally(() => {
+    mainViewDrain = null;
+    if (pendingMainView && !agentNavigationBusy && !conversationMoveBusy) void flushMainViewNavigation();
+  });
+  return mainViewDrain;
+}
+function returnToReader() { return requestMainView('reader'); }
+async function performReturnToReader() {
   if (agentNavigationBusy || conversationMoveBusy) return;
   const loaded = viewer?.pdf && state.viewerDocId === state.doc?.docId
     && (state.papers.find(paper => (paper.path || paper.name) === state.doc.path)
@@ -2531,8 +2567,22 @@ async function returnToReader() {
   if (!paper) { toast(tr("还没有阅读记录")); return; }
   const saved = homeReadingState?.path === paper.path ? homeReadingState : null;
   agentNavigationBusy = true;
+  const surface = $('#rightSide');
+  const wasInert = surface.inert;
+  surface.inert = true;
+  agentWorkspace?.setTransitioning(true);
   try {
-    await parkAgentConversation();
+    const parking = parkAgentConversation();
+    // The PDF is already in memory. Reveal it in this click's frame instead of
+    // holding the previous workspace on screen while conversation writes finish.
+    if (loaded) {
+      sessionsCloseOverlays();
+      agentWorkspace?.closePapers();
+      dismissAgentHandoff();
+      setAgentWorkspaceView(saved?.agentView === 'docked' ? 'docked' : 'closed');
+      setView('reading');
+    }
+    await parking;
     await changeAgentScope(saved?.sessionOverride ?? null, saved?.conversation);
     sessionsCloseOverlays();
     agentWorkspace?.closePapers();
@@ -2550,17 +2600,28 @@ async function returnToReader() {
     await viewer.refreshPage?.(viewer.current);
   } catch (error) {
     toast(tr("返回阅读失败：{0}", error.message), 'err', 5000);
-  } finally { agentNavigationBusy = false; }
+  } finally {
+    surface.inert = wasInert;
+    agentNavigationBusy = false;
+    agentWorkspace?.setTransitioning(false);
+  }
 }
 
 function refreshReadingEntries() {
   const loaded = !!(viewer?.pdf && state.viewerDocId === state.doc?.docId);
   const paper = loaded ? state.doc : recentDocs()[0];
   const label = loaded || homeReadingState ? tr('回到阅读区') : tr('打开上次阅读区');
+  const paperName = paper ? paperTitles.label(paper) || paper.label || paper.name : tr('还没有阅读记录');
+  const savedPosition = homeReadingState?.path === paper?.path ? homeReadingState : null;
+  const page = loaded ? viewer.current : savedPosition?.page || paper?.page || 0;
+  const ts = loaded ? Number(serverState.docs?.[paper?.docId]?.ts) || 0 : Number(paper?.ts) || 0;
+  const detail = [page ? tr('第 {0} 页', page) : '', ts ? relTime(ts) : ''].filter(Boolean).join(' · ');
   for (const id of ['homeReadingEntry', 'agentReadingEntry']) {
     const button = $(`#${id}`);
     if (!button) continue;
-    (button.querySelector('.agent-launch-title') || button.querySelector('span:last-child')).textContent = label;
+    button.querySelector('.home-reading-kicker, .agent-resume-kicker').textContent = label;
+    button.querySelector('.home-reading-title, .agent-resume-name').textContent = paperName;
+    button.querySelector('.home-reading-meta, .agent-resume-meta').textContent = detail;
     button.disabled = !paper;
     button.title = paper ? `${label} · ${paper.name}` : tr('还没有阅读记录');
     button.setAttribute('aria-label', button.title);
@@ -2642,7 +2703,8 @@ function initAgentWorkspace() {
   const profile = readAgentProfile();
   agentName = agentDisplayName(profile);
   agentWorkspace = createAgentWorkspace({
-    onOpen: () => agentWorkspaceView === 'full' ? returnToReader() : openAgentWorkspace(),
+    onOpen: () => (pendingMainView?.view || activeMainView || (agentWorkspaceView === 'full' ? 'alina' : 'reader')) === 'alina'
+      ? returnToReader() : openAgentWorkspace(),
     onExpand: () => openAgentWorkspace({ landing: false }),
     onLanding: () => openAgentWorkspace({ landing: true }),
     onStartSearch: () => $('#chatInput').focus({ preventScroll: true }),
@@ -2691,20 +2753,25 @@ function initAgentWorkspace() {
     refreshAgentTitle();
   });
 }
-async function openAgentWorkspace({ landing } = {}) {
+function openAgentWorkspace(options) { return requestMainView('alina', options); }
+async function performOpenAgentWorkspace({ landing } = {}) {
   if (immersiveReading?.active) await immersiveReading.setActive(false);
   if (agentNavigationBusy) return;
   agentNavigationBusy = true;
+  const surface = $('#rightSide');
+  const wasInert = surface.inert;
+  surface.inert = true;
+  agentWorkspace?.setTransitioning(true);
   try {
     rememberReadingWorkspace();
     const fresh = landing === true;
     const expanding = landing === false;
     landing ??= agentGlobalLanding ?? true;
     const from = agentWorkspaceView === 'docked' ? agentWorkspace.captureRect() : null;
-    if (landing && agentSessionOverride === 'global') await parkAgentConversation();
+    const parkGlobal = landing && agentSessionOverride === 'global';
+    const changeScope = !expanding || agentWorkspaceView === 'closed';
     // Returning from Library restores the last global view. Expanding a docked
     // chat keeps its current owner, conversation and unsent draft.
-    if (!expanding || agentWorkspaceView === 'closed') await changeAgentScope('global');
     dismissAgentHandoff();
     const update = () => {
       setPanelVisible('chat', true);
@@ -2713,6 +2780,8 @@ async function openAgentWorkspace({ landing } = {}) {
       setView('reading');
     };
     const prepare = async () => {
+      if (parkGlobal) await parkAgentConversation();
+      if (changeScope) await changeAgentScope('global');
       await sessionsOpenWorkspace({ choose: false });
       // Give the landing its own empty conversation before accepting input.
       // Otherwise the first question is saved as the previous conversation's
@@ -2726,7 +2795,11 @@ async function openAgentWorkspace({ landing } = {}) {
     };
     if (from) await agentWorkspace.transitionLayout(update, { direction: 'expand', prepare });
     else { update(); await prepare(); }
-  } finally { agentNavigationBusy = false; }
+  } finally {
+    surface.inert = wasInert;
+    agentNavigationBusy = false;
+    agentWorkspace?.setTransitioning(false);
+  }
 }
 async function openAgentPaper(paper, sourceElement = null) {
   if (agentNavigationBusy || !paper?.docId) return;
@@ -2786,6 +2859,7 @@ async function openAgentPaper(paper, sourceElement = null) {
     agentNavigationBusy = false;
     agentWorkspace.endPaperMotion();
     agentWorkspace.setTransitioning(false);
+    void flushMainViewNavigation();
   }
 }
 async function chooseAgentLocalConversation(fresh) {
@@ -2801,12 +2875,13 @@ async function chooseAgentLocalConversation(fresh) {
     }
     else await sessionsOpenWorkspace({ choose: true });
     activateComposerDraft('chat');
-  } finally { agentNavigationBusy = false; }
+  } finally { agentNavigationBusy = false; void flushMainViewNavigation(); }
 }
 
 /** 首页只是工作区的另一视图：保留标签、PDF 与会话任务，作废迟到的打开回调。 */
-function showHome() {
-  if (immersiveReading?.active) { void immersiveReading.setActive(false).then(showHome); return; }
+function showHome() { return requestMainView('library'); }
+async function performShowHome() {
+  if (immersiveReading?.active) await immersiveReading.setActive(false);
   if (conversationMoveBusy) return;
   rememberReadingWorkspace();
   if (agentWorkspaceView !== 'closed') {
@@ -7418,6 +7493,7 @@ async function moveConversation(row, target) {
     return result;
   } finally {
     pendingSessionOpen = false; agentNavigationBusy = false; conversationMoveBusy = false; moveTargetNavigation = '';
+    void flushMainViewNavigation();
     refreshBusyState(); updateComposerHint();
   }
 }

@@ -17,8 +17,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     'agentHandoffContext', 'agentContinue', 'agentRestore', 'agentNew', 'agentStatus', 'rightSide', 'aiArea', 'sessHistory',
     'homeBtn', 'agentNavNew', 'agentNavRecent']
     .map(id => [id, byId(id)]));
-  const paperActionHome = ui.agentPapersToggle.parentElement;
-  const paperActionNext = ui.agentPapersToggle.nextSibling;
+  const paperActionHome = ui.agentIdentity.querySelector('.agent-identity-actions');
   const primaryNav = ui.agentNavNew.parentElement;
   const sidebarKey = 'reader.agent.sidebarCollapsed';
   let sidebarCollapsed = false;
@@ -68,8 +67,8 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     ui.agentStatus.hidden = !text;
   }
   function disabled() {
-    for (const id of ['agentBtn', 'homeAgent', 'agentExpand', 'agentContinue', 'agentRestore', 'agentNew', 'agentLandingBack',
-      'agentStartSearch', 'agentResume', 'agentHistory', 'homeBtn', 'agentNavNew', 'agentPapersToggle']) {
+    for (const id of ['agentExpand', 'agentContinue', 'agentRestore', 'agentNew', 'agentLandingBack',
+      'agentStartSearch', 'agentResume', 'agentHistory', 'agentNavNew', 'agentPapersToggle']) {
       ui[id].disabled = busy || transitioning;
     }
     ui.agentResume.disabled ||= !hasRecent;
@@ -107,6 +106,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   function setLanding(on, options = {}) {
     const revision = ++composerVersion;
     const leaving = landing && !on && view === 'full' && !transitioning;
+    const entering = !landing && !!on && view === 'full';
     const composer = byId('composer');
     const inputCard = composer.querySelector('.composer-row');
     const before = leaving && inputCard?.getClientRects().length ? inputCard.getBoundingClientRect() : null;
@@ -121,12 +121,8 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     document.body.classList.toggle('agent-landing', landing);
     ui.agentNavNew.setAttribute('aria-current', landing ? 'page' : 'false');
     ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
-    const readingEntry = byId('agentReadingEntry');
-    readingEntry.classList.toggle('agent-launch', landing);
-    readingEntry.classList.toggle('workspace-action', !landing);
-    const readingActions = document.querySelector('.agent-visible-actions');
-    (landing ? ui.agentLaunchActions : readingActions).prepend(readingEntry);
-    if (landing) { closePapers(); hideHandoff(); }
+    byId('agentReadingEntry').classList.remove('agent-launch', 'workspace-action');
+    if (entering) { closePapers(); hideHandoff(); }
     disabled(); positionHandoff();
     if (composerFrame) { cancelAnimationFrame(composerFrame); composerFrame = 0; }
     composerAnimation?.cancel(); composerAnimation = null;
@@ -162,7 +158,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     // One action follows the workspace: a named navigation entry in full view,
     // then the same control returns to the compact reader header when docked.
     if (next === 'full') primaryNav.insertBefore(ui.agentPapersToggle, ui.agentHistory);
-    else paperActionHome.insertBefore(ui.agentPapersToggle, paperActionNext);
+    else paperActionHome.insertBefore(ui.agentPapersToggle, ui.agentExpand);
     ui.agentPapersToggle.classList.toggle('agent-nav-button', next === 'full');
     ui.agentPapersToggle.classList.toggle('agent-action', next !== 'full');
     ui.agentPapersToggle.title = tr('打开论文');
@@ -186,13 +182,13 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   function setRecentConversations(rows = [], selectedSid = '') {
     const list = rows.filter(row => !row.archived && row.count > 0)
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 7);
-    ui.agentNavRecent.replaceChildren(...list.map(row => el('button', {
+    ui.agentNavRecent.replaceChildren(...(list.length ? list.map(row => el('button', {
       type: 'button', class: 'agent-nav-session', text: row.title || tr('新会话'),
       title: row.title || tr('新会话'), dataset: { agentSession: row.sid },
       'aria-current': !landing && row.sid === selectedSid ? 'page' : 'false',
       onclick: () => act(onSessionSelect, row),
-    })));
-    ui.agentNavRecent.parentElement.hidden = !list.length;
+    })) : [el('p', { class: 'agent-nav-empty', text: tr('对话会出现在这里') })]));
+    ui.agentNavRecent.parentElement.hidden = false;
     disabled();
   }
   async function transitionLayout(update, options) {
@@ -328,8 +324,13 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     if (animation === current) { animation = null; setTransitioning(false); }
   }
 
-  ui.agentBtn.addEventListener('click', () => act(onOpen));
-  ui.homeAgent.addEventListener('click', () => act(onOpen));
+  const navigate = action => {
+    if (typeof action !== 'function') return;
+    try { Promise.resolve(action()).catch(error => status(String(error?.message || tr('操作失败，请重试。')))); }
+    catch (error) { status(String(error?.message || tr('操作失败，请重试。'))); }
+  };
+  ui.agentBtn.addEventListener('click', () => navigate(onOpen));
+  ui.homeAgent.addEventListener('click', () => navigate(onOpen));
   ui.agentExpand.addEventListener('click', () => act(onExpand));
   ui.agentLandingBack.addEventListener('click', () => act(onLanding));
   ui.agentContinue.addEventListener('click', () => act(onContinue));

@@ -107,7 +107,8 @@ try {
           const nav = document.getElementById('workspaceNav'), bar = document.getElementById('topbar');
           const box = n => { const r = n.getBoundingClientRect(); return { left: r.left, right: r.right, top: r.top, bottom: r.bottom, width: r.width, height: r.height }; };
           const buttons = [...bar.querySelectorAll('button')].filter(n => n.getClientRects().length).map(n => ({ id: n.id, ...box(n), hit: (() => {
-            const r = n.getBoundingClientRect(), top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2); return top === n || n.contains(top);
+            const r = n.getBoundingClientRect(), top = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+            return { ok: top === n || n.contains(top), target: top?.id || top?.className?.baseVal || top?.className || top?.tagName || '' };
           })() }));
           return { nav: box(nav), bar: box(bar), settings: box(document.getElementById('settingsBtn')), buttons,
             labels: [...nav.querySelectorAll('button')].filter(n => n.getClientRects().length).map(n => n.innerText.trim()),
@@ -117,7 +118,7 @@ try {
         geometries.push({ label, ...geometry });
         check(`${label}: workspace labels stay beside Settings without overlap`, !geometry.overflow && !geometry.windowMenu
           && geometry.labels.join('|') === 'Library|Alina' && geometry.bar.height === 44
-          && geometry.nav.right <= geometry.settings.left && geometry.buttons.every(b => b.hit && b.left >= 0 && b.right <= width)
+          && geometry.nav.right <= geometry.settings.left && geometry.buttons.every(b => b.hit.ok && b.left >= 0 && b.right <= width)
           && geometry.buttons.every((b, i) => geometry.buttons.slice(i + 1).every(c => b.right <= c.left + .5 || c.right <= b.left + .5)), geometry);
         if ((nativeChrome && [1440, 560].includes(width)) || (!nativeChrome && width === 320)) {
           await page.screenshot({ path: path.join(scratch, `${label}.png`) });
@@ -130,6 +131,16 @@ try {
   await inspect('library');
   await page.locator('#homeBtn').click();
   check('Library without reading history remains usable', await page.$eval('#home', node => !!node.getClientRects().length));
+  const rapidNavigation = await page.evaluate(() => {
+    document.getElementById('homeAgent').click();
+    const enabledDuringSwitch = !document.getElementById('homeBtn').disabled;
+    document.getElementById('homeBtn').click();
+    return enabledDuringSwitch;
+  });
+  await page.waitForSelector('#home', { visible: true });
+  await settled();
+  check('rapid main-view clicks stay enabled and the latest destination wins', rapidNavigation
+    && !await page.evaluate(() => document.body.classList.contains('agent-full')));
   await page.click('#homeAgent');
   await page.waitForFunction(() => document.body.classList.contains('agent-full'));
   check('Alina opens from its workspace tab', await page.$eval('#agentBtn', n => n.getAttribute('aria-current') === 'page'));
@@ -179,6 +190,51 @@ try {
   const second = await position('second-paper-position');
   await openAlina(); await returnReader('#agentBtn');
   await expectPosition('Alina returns to the most recently read paper rather than the earlier PDF', second);
+  // Hold real local session writes: navigation must paint its new workspace
+  // before the disk response arrives, without losing draft or PDF ownership.
+  await page.evaluate(() => {
+    const originalFetch = window.fetch;
+    window.__navWriteGate = null;
+    window.fetch = async (...args) => {
+      const url = String(args[0]?.url || args[0]);
+      if (window.__navWriteGate && /\/api\/session\?/.test(url) && args[1]?.method === 'POST') {
+        await new Promise(resolve => window.__navWriteGate.push(resolve));
+      }
+      return originalFetch(...args);
+    };
+    window.__releaseNavWrites = () => {
+      const pending = window.__navWriteGate || [];
+      window.__navWriteGate = null;
+      for (const resolve of pending) resolve();
+    };
+  });
+  const firstAlinaFrame = await page.evaluate(async () => {
+    window.__navWriteGate = [];
+    window.__ctx.addEntry({ block: 'chat', kind: 'user', tag: 'question', text: 'Navigation latency fixture' });
+    document.getElementById('agentBtn').click();
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    return { full: document.body.classList.contains('agent-full'), controlsEnabled: !document.getElementById('homeBtn').disabled };
+  });
+  check('Alina appears on the first frame while conversation writes are delayed', firstAlinaFrame.full && firstAlinaFrame.controlsEnabled, firstAlinaFrame);
+  await page.waitForFunction(() => window.__navWriteGate.length > 0);
+  await page.evaluate(() => window.__releaseNavWrites());
+  await settled();
+  const firstReaderFrame = await page.evaluate(async () => {
+    window.__navWriteGate = [];
+    window.__ctx.addEntry({ block: 'chat', kind: 'user', tag: 'question', text: 'Return latency fixture' });
+    document.getElementById('agentReadingEntry').click();
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    return { reading: document.body.classList.contains('reading') && !document.body.classList.contains('agent-full'), samePdf: window.__navPdf === window.__viewer.pdf };
+  });
+  check('cached reader appears on the first frame while conversation writes are delayed', firstReaderFrame.reading && firstReaderFrame.samePdf, firstReaderFrame);
+  await page.waitForFunction(() => window.__navWriteGate.length > 0);
+  // A click made while the previous save is still busy is retained.
+  await page.evaluate(() => document.getElementById('homeBtn').click());
+  await page.evaluate(() => window.__releaseNavWrites());
+  await page.waitForSelector('#home', { visible: true }); await settled();
+  check('the latest workspace click survives a delayed save', !await page.evaluate(() => document.body.classList.contains('reading')));
+  await returnReader('#homeBtn');
+  await expectPosition('delayed session writes preserve the PDF reading position', second);
   // Library saves progress before hiding; a new empty workspace must still be
   // able to resume the persisted most recent PDF after an Alina round trip.
   await openLibrary();

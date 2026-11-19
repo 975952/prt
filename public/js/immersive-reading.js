@@ -6,6 +6,7 @@ import { t as tr } from './i18n.js';
 export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullscreen, isFullscreen,
   prepareChat, restoreLayout, openTranslations, beforeEnter, onExit, onError } = {}) {
   let active = false, busy = false, ownedFullscreen = false, hideTimer = 0, hideDeadline = 0, turnTimer = 0, down = null;
+  let pendingActive = null, activeTransition = null;
   let wheelAt = 0, wheelDistance = 0, wheelTurned = false;
   const body = document.body, viewerElement = document.getElementById('viewer');
   const button = (id, label, icon, action) => el('button', { id, type: 'button', class: 'immersive-control',
@@ -21,7 +22,8 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
   const total = el('span', { id: 'immersiveTotal' });
   const bottom = el('nav', { id: 'immersiveFooter', class: 'immersive-chrome', 'aria-label': tr('翻页') }, prev, page, total, next);
   const transitionCover = el('div', { id: 'immersiveTransitionCover', hidden: true, 'aria-hidden': 'true' });
-  body.append(top, bottom, transitionCover);
+  body.append(top, bottom);
+  viewerElement.closest('.viewer-wrap')?.append(transitionCover);
   viewerElement.tabIndex = -1;
   const side = document.getElementById('rightSide');
   const columns = document.getElementById('rightCols');
@@ -120,9 +122,27 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     transitionCover.classList.remove('leaving');
   }
   window.addEventListener('resize', fitChatCard);
-  async function setActive(on) {
-    if (busy || active === !!on || (on && !getViewer()?.pdf)) return;
+  function setActive(on) {
+    on = !!on;
+    if (busy) { pendingActive = on; return activeTransition || Promise.resolve(); }
+    if (active === on || (on && !getViewer()?.pdf)) return Promise.resolve();
+    pendingActive = on;
     busy = true;
+    activeTransition = (async () => {
+      try {
+        while (pendingActive !== null) {
+          const next = pendingActive;
+          pendingActive = null;
+          if (active !== next && (!next || getViewer()?.pdf)) await changeActive(next);
+        }
+      } finally {
+        busy = false;
+        activeTransition = null;
+      }
+    })();
+    return activeTransition;
+  }
+  async function changeActive(on) {
     transitionCover.hidden = false;
     transitionCover.classList.remove('leaving');
     try {
@@ -167,7 +187,6 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
       onError?.(error);
     } finally {
       await finishTransition();
-      busy = false;
     }
   }
   page.addEventListener('change', async () => {
