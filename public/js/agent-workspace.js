@@ -15,7 +15,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     'agentLanding', 'agentLaunchActions', 'agentStartSearch', 'agentResume', 'agentHistory', 'agentRecentTitle', 'chatInput',
     'agentPaperPicker', 'agentPaperSearch', 'agentPaperList', 'agentPapersClose', 'agentHandoff', 'agentHandoffLayer',
     'agentHandoffContext', 'agentContinue', 'agentRestore', 'agentNew', 'agentStatus', 'rightSide', 'aiArea', 'sessHistory',
-    'homeBtn', 'agentNavNew', 'agentNavRecent', 'agentNewSessionEntry']
+    'homeBtn', 'agentNavNew', 'agentNavRecent']
     .map(id => [id, byId(id)]));
   const paperActionHome = ui.agentPapersToggle.parentElement;
   const paperActionNext = ui.agentPapersToggle.nextSibling;
@@ -69,7 +69,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   }
   function disabled() {
     for (const id of ['agentBtn', 'homeAgent', 'agentExpand', 'agentContinue', 'agentRestore', 'agentNew', 'agentLandingBack',
-      'agentStartSearch', 'agentResume', 'agentHistory', 'homeBtn', 'agentNavNew', 'agentPapersToggle', 'agentNewSessionEntry']) {
+      'agentStartSearch', 'agentResume', 'agentHistory', 'homeBtn', 'agentNavNew', 'agentPapersToggle']) {
       ui[id].disabled = busy || transitioning;
     }
     ui.agentResume.disabled ||= !hasRecent;
@@ -334,7 +334,6 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   ui.agentResume.addEventListener('click', () => act(onResume));
   ui.agentHistory.addEventListener('click', () => act(onHistory));
   ui.agentNavNew.addEventListener('click', () => act(onLanding));
-  ui.agentNewSessionEntry.addEventListener('click', () => act(onLanding));
   ui.agentPapersToggle.addEventListener('click', () => {
     if (busy || transitioning) return;
     const open = ui.agentPaperPicker.hidden;

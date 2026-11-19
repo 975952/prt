@@ -50,19 +50,23 @@ try {
   await page.screenshot({ path: path.join(scratch, 'library-entry.png') });
   await page.locator('#homeAgent').click();
   await page.waitForFunction(() => document.body.classList.contains('agent-full'));
-  for (const selector of ['#agentReadingEntry', '#agentNewSessionEntry']) {
+  for (const selector of ['#agentReadingEntry', '#agentNavNew']) {
     assert.ok(await page.$eval(selector, n => n.getBoundingClientRect().height > 30 && getComputedStyle(n).visibility !== 'hidden'));
   }
   assert.equal(await page.$eval('#agentReadingEntry span:last-child', n => n.textContent), '打开上次阅读区');
   await page.locator('#agentSidebarToggle').click();
-  assert.ok(await page.$eval('#agentNewSessionEntry', n => n.getBoundingClientRect().width > 70));
+  assert.ok(await page.$eval('#agentNavNew', n => n.getBoundingClientRect().width > 30));
+  assert.equal(await page.$('#agentNewSessionEntry'), null);
+  assert.ok(await page.$('#agentNavNew [data-agent-icon="chat-new"] svg'));
+  await page.evaluate(() => window.__ctx.openAgentWorkspace({ landing: false }));
+  assert.equal(await page.$eval('#sessBar', n => getComputedStyle(n).display), 'none');
   const oldSid = await page.evaluate(() => window.__ctx.activeSession);
-  await page.locator('#agentNewSessionEntry').click();
+  await page.locator('#agentNavNew').click();
   await page.waitForFunction(old => window.__ctx.activeSession !== old, {}, oldSid);
   await page.screenshot({ path: path.join(scratch, 'alina-entry.png') });
   await page.setViewport({ width: 480, height: 900 }); await pause(150);
-  for (const selector of ['#agentReadingEntry', '#agentNewSessionEntry']) {
-    assert.ok(await page.$eval(selector, n => { const r = n.getBoundingClientRect(); return r.width > 60 && r.left >= 0 && r.right <= innerWidth; }));
+  for (const selector of ['#agentReadingEntry', '#agentNavNew']) {
+    assert.ok(await page.$eval(selector, n => { const r = n.getBoundingClientRect(); return r.width > 30 && r.left >= 0 && r.right <= innerWidth; }));
   }
   await page.setViewport({ width: 1600, height: 1000 }); await pause(100);
   console.log('PASS Library and Alina show explicit first-open entries; new session stays visible with sidebar collapsed');

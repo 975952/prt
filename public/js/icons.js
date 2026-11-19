@@ -12,6 +12,7 @@ export const ICONS = {
 
   // Alina: a quiet open A monogram; identity only, never a speech bubble.
   alina: '<path d="M4.3 20 10.7 4.9a1.4 1.4 0 0 1 2.6 0L19.7 20"/><path d="M7.4 14.2h9.2"/>',
+  'chat-new': '<path d="M6 4h12a3 3 0 0 1 3 3v8a3 3 0 0 1-3 3H9l-5 3V7a3 3 0 0 1 2-3z"/><path d="M12.5 7.5v7m-3.5-3.5h7"/>',
 
   // 译文：文档（带两行文字）+ 字母 A —— 对应现在的「译」
   translate: '<rect x="3" y="4" width="10.4" height="16" rx="1.7"/><path d="M5.9 8.5h4.6"/><path d="M5.9 11.7h4.6"/><path d="M15.1 20.2 18.5 10.6l3.4 9.6"/><path d="M16.4 17.1h4.2"/>',
