@@ -1,6 +1,6 @@
 /** Keep workspace navigation on one visual timeline, without cloning chat DOM. */
 export function createAgentMotion() {
-  const reduced = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
+  const reduced = () => document.documentElement.dataset.motion === 'off' || matchMedia('(prefers-reduced-motion: reduce)').matches;
   const targets = [
     ['#rightSide', 'alina-surface'], ['#composer .composer-row', 'alina-composer'],
     ['#agentNav', 'alina-navigation'], ['.viewer-wrap', 'alina-paper'],
@@ -110,5 +110,24 @@ export function createAgentMotion() {
       end();
     }
   }
-  return { begin, end, layout };
+  // Returning to a cached reader must paint immediately, even while chat saves
+  // are pending. Animate only live panels; no root snapshot or full-window fade.
+  let readerArrival = [];
+  function revealReader(update) {
+    for (const animation of readerArrival) animation.cancel();
+    readerArrival = [];
+    update();
+    if (reduced() || document.visibilityState === 'hidden') return;
+    for (const [selector, transform] of [
+      ['.viewer-wrap', 'translateX(-20px) scale(.985)'],
+      ['#leftSide', 'translateX(-14px)'], ['#rightSide', 'translateX(20px)'],
+      ['.viewer-foot', 'translateY(8px)'],
+    ]) {
+      const node = document.querySelector(selector);
+      if (!node?.getClientRects().length) continue;
+      readerArrival.push(node.animate([{ transform }, { transform: 'none' }],
+        { duration: 420, easing: 'cubic-bezier(.22,.8,.25,1)' }));
+    }
+  }
+  return { begin, end, layout, revealReader };
 }

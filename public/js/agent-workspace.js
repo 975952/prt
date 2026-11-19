@@ -5,6 +5,7 @@ import { DEFAULT_AGENT_PROFILE, normalizeAgentProfile, agentDisplayName } from '
 import { createAgentSettings } from './agent-settings.js';
 import { createAgentMotion } from './agent-motion.js';
 import { windowStorage } from './window-storage.js';
+import { initAgentResize } from './agent-resize.js';
 
 /** UI only: the caller owns conversation scope, persistence, and document navigation. */
 export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, onOpenPapers,
@@ -19,6 +20,10 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     .map(id => [id, byId(id)]));
   const paperActionHome = ui.agentIdentity.querySelector('.agent-identity-actions');
   const primaryNav = ui.agentNavNew.parentElement;
+  const readingEntry = byId('agentReadingEntry');
+  const readingFoot = readingEntry.parentElement;
+  initAgentResize(byId('agentNav'), readingFoot);
+  let entryAnimation = null;
   const sidebarKey = 'reader.agent.sidebarCollapsed';
   let sidebarCollapsed = false;
   try { sidebarCollapsed = windowStorage.getItem(sidebarKey) === '1'; } catch { /* Private storage is optional. */ }
@@ -104,6 +109,8 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     setName(profile.name); settings.setProfile(profile);
   }
   function setLanding(on, options = {}) {
+    const readingBefore = landing && !on && view === 'full' && !sidebarCollapsed
+      ? readingEntry.getBoundingClientRect() : null;
     const revision = ++composerVersion;
     const leaving = landing && !on && view === 'full' && !transitioning;
     const entering = !landing && !!on && view === 'full';
@@ -113,7 +120,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     landing = !!on && view === 'full';
     if ('hasRecent' in options) hasRecent = !!options.hasRecent;
     if ('recentTitle' in options) {
-      const title = String(options.recentTitle || '').trim().slice(0, 160);
+      const title = String(options.recentTitle || '').trim();
       ui.agentRecentTitle.textContent = title || tr('还没有历史会话');
       ui.agentRecentTitle.title = title;
       ui.agentRecentTitle.hidden = false;
@@ -121,7 +128,40 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     document.body.classList.toggle('agent-landing', landing);
     ui.agentNavNew.setAttribute('aria-current', landing ? 'page' : 'false');
     ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
-    byId('agentReadingEntry').classList.remove('agent-launch', 'workspace-action');
+    const entryHome = landing ? ui.agentLaunchActions : readingFoot;
+    const movedEntry = readingEntry.parentElement !== entryHome;
+    if (movedEntry) entryHome.prepend(readingEntry);
+    readingEntry.classList.toggle('agent-launch', landing);
+    readingFoot.hidden = landing;
+    if (movedEntry && view === 'full' && document.documentElement.dataset.motion !== 'off' && !matchMedia('(prefers-reduced-motion: reduce)').matches) {
+      entryAnimation?.cancel();
+      readingFoot.style.removeProperty('overflow');
+      let frames = [
+        { opacity: 0, transform: `translateY(${landing ? 10 : -10}px) scale(.96)` },
+        { opacity: 1, transform: 'translateY(0) scale(1)' },
+      ];
+      const after = readingEntry.getBoundingClientRect();
+      if (readingBefore?.width > 0 && after.width > 80 && !landing) {
+        const zoom = after.width / readingEntry.offsetWidth || 1;
+        readingFoot.style.overflow = 'visible';
+        byId('agentNav').classList.add('agent-entry-moving');
+        frames = [
+          { transformOrigin: 'top left', transform: `translate(${(readingBefore.x - after.x) / zoom}px, ${(readingBefore.y - after.y) / zoom}px) scale(${readingBefore.width / after.width}, ${readingBefore.height / after.height})` },
+          { transformOrigin: 'top left', transform: 'translate(0,0) scale(1)' },
+        ];
+      }
+      entryAnimation = readingEntry.animate(frames, { duration: 380, easing: 'cubic-bezier(.22,.8,.25,1)' });
+      const current = entryAnimation;
+      current.finished.catch(() => {}).then(() => {
+        if (entryAnimation !== current) return;
+        readingFoot.style.removeProperty('overflow');
+        byId('agentNav').classList.remove('agent-entry-moving');
+      });
+      if (landing) for (const [i, card] of [...ui.agentLaunchActions.children].entries()) {
+        if (card !== readingEntry) card.animate([{ opacity: 0, transform: 'scale(.97)' }, { opacity: 1, transform: 'scale(1)' }],
+          { duration: 300, delay: i * 35, fill: 'backwards', easing: 'cubic-bezier(.22,.8,.25,1)' });
+      }
+    }
     if (entering) { closePapers(); hideHandoff(); }
     disabled(); positionHandoff();
     if (composerFrame) { cancelAnimationFrame(composerFrame); composerFrame = 0; }
@@ -357,5 +397,5 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   return { setView, setName, setProfile, setLanding, setTransitioning, showHandoff, hideHandoff, showNameSetup,
     hasProfileDraft: settings.isDirty, resetProfileDraft: settings.reset,
     closeNameSetup: () => closeName(), closePapers, refreshPapers, captureRect, animateFrom, setRecentConversations,
-    beginPaperMotion: node => motion.begin(node), endPaperMotion: motion.end, transitionLayout };
+    beginPaperMotion: node => motion.begin(node), endPaperMotion: motion.end, revealReader: motion.revealReader, transitionLayout };
 }

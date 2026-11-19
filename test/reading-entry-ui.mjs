@@ -26,12 +26,13 @@ try {
   let ready = false;
   for (let i = 0; i < 100 && !ready; i++) { try { ready = (await fetch(base + '/api/health')).ok; } catch {} if (!ready) await pause(100); }
   assert.ok(ready);
-  for (const asset of ['js/library-sidebar.js', 'js/app.js', 'style.css']) {
+  for (const asset of ['js/library-sidebar.js', 'js/agent-resize.js', 'js/agent-workspace.js', 'js/app.js', 'style.css', 'agent-workspace.css']) {
     assert.equal(await fetch(`${base}/${asset}`).then(r => r.text()), fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8'));
   }
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
     headless: true, pipe: true, args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1600, height: 1000 } });
   const page = await browser.newPage(), errors = [];
+  await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
   page.on('pageerror', error => errors.push(String(error)));
   await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   await page.goto(base + '/?topbar=static', { waitUntil: 'domcontentloaded' });
@@ -66,7 +67,9 @@ try {
   await page.waitForFunction(() => document.body.classList.contains('agent-full'));
   assert.equal(await page.$eval('#agentLandingName', n => n.textContent), 'Alina');
   const launchCards = await page.$$eval('#agentLaunchActions > button', nodes => nodes.length);
-  assert.equal(launchCards, 2, 'reading resume belongs in the sidebar, not among launch cards');
+  assert.equal(launchCards, 3, 'landing shows all three launch cards');
+  assert.equal(await page.$('#agentNav #agentReadingEntry'), null, 'landing does not duplicate the reading card in the sidebar');
+  await pause(400);
   await page.hover('#agentStartSearch'); await pause(350);
   const hoverTransform = await page.$eval('#agentStartSearch', n => getComputedStyle(n).transform);
   assert.ok(await page.$eval('#agentStartSearch', n => { const m = new DOMMatrixReadOnly(getComputedStyle(n).transform); return m.a > 1 && m.m42 === 0; }), 'hover gently enlarges without vertical movement');
@@ -80,31 +83,81 @@ try {
   }
   assert.equal(await page.$eval('#agentReadingEntry .agent-launch-title', n => n.textContent), '打开上次阅读区');
   assert.equal(await page.$eval('#agentReadingEntry .agent-resume-name', n => n.textContent), 'Reading');
-  assert.ok(await page.evaluate(() => {
-    const card = document.querySelector('#agentReadingEntry').getBoundingClientRect();
-    const side = document.querySelector('#agentNav').getBoundingClientRect();
-    const primary = document.querySelector('.agent-nav-primary').getBoundingClientRect();
-    const chats = document.querySelector('.agent-nav-recents').getBoundingClientRect();
-    return card.bottom <= side.bottom && card.top > chats.top && primary.top < chats.top;
-  }), 'the resume card stays below the chat list in the sidebar');
-  await page.screenshot({ path: path.join(scratch, 'alina-sidebar-reading.png') });
+  await page.evaluate(() => {
+    window.__readingEntryNode = document.querySelector('#agentReadingEntry');
+    window.__originalReadingTitle = document.querySelector('.agent-resume-name').textContent;
+    document.querySelector('.agent-resume-name').textContent = 'Learning Transferable Visual Models From Natural Language Supervision — 完整论文标题显示测试';
+    document.querySelector('#agentRecentTitle').textContent = 'Harry Potter and the Chamber of Secrets — 完整会话标题不应该被省略';
+  });
+  const fullText = () => page.$$eval('#agentLaunchActions .agent-launch-copy span', nodes => nodes.every(n => {
+    const cs = getComputedStyle(n); return cs.textOverflow !== 'ellipsis' && cs.whiteSpace !== 'nowrap' && n.scrollWidth <= n.clientWidth + 1;
+  }));
+  assert.ok(await fullText(), 'all three launch cards wrap their full text');
+  await page.screenshot({ path: path.join(scratch, 'alina-three-cards.png') });
   await page.locator('#agentSidebarToggle').click();
   assert.ok(await page.$eval('#agentNavNew', n => n.getBoundingClientRect().width > 30));
+  assert.equal(await page.$$eval('#agentLaunchActions > button', nodes => nodes.filter(n => n.getClientRects().length).length), 3);
+  assert.ok(await fullText(), 'collapsed sidebar still leaves all landing text visible');
   assert.equal(await page.$('#agentNewSessionEntry'), null);
   assert.ok(await page.$('#agentNavNew [data-agent-icon="chat-new"] svg'));
   await page.evaluate(() => window.__ctx.openAgentWorkspace({ landing: false }));
   await pause(350);
   assert.ok(await page.evaluate(() => document.querySelector('#agentReadingEntry').closest('#agentNav') !== null));
+  assert.ok(await page.evaluate(() => window.__readingEntryNode === document.querySelector('#agentReadingEntry')));
+  await page.locator('#agentSidebarToggle').click(); await pause(280);
+  await page.evaluate(() => { document.querySelector('.agent-resume-name').textContent = 'Learning Transferable Visual Models From Natural Language Supervision — 完整论文标题显示测试'; });
+  const box = selector => page.$eval(selector, n => { const r = n.getBoundingClientRect(); return { x: r.x, y: r.y, width: r.width, height: r.height }; });
+  const drag = async (selector, dx, dy) => {
+    const r = await box(selector), x = r.x + r.width / 2, y = r.y + r.height / 2;
+    await page.mouse.move(x, y); await page.mouse.down(); await page.mouse.move(x + dx, y + dy, { steps: 12 }); await page.mouse.up(); await pause(80);
+  };
+  let beforeSidebar = await box('#agentNav');
+  await drag('.agent-resize-x', 90, 0);
+  assert.ok(Math.abs((await box('#agentNav')).width - beforeSidebar.width - 90) < 3, 'sidebar follows the drag');
+  const sidebarWidth = await page.evaluate(() => Number(localStorage.getItem('reader.agent.sidebarWidth')));
+  assert.ok(sidebarWidth > beforeSidebar.width + 80);
+  const beforeHeight = await box('.agent-nav-foot');
+  await drag('.agent-resize-y', 0, -80);
+  assert.ok((await box('.agent-nav-foot')).height > beforeHeight.height + 60, 'bottom reading area grows upwards');
+  assert.ok(await page.$eval('.agent-resume-name', n => getComputedStyle(n).whiteSpace === 'normal' && n.scrollWidth <= n.clientWidth + 1));
+  await page.evaluate(() => {
+    const entry = window.__ctx.addEntry({ block: 'chat', tag: 'answer', text: 'Answer width fixture' });
+    entry.body.textContent = 'An answer whose left and right edges remain draggable in Alina. '.repeat(10);
+  });
+  const answerSelector = '#aiArea .ai-block[data-block="chat"] .msg.assistant';
+  await page.waitForSelector(answerSelector, { visible: true });
+  const answer = await box(answerSelector), y = answer.y + Math.min(answer.height / 2, 60);
+  await page.mouse.move(answer.x + answer.width, y); await pause(50);
+  assert.ok(await page.$eval('.text-edge-hint', n => n.classList.contains('on')), 'Alina exposes the existing answer edge grip');
+  await page.mouse.down(); await page.mouse.move(answer.x + answer.width - 80, y, { steps: 12 }); await page.mouse.up(); await pause(80);
+  assert.ok(Math.abs((await box(answerSelector)).width - answer.width + 160) < 4, 'output width tracks a symmetric edge drag');
+  await page.screenshot({ path: path.join(scratch, 'alina-adjustable-conversation.png') });
+  await page.evaluate(() => document.documentElement.style.setProperty('--agent-scale', '1.6')); await pause(280);
+  beforeSidebar = await box('#agentNav');
+  await drag('.agent-resize-x', -64, 0);
+  assert.ok(Math.abs((await box('#agentNav')).width - beforeSidebar.width + 64) < 4, 'sidebar drag accounts for 160% zoom');
+  const zoomAnswer = await box(answerSelector), zoomY = zoomAnswer.y + 55;
+  await page.mouse.move(zoomAnswer.x + zoomAnswer.width, zoomY); await pause(70);
+  const edge = await box('.text-edge-hint');
+  assert.ok(Math.abs(edge.x + edge.width / 2 - zoomAnswer.x - zoomAnswer.width) < 4, 'output grip stays on the text edge at 160% zoom');
+  await page.evaluate(() => document.documentElement.style.setProperty('--agent-scale', '1')); await pause(280);
+  const savedWidth = await page.evaluate(() => Number(localStorage.getItem('reader.agent.sidebarWidth')));
+  await page.locator('#agentSidebarToggle').click(); await pause(260);
+  await page.locator('#agentSidebarToggle').click(); await pause(260);
+  assert.ok(Math.abs((await box('#agentNav')).width - savedWidth) < 2, 'collapse and expand preserve the selected width');
   assert.equal(await page.$eval('#sessBar', n => getComputedStyle(n).display), 'none');
   const oldSid = await page.evaluate(() => window.__ctx.activeSession);
   await page.locator('#agentNavNew').click();
   await page.waitForFunction(old => window.__ctx.activeSession !== old, {}, oldSid);
   await page.screenshot({ path: path.join(scratch, 'alina-entry.png') });
   await page.setViewport({ width: 480, height: 900 }); await pause(150);
+  await page.screenshot({ path: path.join(scratch, 'alina-mobile.png') });
+  assert.ok(await fullText(), 'small screens wrap every card label: ' + JSON.stringify(await page.$$eval('#agentLaunchActions .agent-launch-copy span', nodes => nodes.map(n => ({ cls: n.className, hidden: n.hidden, width: n.clientWidth, scroll: n.scrollWidth, white: getComputedStyle(n).whiteSpace, overflow: getComputedStyle(n).textOverflow })))));
   for (const selector of ['#agentReadingEntry', '#agentNavNew']) {
     assert.ok(await page.$eval(selector, n => { const r = n.getBoundingClientRect(); return r.width > 30 && r.left >= 0 && r.right <= innerWidth; }));
   }
   await page.setViewport({ width: 1600, height: 1000 }); await pause(100);
+  await page.evaluate(() => { document.querySelector('.agent-resume-name').textContent = window.__originalReadingTitle; });
   console.log('PASS Library and Alina show explicit first-open entries; new session stays visible with sidebar collapsed');
   await page.locator('#agentReadingEntry').click();
   await page.waitForFunction(() => window.__viewer?.pdf && !document.body.classList.contains('agent-full') && document.body.classList.contains('reading'));
@@ -127,6 +180,39 @@ try {
   await page.locator('#homeReadingEntry').click();
   await page.waitForFunction(() => document.body.classList.contains('reading'));
   assert.deepEqual(await page.evaluate(() => ({ scale: window.__viewer.scale, docId: window.__state.doc.docId })), before);
+  await page.reload({ waitUntil: 'networkidle0' });
+  await page.waitForFunction(() => window.__ctx);
+  await page.evaluate(() => window.__ctx.openAgentWorkspace({ landing: true }));
+  await pause(400);
+  assert.ok(Math.abs((await box('#agentNav')).width - savedWidth) < 2, 'sidebar width survives reload');
+  const cardMotion = await page.evaluate(async () => {
+    const card = document.getElementById('agentReadingEntry');
+    const from = card.getBoundingClientRect();
+    const start = { landing: document.body.classList.contains('agent-landing'), collapsed: document.body.classList.contains('agent-nav-collapsed'), parent: card.parentElement.id };
+    const pending = window.__ctx.openAgentWorkspace({ landing: false });
+    await new Promise(resolve => requestAnimationFrame(resolve));
+    const animation = card.getAnimations().find(a => a.effect?.getKeyframes().some(f => String(f.transform).includes('translate(')));
+    const visible = card.getBoundingClientRect();
+    const result = { animated: !!animation, hit: !!document.elementFromPoint(visible.x + visible.width / 2, visible.y + visible.height / 2)?.closest('#agentReadingEntry'), start, parent: card.parentElement.id, fromX: from.x, transform: animation?.effect.getKeyframes()[0]?.transform };
+    await pending; return result;
+  });
+  assert.ok(cardMotion.animated, 'reading card moves smoothly from the landing canvas to the sidebar: ' + JSON.stringify(cardMotion));
+  assert.ok(cardMotion.hit, 'moving reading card stays above both panels');
+  await pause(400);
+  assert.ok((await box('.agent-nav-foot')).height >= beforeHeight.height + 50, 'reading area height survives reload');
+  const readerMotion = await page.evaluate(async () => {
+    const cached = !!window.__viewer?.pdf;
+    document.getElementById('agentReadingEntry').click();
+    for (let frame = 0; frame < 180; frame++) {
+      await new Promise(resolve => requestAnimationFrame(resolve));
+      const animated = document.querySelector('.viewer-wrap').getAnimations().some(a => a.effect?.getKeyframes().some(f => String(f.transform).includes('scale(')));
+      if (animated) return { animated, frame, cached };
+    }
+    return { animated: false, cached, body: document.body.className };
+  });
+  assert.ok(readerMotion.animated, 'return to reader visibly animates as soon as the document is ready: ' + JSON.stringify(readerMotion));
+  if (readerMotion.cached) assert.ok(readerMotion.frame < 2, 'cached reader animates on the first frame');
+  await page.waitForFunction(() => !document.body.classList.contains('agent-full'));
   assert.deepEqual(errors, []);
   console.log('PASS both entry points switch to Back to reading and preserve the live reader zoom and document; ' + scratch);
 

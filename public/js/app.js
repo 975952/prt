@@ -2566,6 +2566,17 @@ async function performReturnToReader() {
   const paper = loaded || moved || recentDocs()[0];
   if (!paper) { toast(tr("还没有阅读记录")); return; }
   const saved = homeReadingState?.path === paper.path ? homeReadingState : null;
+  const fromAlina = agentWorkspaceView === 'full';
+  let readerRevealed = false;
+  const reveal = () => {
+    const update = () => {
+      setAgentWorkspaceView(saved?.agentView === 'docked' ? 'docked' : 'closed');
+      setView('reading');
+    };
+    if (fromAlina && !readerRevealed) agentWorkspace.revealReader(update);
+    else update();
+    readerRevealed = true;
+  };
   agentNavigationBusy = true;
   const surface = $('#rightSide');
   const wasInert = surface.inert;
@@ -2579,8 +2590,7 @@ async function performReturnToReader() {
       sessionsCloseOverlays();
       agentWorkspace?.closePapers();
       dismissAgentHandoff();
-      setAgentWorkspaceView(saved?.agentView === 'docked' ? 'docked' : 'closed');
-      setView('reading');
+      reveal();
     }
     await parking;
     await changeAgentScope(saved?.sessionOverride ?? null, saved?.conversation);
@@ -2594,8 +2604,7 @@ async function performReturnToReader() {
       setView('home');
       return;
     }
-    setAgentWorkspaceView(saved?.agentView === 'docked' ? 'docked' : 'closed');
-    setView('reading');
+    reveal();
     activateComposerDraft('chat');
     await viewer.refreshPage?.(viewer.current);
   } catch (error) {
@@ -6174,8 +6183,7 @@ function initTextEdgeHandle() {
 
   /** 这一刻文字列的几何；没有消息 / 侧栏没显示 → null */
   const geo = () => {
-    // The full Alina workspace has no column-width handle or width constraint.
-    if (document.body.classList.contains('agent-full')) return null;
+    if (document.body.classList.contains('agent-landing')) return null;
     const sr = side.getBoundingClientRect();
     if (sr.width < 20) return null;
     const body = area.querySelector('.ai-block:not(.hidden) > .ai-body');
