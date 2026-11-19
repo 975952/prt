@@ -7,7 +7,8 @@ import { t as tr } from './i18n.js';
  */
 export function createTranslationCard({ getRecords = () => [], beforeSelect,
   render = text => escapeHtml(String(text || '')), onCopy, onSave, onDelete, onRetry, onStop, onLocate,
-  getTargetLanguage = () => '中文', onTargetLanguageChange, onCapture } = {}) {
+  getTargetLanguage = () => '中文', onTargetLanguageChange, onCapture, onTranslate,
+  getDocumentKey = () => '' } = {}) {
   const card = document.getElementById('translationCard');
   if (!card) return null;
   const content = document.getElementById('translationCardText');
@@ -18,7 +19,9 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   card.classList.add('reading-tool-card');
   card.dataset.cardView = 'translation';
   let disposed = false, frame = 0, busy = false, historySignature = '', actionError = '';
-  let historySelectionId = '', historySelectionText = '';
+  let historySelectionId = '', historySelectionText = '', submitting = false, composing = false;
+  const drafts = new Map();
+  let draftKey = String(getDocumentKey() || '');
   const button = (id, label, icon, action) => el('button', {
     id, class: 'reading-card-action', type: 'button', title: label, 'aria-label': label,
     onclick: action,
@@ -68,6 +71,57 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   const next = button('translationCardNext', tr('下一条'), 'chevron-right', () => step(1));
   pager.append(previous, count, next); footer.append(tools, pager);
   card.insertBefore(footer, document.getElementById('translationCardResize'));
+  const editor = el('form', { class: 'reading-card-editor', hidden: !onTranslate });
+  const input = el('textarea', { id: 'translationCardInput', rows: 2,
+    placeholder: tr('输入或粘贴文字，继续翻译'), 'aria-label': tr('待翻译的文字') });
+  const submit = button('translationCardSubmit', tr('翻译'), 'arrow-up');
+  submit.type = 'submit';
+  const editorActions = el('div', { class: 'reading-card-editor-actions' },
+    el('span', { class: 'reading-card-editor-hint', text: tr('Enter 翻译 · Shift+Enter 换行') }), submit);
+  editor.append(input, editorActions); footer.after(editor);
+  input.addEventListener('input', () => { saveDraft(input.value); refresh(); });
+  input.addEventListener('compositionstart', () => { composing = true; });
+  input.addEventListener('compositionend', () => { composing = false; });
+  input.addEventListener('keydown', event => {
+    if (event.key !== 'Enter' || event.shiftKey || event.isComposing || composing || event.keyCode === 229) return;
+    event.preventDefault(); void translateInput();
+  });
+  editor.addEventListener('submit', event => { event.preventDefault(); void translateInput(); });
+
+  function saveDraft(text, key = draftKey) {
+    const previousDraft = drafts.get(key);
+    drafts.set(key, { text, revision: (previousDraft?.revision || 0) + 1 });
+  }
+  function syncDraft() {
+    const nextKey = String(getDocumentKey() || '');
+    if (nextKey === draftKey) return;
+    draftKey = nextKey; input.value = drafts.get(draftKey)?.text || '';
+  }
+  async function translateInput() {
+    syncDraft();
+    const text = input.value.trim();
+    if (!text || submitting || busy || typeof onTranslate !== 'function') return;
+    const sourceKey = draftKey, sourceDraft = input.value;
+    input.value = ''; saveDraft('');
+    const submittedRevision = drafts.get(sourceKey).revision;
+    submitting = true; resetView();
+    const restoreDraft = () => {
+      const draft = drafts.get(sourceKey);
+      if (draft?.revision !== submittedRevision || draft.text) return;
+      saveDraft(sourceDraft, sourceKey);
+      if (String(getDocumentKey() || '') === sourceKey) { syncDraft(); input.value = sourceDraft; }
+    };
+    try {
+      const resultPromise = onTranslate({ text, targetLang: language.value });
+      input.focus({ preventScroll: true });
+      const result = await resultPromise;
+      if (result === false || result?.status === 'failed') {
+        restoreDraft(); actionError = String(result?.error?.message || result?.error || tr('翻译失败，请重试。'));
+      }
+    } catch (error) {
+      restoreDraft(); actionError = String(error?.message || tr('翻译失败，请重试。'));
+    } finally { submitting = false; refresh(); }
+  }
 
   function records() {
     const seen = new Set();
@@ -96,8 +150,21 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     historyButton.setAttribute('aria-pressed', 'false');
     refresh();
   }
+  function open() {
+    const record = current() || records()[0];
+    if (record && record.id !== card.dataset.entryId) select(record);
+    else {
+      if (!record) {
+        delete card.dataset.entryId; quote.textContent = ''; content.replaceChildren();
+        historySelectionId = ''; historySelectionText = '';
+      }
+      ensureVisible(); resetView();
+    }
+    if (onTranslate) input.focus({ preventScroll: true });
+  }
   function select(record) {
     if (!record || !records().some(row => row.id === record.id)) return;
+    const keepInputFocus = submitting && document.activeElement === input;
     beforeSelect?.(record);
     card.dataset.entryId = record.id;
     quote.textContent = record.quote || record.retry?.text || '';
@@ -106,7 +173,8 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     original.open = false;
     ensureVisible(); resetView();
     content.scrollTop = 0;
-    content.focus({ preventScroll: true });
+    if (keepInputFocus) input.focus({ preventScroll: true });
+    else content.focus({ preventScroll: true });
   }
   function step(delta) {
     const list = records(), index = list.findIndex(row => row.id === card.dataset.entryId);
@@ -137,6 +205,7 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   }
   function refresh() {
     if (disposed) return;
+    syncDraft();
     const list = records(), record = current();
     const targetLanguage = getTargetLanguage();
     language.value = targetLanguage === 'English' ? 'English' : '中文';
@@ -150,12 +219,14 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     const index = list.findIndex(row => row.id === record?.id);
     copy.disabled = busy || !hasText || !onCopy;
     save.disabled = busy || !hasText || pending || !onSave;
-    retry.disabled = busy || !record?.retry || pending || !onRetry;
+    retry.disabled = busy || submitting || !record?.retry || pending || !onRetry;
     remove.disabled = busy || !record || !onDelete;
     stop.hidden = !pending || !onStop; stop.disabled = busy;
     retry.hidden = pending;
     previous.disabled = index <= 0; next.disabled = index < 0 || index >= list.length - 1;
     locate.disabled = !record?.page || !onLocate;
+    submit.disabled = busy || submitting || !input.value.trim();
+    input.setAttribute('aria-busy', String(submitting));
     setText(locate.querySelector('span'), record?.page ? tr('第{0}页', record.page) : tr('定位原文'));
     setText(count, index >= 0 ? `${index + 1} / ${list.length}` : String(list.length));
     setText(status, actionError || (pending ? tr('翻译中…') : record?.status === 'failed' ? tr('翻译失败')
@@ -176,6 +247,6 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   observer.observe(content, { childList: true, characterData: true, subtree: true });
   observer.observe(quote, { childList: true, characterData: true, subtree: true });
   refresh();
-  return { openHistory, select, refresh, resetView,
+  return { open, openHistory, select, refresh, resetView,
     dispose() { disposed = true; observer.disconnect(); if (frame) cancelAnimationFrame(frame); } };
 }

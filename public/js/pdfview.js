@@ -973,6 +973,9 @@ export class PdfViewer {
 
   /** 翻页按钮用：双页模式一次翻一行（两页），单页模式翻一页 */
   stepPage(delta) {
+    // Resolve relative navigation only after the preceding turn has landed.
+    // Several clicks in one render frame must not all target the same spread.
+    if (this._immersive) return this._queueImmersiveNavigation(() => this._rowStartOf(this.current) + delta * 2);
     const cur = this.current || 1;
     if (!this._twoUp) return this.goToPage(cur + delta);
     const start = this._rowStartOf(cur);
@@ -990,12 +993,13 @@ export class PdfViewer {
 
   _resetImmersive() {
     ++this._immersiveRevision;
+    this._immersiveNavigation = null;
     this._clearImmersiveOverlays();
     if (this._immersiveRestore) this._twoUp = this._immersiveRestore.twoUp;
     this._immersiveRestore = null;
     this._immersive = false;
     this.container.classList.remove('immersive-viewport');
-    this.pagesEl?.classList.remove('immersive-spread');
+    this.pagesEl?.classList.remove('immersive-spread', 'immersive-last-single');
     for (const page of this.pageEls) page?.classList.remove('immersive-hidden');
   }
 
@@ -1054,24 +1058,44 @@ export class PdfViewer {
     this.opts.onScale?.(this.scale);
   }
 
-  _snapshotImmersivePage(page) {
-    const source = this.pageEls[page], bitmap = this.rendered.get(page)?.canvas;
+  _snapshotImmersivePage(page, { attach = true } = {}) {
+    const blank = page === this.numPages + 1 && this.numPages % 2 === 1;
+    const sourcePage = blank ? page - 1 : page;
+    const source = this.pageEls[sourcePage], bitmap = this.rendered.get(sourcePage)?.canvas;
     if (!source || !bitmap || !bitmap.width) return null;
     const rect = source.getBoundingClientRect(), clone = document.createElement('div');
+    if (!rect.width || !rect.height) return null;
     clone.className = 'immersive-turn-snapshot'; clone.setAttribute('aria-hidden', 'true');
-    Object.assign(clone.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`, background: getComputedStyle(source).backgroundColor });
+    Object.assign(clone.style, { left: `${blank ? rect.right : rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`, background: getComputedStyle(source).backgroundColor });
     const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
-    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    if (!blank) canvas.getContext('2d').drawImage(bitmap, 0, 0);
     Object.assign(canvas.style, { position: 'absolute', left: bitmap.style.left, top: bitmap.style.top, width: bitmap.style.width, height: bitmap.style.height });
-    clone.append(canvas); document.body.append(clone); this._immersiveOverlays.push(clone);
+    clone.append(canvas);
+    if (attach) { document.body.append(clone); this._immersiveOverlays.push(clone); }
     return clone;
   }
 
-  async _goToImmersive(page, { animate = true } = {}) {
+  _queueImmersiveNavigation(page, options) {
+    const session = this._immersiveRestore;
+    const run = () => {
+      if (!this._immersive || this._immersiveRestore !== session) return;
+      return this._performImmersiveNavigation(typeof page === 'function' ? page() : page, options);
+    };
+    const pending = (this._immersiveNavigation || Promise.resolve()).catch(() => {}).then(run);
+    this._immersiveNavigation = pending;
+    const clear = () => { if (this._immersiveNavigation === pending) this._immersiveNavigation = null; };
+    pending.then(clear, clear);
+    return pending;
+  }
+
+  _goToImmersive(page, options) { return this._queueImmersiveNavigation(page, options); }
+
+  async _performImmersiveNavigation(page, { animate = true } = {}) {
     const target = clamp(Math.round(Number(page) || 1), 1, this.numPages || 1);
-    const start = this._rowStartOf(target), oldStart = this._rowStartOf(this.current);
+    const oldPage = this.current, start = this._rowStartOf(target), oldStart = this._rowStartOf(oldPage);
     const revision = ++this._immersiveRevision, gen = this._gen;
     this._clearImmersiveOverlays();
+    const valid = () => revision === this._immersiveRevision && gen === this._gen && this._immersive;
     const motionSetting = document.documentElement.dataset.motion;
     const motion = motionSetting === 'on' || (motionSetting !== 'off' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
     const turning = animate && motion && start !== oldStart;
@@ -1080,19 +1104,25 @@ export class PdfViewer {
     const leaf = turning ? this._snapshotImmersivePage(oldStart + (forward ? 1 : 0)) : null;
     try {
       await this._ensureSizesAround(target, 2);
-      if (revision !== this._immersiveRevision || gen !== this._gen || !this._immersive) return;
+      if (!valid()) return;
       this.current = target;
       this.fitImmersive();
       const end = Math.min(start + 1, this.numPages);
       await Promise.all(Array.from({ length: end - start + 1 }, async (_, index) => {
         const pageNumber = start + index;
         await this.renderTasks.get(pageNumber);
-        if (revision !== this._immersiveRevision || gen !== this._gen) return;
+        if (!valid()) return;
         await this._renderPage(pageNumber, { force: true, priority: true, gen });
+        // A viewport rerender can acquire this page between the await and the
+        // force request. Wait for that task too before copying its canvas.
+        await this.renderTasks.get(pageNumber);
       }));
-      if (revision !== this._immersiveRevision || gen !== this._gen || !this._immersive) return;
+      if (!valid()) return;
       this.opts.onPageChange?.(target, this.numPages);
-      if (leaf && staticPage) await this._animateImmersiveTurn({ start, end, forward, leaf, staticPage });
+      if (leaf && staticPage) await this._animateImmersiveTurn({ start, forward, leaf, staticPage });
+    } catch (error) {
+      if (valid()) { this.current = oldPage; this.fitImmersive(); }
+      throw error;
     } finally {
       // A malformed target page must not leave an opaque snapshot over the book.
       // A newer navigation owns its own snapshots and must not be cleaned here.
@@ -1100,14 +1130,25 @@ export class PdfViewer {
     }
   }
 
-  _animateImmersiveTurn({ start, end, forward, leaf, staticPage }) {
-    const nextLeft = this._snapshotImmersivePage(start), nextRight = this._snapshotImmersivePage(end);
+  _animateImmersiveTurn({ start, forward, leaf, staticPage }) {
+    // Keep the old spread in place until the library has painted its first
+    // frame. Detached destination snapshots never flash above that cover.
+    const nextLeft = this._snapshotImmersivePage(start, { attach: false });
+    const nextRight = this._snapshotImmersivePage(start + 1, { attach: false });
     if (!nextLeft || !nextRight) return;
     const old = forward ? [staticPage, leaf] : [leaf, staticPage];
     const rect = old[0].getBoundingClientRect(), rightRect = old[1].getBoundingClientRect();
     const stage = document.createElement('div'); stage.className = 'immersive-page-turn'; stage.setAttribute('aria-hidden', 'true');
     Object.assign(stage.style, { left: `${rect.left}px`, top: `${Math.min(rect.top, rightRect.top)}px`, width: `${rect.width * 2}px`, height: `${Math.max(rect.height, rightRect.height)}px` });
-    const pages = forward ? [...old, nextLeft, nextRight] : [nextLeft, nextRight, ...old];
+    stage.style.visibility = 'hidden';
+    const oldCopies = old.map(source => {
+      const copy = source.cloneNode(false), bitmap = source.firstElementChild;
+      const canvas = bitmap.cloneNode(false);
+      canvas.getContext('2d').drawImage(bitmap, 0, 0);
+      copy.append(canvas);
+      return copy;
+    });
+    const pages = forward ? [...oldCopies, nextLeft, nextRight] : [nextLeft, nextRight, ...oldCopies];
     for (const page of pages) {
       page.className = 'immersive-flip-page';
       const bg = page.style.background; page.removeAttribute('style'); page.style.background = bg;
@@ -1115,12 +1156,12 @@ export class PdfViewer {
     }
     document.body.append(stage); this._immersiveOverlays.push(stage);
     return new Promise(resolve => {
-      let done = false, started = false, timer;
+      let done = false, started = false, timer, frame;
       const flip = new PageFlip(stage, { width: Math.max(1, rect.width), height: Math.max(1, rect.height),
         size: 'fixed', usePortrait: false, autoSize: false, useMouseEvents: false, showCover: false,
         drawShadow: true, maxShadowOpacity: .22, flippingTime: 480, startPage: forward ? 0 : 2 });
       const finish = () => {
-        if (done) return; done = true; clearTimeout(timer);
+        if (done) return; done = true; clearTimeout(timer); cancelAnimationFrame(frame);
         flip.destroy(); resolve();
       };
       this._immersiveFlip = finish;
@@ -1128,7 +1169,20 @@ export class PdfViewer {
         if (event.data === 'flipping') started = true;
         if (event.data === 'read' && started) finish();
       });
-      flip.on('init', () => { if (!done) forward ? flip.flipNext('bottom') : flip.flipPrev('bottom'); });
+      flip.on('init', () => {
+        if (done) return;
+        // init is a timer callback, not a paint boundary. Give PageFlip one
+        // frame to lay out, then retain the cover through its first turn frame.
+        frame = requestAnimationFrame(() => {
+          if (done) return;
+          forward ? flip.flipNext('bottom') : flip.flipPrev('bottom');
+          frame = requestAnimationFrame(() => {
+            if (done || !started) return;
+            stage.style.visibility = 'visible';
+            staticPage.remove(); leaf.remove();
+          });
+        });
+      });
       flip.loadFromHTML(pages);
       timer = setTimeout(finish, 900);
     });
@@ -1139,6 +1193,13 @@ export class PdfViewer {
     const visible = this.container.clientWidth > 0 && this.container.clientHeight > 0;
     const anchor = keepAnchor && visible && !this._immersive ? this._captureAnchor() : null;
     const spreadStart = this._rowStartOf(this.current);
+    const lastSingle = this._immersive && spreadStart === this.numPages && this.numPages % 2 === 1;
+    this.pagesEl.classList.toggle('immersive-last-single', lastSingle);
+    if (lastSingle) {
+      const size = this._sizeOf(spreadStart);
+      this.pagesEl.style.setProperty('--immersive-blank-width', `${Math.round(size.width * this.scale)}px`);
+      this.pagesEl.style.setProperty('--immersive-blank-height', `${Math.round(size.height * this.scale)}px`);
+    }
     for (let i = 1; i <= this.numPages; i++) {
       const { width, height } = this._sizeOf(i);
       const page = this.pageEls[i];

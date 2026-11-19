@@ -31,6 +31,33 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
     headless: true, pipe: true, args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1500, height: 960 } });
   const page = await browser.newPage(), errors = [];
+  const coversChrome = async (cardSelector, handleSelector) => {
+    const original = await page.$eval(cardSelector, node => {
+      const r = node.getBoundingClientRect(); return { left: r.left, top: r.top, height: r.height };
+    });
+    const dragTo = async (left, top) => {
+      const start = await page.$eval(handleSelector, node => {
+        const r = node.getBoundingClientRect(); return { x: r.left + 48, y: r.top + r.height / 2 };
+      });
+      const box = await page.$eval(cardSelector, node => ({ left: node.getBoundingClientRect().left, top: node.getBoundingClientRect().top }));
+      await page.mouse.move(start.x, start.y); await page.mouse.down();
+      await page.mouse.move(start.x + left - box.left, start.y + top - box.top, { steps: 10 }); await page.mouse.up();
+    };
+    for (const [chrome, top, edge] of [['#immersiveTopbar', 8, 2], ['#immersiveFooter', 960 - original.height - 8, 958]]) {
+      await dragTo(500, top); await page.mouse.move(1400, edge);
+      await page.waitForFunction(() => Number(getComputedStyle(document.querySelector('#immersiveTopbar')).opacity) > .95);
+      const overlap = await page.evaluate(({ cardSelector, chrome }) => {
+        const card = document.querySelector(cardSelector), r = card.getBoundingClientRect(), bar = document.querySelector(chrome).getBoundingClientRect();
+        const left = Math.max(r.left + 15, bar.left + 15), right = Math.min(r.right - 15, bar.right - 15);
+        const top = Math.max(r.top + 12, bar.top + 12), bottom = Math.min(r.bottom - 12, bar.bottom - 12);
+        const hit = document.elementFromPoint((left + right) / 2, (top + bottom) / 2);
+        return { intersects: right > left && bottom > top, covers: card.contains(hit), hit: hit?.id || hit?.className };
+      }, { cardSelector, chrome });
+      assert.ok(overlap.intersects, `${cardSelector} was dragged over ${chrome}`);
+      assert.ok(overlap.covers, `${cardSelector} must receive clicks above ${chrome}; hit ${overlap.hit}`);
+    }
+    await dragTo(original.left, original.top);
+  };
   page.on('pageerror', error => errors.push(String(error)));
   await page.evaluateOnNewDocument(() => {
     localStorage.setItem('reader.locale', 'zh-CN');
@@ -72,8 +99,13 @@ try {
     await page.screenshot({path:path.join(scratch,'failed-chrome.png')}); throw error;
   }); await pause(600);
   state = await spread(); assert.equal(state.current, 5); assert.equal(state.visible.length, 2); assert.equal(state.scale, initialScale);
+  await page.mouse.move(750, 2);
+  await page.waitForFunction(() => Number(getComputedStyle(document.querySelector('#immersiveTopbar')).opacity) > .95);
+  const hideStarted = Date.now();
   await page.mouse.move(750, 460); await page.evaluate(() => document.activeElement?.blur());
-  await page.waitForFunction(() => !document.body.classList.contains('immersive-chrome-visible'), { timeout: 4500 });
+  await page.waitForFunction(() => !document.body.classList.contains('immersive-chrome-visible')
+    && Number(getComputedStyle(document.querySelector('#immersiveTopbar')).opacity) < .05, { timeout: 450 });
+  assert.ok(Date.now() - hideStarted < 450, 'toolbars disappear promptly after the pointer leaves');
   await page.mouse.move(750, 2);
   await page.waitForFunction(() => document.body.classList.contains('immersive-chrome-visible'));
   await page.mouse.move(750, 460);
@@ -112,6 +144,7 @@ try {
     return bounds.width > 100 && bounds.height > 20 && bounds.top >= side.top && bounds.bottom <= side.bottom && bounds.right <= innerWidth;
   });
   assert.ok(await composerVisible());
+  await coversChrome('#rightSide', '#immersiveChatHead');
   await page.click('#sessBtn');
   assert.equal(await page.$eval('#sessQuickPop', node => node.classList.contains('hidden')), true, 'session title must not open a duplicate menu');
   await page.click('#sessHist');
@@ -121,8 +154,8 @@ try {
   assert.ok(await composerVisible());
   await page.screenshot({ path: path.join(scratch, 'immersive-qa.png') });
   await page.setViewport({ width: 560, height: 820 }); await pause(350);
-  assert.ok(await composerVisible(), 'narrow floating card must retain a usable composer');
   await page.screenshot({ path: path.join(scratch, 'immersive-qa-narrow.png') });
+  assert.ok(await composerVisible(), 'narrow floating card must retain a usable composer');
   await page.setViewport({ width: 1500, height: 960 }); await pause(350);
   await page.click('#immersiveChatClose');
   await page.mouse.move(750, 2); await page.click('#immersiveChat');
@@ -136,6 +169,8 @@ try {
   });
   await page.mouse.move(750, 2); await page.click('#immersiveTranslate');
   await page.waitForSelector('#translationCard:not(.hidden)');
+  await coversChrome('#translationCard', '#translationCard .pop-head');
+  if (await page.$eval('#translationCard', node => node.dataset.cardView !== 'history')) await page.click('#translationCardHistory');
   await page.waitForFunction(() => document.querySelector('#translationCardHistoryList').textContent.includes('第二条译文'));
   assert.ok(await page.$eval('#translationCardHistoryList', node => node.textContent.includes('第一条译文')));
   await page.click('#translationCardHistoryList .reading-card-history-row');
@@ -148,6 +183,7 @@ try {
     && !document.querySelector('#translationCardHistoryList').textContent.includes('第一条译文'));
   await page.click('#translationCardClose');
   await page.mouse.move(750, 2); await page.click('#immersiveTranslate');
+  if (await page.$eval('#translationCard', node => node.dataset.cardView !== 'history')) await page.click('#translationCardHistory');
   assert.ok(await page.$eval('#translationCardHistoryList', node => node.textContent.includes('第二条译文')));
   await page.click('#translationCardCapture');
   await page.waitForSelector('#regionOverlay:not(.hidden)');
@@ -176,6 +212,7 @@ try {
   await page.click('#immersiveBtn');
   await page.waitForFunction(() => document.body.classList.contains('immersive-chrome-visible'));
   await page.click('#immersiveTranslate');
+  if (await page.$eval('#translationCard', node => node.dataset.cardView !== 'history')) await page.click('#translationCardHistory');
   await page.waitForFunction(() => document.querySelector('#translationCardHistoryList').textContent.includes('第二条译文'));
   assert.ok(await page.evaluate(() => __state.highlights.some(note => note.note === '第二条译文')));
   assert.equal(await page.$eval('#translationCardHistoryList', node => node.textContent.includes('第一条译文')), false);

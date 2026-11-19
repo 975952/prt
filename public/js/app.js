@@ -3719,10 +3719,7 @@ function bindPaperDrag(list) {
     // 文件夹拖拽：改变层级（禁区前端先拦，服务端二次校验）
     if (payload.kind === 'folder') {
       const to = folderLi ? folderLi.dataset.path : (blankFolder || '');
-      if (to === payload.path || to.startsWith(`${payload.path}/`)) {
-        toast(tr("不能把文件夹移到自己的子目录里"), 'err', 3600);
-        return;
-      }
+      if (to === payload.path || to.startsWith(`${payload.path}/`) || to === folderOf(payload.path)) return;
       await moveItem(payload.path, to);
     }
   });
@@ -3913,9 +3910,11 @@ async function moveFilesTo(paths, to) {
 
 /** POST /api/move 移动 PDF / 文件夹；成功后刷新列表并同步打开中文件的内部路径 */
 async function moveItem(from, to) {
+  to = to || '';
+  const isFolder = state.folders.some(folder => folder.path === from);
+  if (to === folderOf(from) || isFolder && (to === from || to.startsWith(`${from}/`))) return;
   const wasReading = document.body.classList.contains('reading') && agentWorkspaceView !== 'full';
   try {
-    const isFolder = state.folders.some(folder => folder.path === from);
     const j = isFolder ? await relocateLibraryFolder(from, () => fetch('/api/move', {
       method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ from, to: to || '' }),
     })) : await organizePaperMove({ from, to: to || '' });
@@ -5877,6 +5876,8 @@ function initReadingTools() {
     getRecords: () => state.sessionEntries.filter(row => row.block === 'translate' && (!row.docId || row.docId === state.doc?.docId)),
     beforeSelect: hideTranslationCard, render: renderMarkdown, onCopy: copyText,
     getTargetLanguage: selectedTranslateTarget,
+    getDocumentKey: () => state.doc?.docId || '',
+    onTranslate: ({ text, targetLang }) => doTranslateText({ text, targetLang, inCard: true }),
     onTargetLanguageChange: value => { $('#translateTargetLang').value = value; $('#translateTargetLang').dispatchEvent(new Event('change', { bubbles: true })); },
     onCapture: () => { hideTranslationCard(); state.startRegion?.('translate'); },
     onSave: async record => {
@@ -5891,7 +5892,7 @@ function initReadingTools() {
   immersiveReading = createImmersiveReading({
     getViewer: () => viewer, isFullscreen: fullscreenActive,
     enterFullscreen: () => toggleFullscreen(true), leaveFullscreen: () => toggleFullscreen(false),
-    openTranslations: () => translationCardUI.openHistory(),
+    openTranslations: () => translationCardUI.open(),
     beforeEnter: () => { layoutBeforeBook = { panels: structuredClone(state.panels), side: structuredClone(sideIntent) }; },
     prepareChat: () => { showAiBlock('chat'); applyPanels(); },
     restoreLayout: () => {
@@ -5915,13 +5916,15 @@ function hideTranslationCard() {
 }
 
 function showTranslationCard(sel) {
-  hideTranslationCard();
   const card = $('#translationCard');
+  const wasOpen = !card.classList.contains('hidden');
+  hideTranslationCard();
   const body = $('#translationCardText');
   $('#translationCardQuote').textContent = sel.cleanText || sel.text || '';
   body.innerHTML = '';
   translationCardUI?.resetView();
   card.classList.remove('hidden');
+  if (wasOpen) return body;
   const box = sel.box || { left: window.innerWidth / 2, right: window.innerWidth / 2, top: 80, bottom: 80 };
   const w = card.offsetWidth;
   const h = card.offsetHeight;
@@ -8007,7 +8010,7 @@ function restoreRetryCallback(row, entry, priorUser) {
     if (payload.kind === 'translate-text') {
       // 文本输入翻译：原文存在 payload 里，直接原样再翻一次
       doTranslateText({ text: payload.text || '', targetLang: payload.targetLang === 'English' ? 'English' : '中文',
-        segments: payload.segments || [], force: true });
+        segments: payload.segments || [], force: true, inCard: !$('#translationCard').classList.contains('hidden') });
       return;
     }
     if (payload.kind === 'operation') {
@@ -11781,7 +11784,7 @@ function syncScopePrefs() {
 function revealPanel(id) {
   if (immersiveReading?.active) {
     if (id === 'chat') immersiveReading.showChat(true);
-    else translationCardUI?.openHistory();
+    else translationCardUI?.open();
     return;
   }
   const p = state.panels[id];
@@ -11885,12 +11888,12 @@ function translationCacheScope({ page = null, context = '' } = {}) {
     cfg.activeProfile || '', cfg.baseURL || '', cfg.model || '', cfg.visionModel || '', cfg.temperature]));
 }
 
-async function doTranslateText({ text, targetLang = '', force = false, task = null, segments = [] } = {}) {
-  if (!task && !await allowEdit(tr("译文"))) return;
+async function doTranslateText({ text, targetLang = '', force = false, task = null, segments = [], inCard = false } = {}) {
+  if (!task && !await allowEdit(tr("译文"))) return false;
   const raw = String(text || '').replace(/\r\n?/g, '\n').trim();
-  if (!raw) return;
+  if (!raw) return false;
   if (task && (task.controller.signal.aborted || !task.isCurrent())) return { status: 'stopped' };
-  if (!ensureReady()) return;
+  if (!ensureReady()) return false;
   const docId = state.doc?.docId || '';
   const openSeq = state.openSeq;
   const isCurrent = task?.isCurrent || (() => docId === (state.doc?.docId || '') && openSeq === state.openSeq);
@@ -11898,14 +11901,14 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   const body = raw;
   const sourceSegments = snapshotTranslationSegments(segments);
   const lang = resolveTranslateTarget(targetLang);
-  if (!task) revealTranslatePanel();
+  if (!task && !inCard) revealTranslatePanel();
   const retryOf = () => ({
     kind: 'translate-text', docId: docId || null,
     text: body, targetLang: lang, segments: sourceSegments,
   });
   const retry = () => {
     if (docId !== (state.doc?.docId || '')) { toast(tr("请切回原论文后重新翻译"), 'err'); return; }
-    return doTranslateText({ text: body, targetLang: lang, force: true, segments: sourceSegments });
+    return doTranslateText({ text: body, targetLang: lang, force: true, segments: sourceSegments, inCard });
   };
   const retryUnfinished = task ? () => translationBatches.get(docId) === task.batch
     ? resumeTranslationBatch(task.batch) : retry() : retry;
@@ -11918,7 +11921,8 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
       && JSON.stringify(x.retry.segments || []) === JSON.stringify(sourceSegments));
     if (existing) {
       const row = [...(state.blockMeta.translate?.body?.children || [])].find((n) => n.__sessionRecord?.id === existing.id);
-      row?.scrollIntoView({ block: 'nearest' });
+      if (inCard) translationCardUI?.select(existing);
+      else row?.scrollIntoView({ block: 'nearest' });
       toast(tr("这段文字翻过，直接用原结果"), 'ok', 1800);
       if (task?.item.entry) deleteTranslationEntry(task.item.entry.root);
       return { status: 'complete' };
@@ -11926,8 +11930,9 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   }
   const quote = body.length > 400 ? `${body.slice(0, 400)}…` : body;
   const entry = translationTaskEntry(task) || addEntry({ block: 'translate', tag: 'translation', page: null, quote,
-    retry: retryOf(), reveal: !task });
+    retry: retryOf(), reveal: !task && !inCard });
   if (task) task.item.entry = entry;
+  if (inCard) translationCardUI?.select(entry.root.__sessionRecord);
   entry.root.classList.add('msg-text-translate');
   if (cached) {
     entry.body.innerHTML = renderMarkdown(cached);

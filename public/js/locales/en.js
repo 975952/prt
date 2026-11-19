@@ -703,7 +703,11 @@ export const en = {
   "智能体快捷入口": "Assistant shortcuts", "找论文": "Find a paper", "继续上次": "Resume last chat",
   "历史会话": "Chat history", "新对话": "New chat", "智能体": "Assistant",
   "名字与交流方式，在所有对话中共用。": "Your assistant's name and communication style apply to every conversation.",
-  "撤销修改": "Discard changes"
+  "撤销修改": "Discard changes",
+  "输入或粘贴文字，继续翻译": "Type or paste text to translate",
+  "待翻译的文字": "Text to translate",
+  "Enter 翻译 · Shift+Enter 换行": "Enter to translate · Shift+Enter for a new line",
+  "翻译失败，请重试。": "Translation failed. Please try again."
 };
 
 // English singular forms are chosen only for known count labels.

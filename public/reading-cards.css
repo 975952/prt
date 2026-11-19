@@ -44,6 +44,13 @@
 #translationCard .reading-card-tools .reading-card-action > span { display: none; }
 #translationCard .reading-card-pager .reading-card-action > span { display: none; }
 #translationCard .reading-card-count { min-width: 42px; text-align: center; color: var(--fg-faint); font-size: 11px; font-variant-numeric: tabular-nums; }
+#translationCard .reading-card-editor { display: flex; flex-direction: column; gap: 5px; margin: 0; padding: 10px 16px 12px; border-top: 1px solid var(--border); flex: 0 0 auto; }
+#translationCard .reading-card-editor textarea { display: block; box-sizing: border-box; width: 100%; min-height: 44px; max-height: 120px; resize: none; padding: 0; border: 0; border-radius: 0; outline: none; background: transparent; color: var(--fg); font: inherit; font-size: 13px; line-height: 1.7; }
+#translationCard .reading-card-editor textarea::placeholder { color: var(--fg-faint); }
+#translationCard .reading-card-editor:focus-within { border-top-color: var(--border-strong); }
+#translationCard .reading-card-editor-actions { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+#translationCard .reading-card-editor-hint { color: var(--fg-faint); font-size: 10px; }
+#translationCard #translationCardSubmit { min-width: 58px; border: 1px solid var(--border); border-radius: 9px; }
 #translationCard .reading-card-history { flex: 1 1 auto; min-height: 0; overflow: auto; padding: 12px 14px 22px; }
 #translationCard .reading-card-history-caption { margin: 0 4px 12px; color: var(--fg-faint); font-size: 12px; }
 #translationCard .reading-card-history-row { display: grid; grid-template-columns: 1fr; gap: 6px; width: 100%; text-align: left; padding: 13px 12px; margin-bottom: 8px; border: 1px solid var(--border); border-radius: 12px; color: var(--fg); background: transparent; cursor: pointer; font: inherit; }
