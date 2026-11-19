@@ -2512,7 +2512,7 @@ function refreshReadingEntries() {
   for (const id of ['homeReadingEntry', 'agentReadingEntry']) {
     const button = $(`#${id}`);
     if (!button) continue;
-    button.querySelector('span:last-child').textContent = label;
+    (button.querySelector('.agent-launch-title') || button.querySelector('span:last-child')).textContent = label;
     button.disabled = !paper;
     button.title = paper ? `${label} · ${paper.name}` : tr('还没有阅读记录');
     button.setAttribute('aria-label', button.title);

@@ -1,6 +1,8 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "还没有历史会话": "No previous conversation yet",
+  "回到原文，接着阅读": "Return to the text and keep reading",
   '继续上次会话': 'Resume last conversation',
   '打开上次阅读区': 'Open last reading workspace',
   '回到阅读区': 'Back to reading',

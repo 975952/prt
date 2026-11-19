@@ -71,7 +71,7 @@ try {
   for (const selector of ['#agentReadingEntry', '#agentNavNew']) {
     assert.ok(await page.$eval(selector, n => n.getBoundingClientRect().height > 30 && getComputedStyle(n).visibility !== 'hidden'));
   }
-  assert.equal(await page.$eval('#agentReadingEntry span:last-child', n => n.textContent), '打开上次阅读区');
+  assert.equal(await page.$eval('#agentReadingEntry .agent-launch-title', n => n.textContent), '打开上次阅读区');
   await page.locator('#agentSidebarToggle').click();
   assert.ok(await page.$eval('#agentNavNew', n => n.getBoundingClientRect().width > 30));
   assert.equal(await page.$('#agentNewSessionEntry'), null);
@@ -96,7 +96,7 @@ try {
   const before = await page.evaluate(() => ({ scale: window.__viewer.scale, docId: window.__state.doc.docId }));
   await page.locator('#agentBtn').click();
   await page.waitForFunction(() => document.body.classList.contains('agent-full'));
-  assert.equal(await page.$eval('#agentReadingEntry span:last-child', n => n.textContent), '回到阅读区');
+  assert.equal(await page.$eval('#agentReadingEntry .agent-launch-title', n => n.textContent), '回到阅读区');
   await page.locator('#agentReadingEntry').click();
   await page.waitForFunction(() => !document.body.classList.contains('agent-full') && document.body.classList.contains('reading'));
   assert.deepEqual(await page.evaluate(() => ({ scale: window.__viewer.scale, docId: window.__state.doc.docId })), before);

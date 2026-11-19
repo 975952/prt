@@ -114,14 +114,16 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     if ('hasRecent' in options) hasRecent = !!options.hasRecent;
     if ('recentTitle' in options) {
       const title = String(options.recentTitle || '').trim().slice(0, 160);
-      ui.agentRecentTitle.textContent = title;
+      ui.agentRecentTitle.textContent = title || tr('还没有历史会话');
       ui.agentRecentTitle.title = title;
-      ui.agentRecentTitle.hidden = !title || !hasRecent;
+      ui.agentRecentTitle.hidden = false;
     }
     document.body.classList.toggle('agent-landing', landing);
     ui.agentNavNew.setAttribute('aria-current', landing ? 'page' : 'false');
     ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
     const readingEntry = byId('agentReadingEntry');
+    readingEntry.classList.toggle('agent-launch', landing);
+    readingEntry.classList.toggle('workspace-action', !landing);
     const readingActions = document.querySelector('.agent-visible-actions');
     (landing ? ui.agentLaunchActions : readingActions).prepend(readingEntry);
     if (landing) { closePapers(); hideHandoff(); }
