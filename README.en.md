@@ -6,7 +6,7 @@
 
 [简体中文](README.md) · **English**
 
-A PDF reading app for Windows, with translation, cross-file questions, and notes beside the original. Available as an installer or portable app, with your files stored locally.
+A local PDF reader for Windows: organize papers and books in Library, find material and ask cross-file questions with Alina, then return to the original for page references, translation, and notes. Available as an installer or portable app, with your files stored locally.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
@@ -19,7 +19,13 @@ A PDF reading app for Windows, with translation, cross-file questions, and notes
 
 <sub>Actual v1.2.5 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
 
-## Pick up where you left off
+## Library, Alina, and the reader
+
+Start in Library by default, or choose the reader or Alina in settings. Alina places the reading, paper search, and resume-chat actions together below the input. New chat stays in the sidebar, with a bubble-plus icon when collapsed. Workspace switches preserve reading position and conversations.
+
+PDF organization uses filenames first, then first-page text or images when needed. It proposes flat topic folders, groups similar documents, and preserves existing organization where appropriate. Each classification replaces previous suggestions; files move only after preview and confirmation. Library has a resizable sidebar and shares Alina's dark background.
+
+Saving model changes tests the connection immediately; saving unchanged settings closes the dialog. Source citations show the full document title and page number, with a link back to the original.
 
 Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach. During reading, use the top-bar Home button to browse the library, then select a tab to return with its reading position, zoom, and background generation preserved.
 

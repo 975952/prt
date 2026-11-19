@@ -11041,7 +11041,7 @@ function decorateOtherPaperRefs(html) {
     if (!paper || !Number.isInteger(p) || p < 1 || (end !== null && end < p)) return raw;
     const parts = frag ? quoteFragmentParts(restoreMarkup(frag)) : null;
     const fragment = parts?.text || '';
-    const short = escapeHtml(paper.replace(/\.pdf$/i, '').slice(0, 28));
+    const short = escapeHtml(paper.replace(/\.pdf$/i, ''));
     const title = tr("打开《{0}》并跳到第 {1} 页{2}", paper, p, fragment ? tr("，定位原文：{0}", fragment.slice(0, 80)) : '');
     return `<button type="button" class="page-ref other-paper-ref" data-paper="${escapeHtml(paper)}" data-page="${p}"${end !== null ? ` data-page-end="${end}"` : ''}`
       + `${fragment ? ` data-fragment="${escapeHtml(fragment)}"` : ''}`

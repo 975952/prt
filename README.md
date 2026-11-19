@@ -6,7 +6,7 @@
 
 **简体中文** · [English](README.en.md)
 
-面向 Windows 的 PDF 阅读应用，将原文、翻译、跨文件问答与笔记放在同一个工作区。支持安装版与便携版，个人资料保存在本机。
+面向 Windows 的本地 PDF 阅读应用：用 Library 管理论文与书籍，用 Alina 查找资料、跨文件问答，再回到原文核对页码、翻译和记笔记。支持安装版与便携版，个人资料保存在本机。
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square&label=release)](https://github.com/975952/prt/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-586976?style=flat-square)](https://github.com/975952/prt/releases/latest)
@@ -20,7 +20,13 @@
 
 <sub>v1.2.5 实际界面；书架使用独立演示数据。[截图说明](docs/assets/README.md)</sub>
 
-## 从书架回到阅读
+## Library、Alina 与阅读区
+
+默认从 Library 打开，也可在设置中选择恢复阅读区或进入 Alina。Alina 首页将“打开上次阅读区”“找论文”“继续上次会话”并列展示；新对话位于侧栏，收起时保留气泡加号入口。切换工作区保留当前阅读位置与会话。
+
+整理 PDF 优先按文件名判断，信息不足时再读取第一页文字或图片。分类采用一层目录，相似资料放在一起，已有合理分类尽量保留；每次重新分类覆盖旧建议，预览确认后才移动文件。Library 侧栏可拖动调宽，深色背景与 Alina 统一。
+
+模型配置修改后点击“保存并测试”立即测试连接；没有修改则直接关闭。来源引用显示完整书名与页码，点击即可跳回对应原文。
 
 首页集中展示论文和阅读进度：左侧切换**全部论文、最近阅读、未读与文件夹**，右侧搜索文件名或目录。独立的“继续阅读”入口回到上次阅读的位置，导入与整理入口始终可见。阅读时可随时点击顶栏“首页”浏览书架，再点标签继续阅读；原来的位置、缩放与后台生成保留。
 

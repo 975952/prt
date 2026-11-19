@@ -502,12 +502,14 @@ try {
     const resnet = 'with the network depth increasing, accuracy gets saturated (which might be unsurprising) and then degrades rapidly';
     const reported = render(`## Problem\n\nFinding.〔p.1〕 Another finding.〔p.1〕\n\n> ${resnet}〔p.1‖${resnet}〕`);
     return {
+      fullTitle: render('〔《Harry Potter The Complete Collection.pdf》p.297〕').querySelector('.other-paper-ref')?.textContent,
       targets: [...samePage.querySelectorAll('.citation-sources .page-ref')].map(button => [button.dataset.paper || '', button.dataset.page]),
       standalone: standalone.querySelector('.quote-inline')?.textContent,
       resnetText: reported.querySelector('blockquote')?.textContent.trim(),
       resnetSources: reported.querySelectorAll('.citation-sources .page-ref').length,
     };
   }, { snippet });
+  check('来源保留完整长书名和页码', rawCases.fullTitle === '《Harry Potter The Complete Collection》p.297', rawCases.fullTitle);
   check('同页的跨论文来源不被错误合并', JSON.stringify(rawCases.targets) === JSON.stringify([['', '5'], ['other-paper.pdf', '5']]), JSON.stringify(rawCases.targets));
   check('独立的不同原句仍然可见', rawCases.standalone === 'another distinct quotation');
   check('用户ResNet示例保留一份原句和一个小节来源', rawCases.resnetText === 'with the network depth increasing, accuracy gets saturated (which might be unsurprising) and then degrades rapidly'
