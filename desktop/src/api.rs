@@ -538,12 +538,136 @@ pub fn folders_delete(rq: Request, raw_query: &str) {
     send_json(rq, 200, &json!({ "ok": true, "path": rel, "mode": mode, "moved": n }));
 }
 
+fn update_paper_order_after_move(from: &str, new_rel: &str, is_folder: bool) -> bool {
+    let mut seen: HashSet<String> = HashSet::new();
+    let order: Vec<String> = paper_order().into_iter().filter_map(|n| {
+        let v = if n == from {
+            new_rel.to_string()
+        } else if is_folder {
+            match n.strip_prefix(&format!("{}/", from)) {
+                Some(rest) => format!("{}/{}", new_rel, rest),
+                None => n,
+            }
+        } else { n };
+        if seen.insert(v.clone()) { Some(v) } else { None }
+    }).collect();
+    write_paper_order(&order)
+}
+
+type OrganizerMoveError = (u16, &'static str);
+
+fn organizer_path(value: Option<&Value>, allow_empty: bool) -> Result<String, OrganizerMoveError> {
+    let value = value.and_then(Value::as_str).ok_or((400, "整理路径不合法"))?;
+    if value.encode_utf16().count() > 1000 || value != value.trim()
+        || value.chars().any(|c| c.is_control() || matches!(c, '\\' | ':' | '*' | '?' | '"' | '<' | '>' | '|'))
+        || (value.is_empty() && !allow_empty) {
+        return Err((400, "整理路径不合法"));
+    }
+    if value.is_empty() { return Ok(String::new()); }
+    for part in value.split('/') {
+        let lower = part.to_lowercase();
+        let stem = lower.split('.').next().unwrap_or("");
+        let device = ["con", "prn", "aux", "nul"].contains(&stem)
+            || stem.strip_prefix("com").or_else(|| stem.strip_prefix("lpt"))
+                .map(|tail| matches!(tail, "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" | "¹" | "²" | "³"))
+                .unwrap_or(false);
+        if part.is_empty() || part.encode_utf16().count() > 255 || part.starts_with('.')
+            || part.ends_with('.') || part.chars().last().map(char::is_whitespace).unwrap_or(false) || device {
+            return Err((400, "整理路径不合法"));
+        }
+    }
+    Ok(value.to_string())
+}
+
+fn organizer_is_link(metadata: &std::fs::Metadata) -> bool {
+    #[cfg(windows)]
+    {
+        use std::os::windows::fs::MetadataExt;
+        metadata.file_type().is_symlink() || metadata.file_attributes() & 0x400 != 0
+    }
+    #[cfg(not(windows))]
+    { metadata.file_type().is_symlink() }
+}
+
+/// Do not follow links/junctions while creating nested organizer destinations.
+fn organizer_directory(root: &std::path::Path, relative: &str, create: bool) -> Result<PathBuf, OrganizerMoveError> {
+    let mut current = root.to_path_buf();
+    for part in relative.split('/').filter(|part| !part.is_empty()) {
+        current.push(part);
+        let metadata = match std::fs::symlink_metadata(&current) {
+            Ok(m) => m,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                if !create { return Err((404, "源文件夹不存在")); }
+                match std::fs::create_dir(&current) {
+                    Ok(()) => {},
+                    Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {},
+                    Err(_) => return Err((500, "无法创建整理文件夹")),
+                }
+                std::fs::symlink_metadata(&current).map_err(|_| (500, "无法检查整理文件夹"))?
+            },
+            Err(_) => return Err((500, "无法检查整理文件夹")),
+        };
+        if organizer_is_link(&metadata) || !metadata.is_dir() {
+            return Err((400, "整理路径必须是本地普通文件夹"));
+        }
+        let resolved = std::fs::canonicalize(&current).map_err(|_| (500, "无法检查整理文件夹"))?;
+        if !resolved.starts_with(root) { return Err((400, "整理路径超出论文目录")); }
+        current = resolved;
+    }
+    Ok(current)
+}
+
+fn organize_move_pdf(payload: &Value) -> Result<Value, OrganizerMoveError> {
+    let from = organizer_path(payload.get("from"), false)?;
+    let to = organizer_path(payload.get("to"), true)?;
+    if !from.to_lowercase().ends_with(".pdf") { return Err((400, "整理只支持 PDF 文件")); }
+    let metadata = std::fs::symlink_metadata(&dirs().papers).map_err(|_| (500, "无法检查论文目录"))?;
+    if organizer_is_link(&metadata) || !metadata.is_dir() { return Err((400, "论文目录必须是本地普通文件夹")); }
+    let root = std::fs::canonicalize(&dirs().papers).map_err(|_| (500, "无法检查论文目录"))?;
+    let (source_parent, name) = from.rsplit_once('/').unwrap_or(("", from.as_str()));
+    let source_directory = organizer_directory(&root, source_parent, false)?;
+    let source = source_directory.join(name);
+    let metadata = std::fs::symlink_metadata(&source).map_err(|error| {
+        if error.kind() == std::io::ErrorKind::NotFound { (404, "源不存在（可能已被删除）") }
+        else { (500, "无法检查源文件") }
+    })?;
+    if organizer_is_link(&metadata) || !metadata.is_file() { return Err((400, "整理只支持本地普通 PDF 文件")); }
+    let destination_directory = organizer_directory(&root, &to, true)?;
+    if source_directory == destination_directory {
+        return Ok(json!({ "ok": true, "from": from, "to": from, "name": name, "moved": false }));
+    }
+    let destination = destination_directory.join(name);
+    // Atomically claim an unused name. Equal size never proves equal contents;
+    // preserving the basename also preserves the document's notes/session key.
+    if let Err(error) = std::fs::hard_link(&source, &destination) {
+        if error.kind() == std::io::ErrorKind::AlreadyExists || std::fs::symlink_metadata(&destination).is_ok() {
+            return Err((409, "目标已有同名文件，请选择其他文件夹"));
+        }
+        return Err((500, "移动失败：无法安全创建目标文件，原文件已保留"));
+    }
+    if std::fs::remove_file(&source).is_err() {
+        let _ = std::fs::remove_file(&destination);
+        return Err((500, "移动失败：原文件可能被占用，原文件已保留"));
+    }
+    let new_rel = if to.is_empty() { name.to_string() } else { format!("{}/{}", to, name) };
+    if !update_paper_order_after_move(&from, &new_rel, false) { store::log_line("[organize] 文件已移动，排序保存失败"); }
+    Ok(json!({ "ok": true, "from": from, "to": new_rel, "name": name, "moved": true }))
+}
+
 /// POST /api/move {from,to} —— 移动 PDF / 文件夹（含拖出拖入）；to='' 表示根
 pub fn move_item(rq: Request, body: &[u8]) {
     let payload = match parse_json(body) {
         Ok(p) => p,
         Err(_) => return send_json(rq, 400, &err_json("请求体不是合法 JSON")),
     };
+    if payload.get("conflict").and_then(Value::as_str) == Some("error") {
+        static ORGANIZER_MOVE_LOCK: Mutex<()> = Mutex::new(());
+        let _guard = ORGANIZER_MOVE_LOCK.lock().unwrap_or_else(|error| error.into_inner());
+        return match organize_move_pdf(&payload) {
+            Ok(value) => send_json(rq, 200, &value),
+            Err((status, message)) => send_json(rq, status, &err_json(message)),
+        };
+    }
     let from = payload
         .get("from")
         .and_then(|v| v.as_str())
@@ -628,28 +752,7 @@ pub fn move_item(rq: Request, body: &[u8]) {
         format!("{}/{}", to, final_name)
     };
     // order 前缀替换 + 去重
-    let mut seen: HashSet<String> = HashSet::new();
-    let order: Vec<String> = paper_order()
-        .into_iter()
-        .filter_map(|n| {
-            let v = if n == from {
-                new_rel.clone()
-            } else if is_folder {
-                match n.strip_prefix(&format!("{}/", from)) {
-                    Some(rest) => format!("{}/{}", new_rel, rest),
-                    None => n.clone(),
-                }
-            } else {
-                n.clone()
-            };
-            if seen.insert(v.clone()) {
-                Some(v)
-            } else {
-                None
-            }
-        })
-        .collect();
-    let _ = write_paper_order(&order);
+    let _ = update_paper_order_after_move(&from, &new_rel, is_folder);
     store::log_line(&format!("[move] {} -> {}", from, new_rel));
     send_json(rq, 200, &json!({ "ok": true, "from": from, "to": new_rel, "name": final_name, "moved": true }));
 }

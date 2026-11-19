@@ -1056,7 +1056,7 @@ body.reading .home { display: none; }
 .home-workspace { width: 100%; max-width: 1280px; padding: 38px 42px 30px; margin: 0 auto; }
 .home-head { display: flex; align-items: center; justify-content: space-between; gap: 24px; margin-bottom: 26px; }
 .home-head-title { min-width: 0; }
-.home-head-actions { display: flex; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; }
+.home-head-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 10px; min-width: 0; max-width: 100%; }
 .home-eyebrow { margin: 0 0 10px; font-size: var(--ui-fs-sm); color: var(--fg-faint); }
 .home-head h1 { font-size: 25px; line-height: 1.3; font-weight: 650; margin: 0; overflow-wrap: anywhere; }
 .home-description { margin: 9px 0 0; color: var(--fg-dim); font-size: var(--ui-fs); line-height: 1.6; }
@@ -3392,9 +3392,8 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 :root[data-theme="glass"] .pages { --page-gap: 38px; padding-top: 24px; padding-bottom: 50px; }
 .glass-filter-defs { position: absolute; pointer-events: none; }
 
-/* The reader is one continuous desk. Scrollable PDF pixels stay clipped inside
-   .viewer; only their noninteractive depth layer reaches into the side gutters.
-   This preserves the narrow fit-width margins without cutting off the shadow. */
+/* The reader is one continuous desk. PDF pixels and their separate depth layer
+   share the reading viewport boundary, including while zooming and panning. */
 body.reading:not(.agent-full) #main > .main-row {
   position: relative;
   isolation: isolate;
@@ -3419,8 +3418,7 @@ body.reading:not(.agent-full) .main-row .side {
 body.reading:not(.agent-full) .viewer {
   z-index: 1;
   background: transparent;
-  /* PDF pixels belong to this scroll clip. The separate sibling shadow layer
-     can extend naturally behind the sidebars without carrying paper content. */
+  /* Keep PDF pixels inside this scroll clip. */
   contain: paint;
 }
 .paper-shadow-layer {
@@ -3430,7 +3428,8 @@ body.reading:not(.agent-full) .viewer {
   pointer-events: none;
   user-select: none;
   contain: size layout style;
-  clip-path: inset(0 -72px);
+  /* Oversized pages must not cast a rounded outline behind sidebar controls. */
+  clip-path: inset(0);
 }
 body.reading:not(.agent-full) .paper-shadow-layer { display: block; }
 .paper-shadow {

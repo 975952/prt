@@ -73,7 +73,7 @@ async function input(value) {
 }
 async function choose(sid) {
   const selector = `.agent-nav-session[data-agent-session="${sid}"]`;
-  await page.waitForSelector(selector, { visible: true }); await page.click(selector); await navSettled();
+  await page.locator(selector).click(); await navSettled();
   await page.evaluate(async () => {
     await new Promise(resolve => requestAnimationFrame(resolve));
     await Promise.all(document.querySelector('#composer').getAnimations().map(animation => animation.finished.catch(() => {})));

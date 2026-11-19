@@ -18,6 +18,7 @@ import { resolvePaperTarget, snapshotPaperTarget } from './paper-target.js';
 import { runWithDeadline } from './task-deadline.js';
 import { createLibraryReader } from './chat-source.js';
 import { createPaperTitleIndex } from './paper-titles.js';
+import { createPaperOrganizer } from './paper-organizer.js';
 import { CARD_MATERIAL_DEFAULTS, updateTranslationMaterial } from './glass-material.js';
 import { tabsFeatureEnabled, loadWorkspace, saveWorkspace, createTabBar, pushClosedTab, popClosedTab, TABS_MAX } from './tabs.js';
 import { OPS, opById } from './ops.js';
@@ -1749,7 +1750,11 @@ function initTopbar() {
   document.body.classList.remove('topbar-auto', 'topbar-near');
   document.body.classList.add('topbar-static');
   const home = $('#homeBtn');
-  if (home) home.onclick = showHome;
+  if (home) home.onclick = () => {
+    if (agentNavigationBusy) return;
+    if (!document.body.classList.contains('reading')) void returnToReader();
+    else showHome();
+  };
   // sessions.js owns the header menu; one click must open only one surface.
 }
 
@@ -2413,7 +2418,7 @@ function queueProgressSave(payload) {
 }
 
 const saveProgress = debounce(async () => {
-  if (!state.doc || !viewer?.pdf || state.viewerDocId !== state.doc.docId || !document.body.classList.contains('reading')) return;
+  if (!state.doc || !viewer?.pdf || state.viewerDocId !== state.doc.docId || !document.body.classList.contains('reading') || agentWorkspaceView === 'full') return;
   const docs = { ...(serverState.docs || {}) };
   docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };
   serverState = { ...serverState, docs, lastDoc: state.doc.docId, lastUrl: state.doc.url, lastName: state.doc.name };
@@ -2425,7 +2430,7 @@ const saveProgress = debounce(async () => {
 }, 500);
 
 async function saveProgressNow({ silent = false } = {}) {
-  if (!state.doc || !viewer?.pdf || state.viewerDocId !== state.doc.docId || !document.body.classList.contains('reading')) return;
+  if (!state.doc || !viewer?.pdf || state.viewerDocId !== state.doc.docId || !document.body.classList.contains('reading') || agentWorkspaceView === 'full') return;
   const docs = { ...(serverState.docs || {}) };
   docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };
   const payload = { ...serverState, docs, lastDoc: state.doc.docId, lastUrl: state.doc.url, lastName: state.doc.name };
@@ -2436,6 +2441,62 @@ async function saveProgressNow({ silent = false } = {}) {
 
 let homeReadingState = null;
 const agentReaderAnchors = new WeakMap();
+const organizerReadingPositions = new Map();
+
+/** Library and Alina temporarily cover the same reader. Only visible reading
+ * can replace its snapshot; switching between those surfaces must keep it. */
+function rememberReadingWorkspace() {
+  if (!document.body.classList.contains('reading') || agentWorkspaceView === 'full'
+      || !viewer?.pdf || state.viewerDocId !== state.doc?.docId) return;
+  viewer.commitZoomPreview?.();
+  homeReadingState = {
+    docId: state.doc.docId, path: state.doc.path, pdf: viewer.pdf, page: viewer.current,
+    ...viewer.capturePosition(), scrollLeft: viewer.container.scrollLeft,
+    fitMode: viewer._fitMode, anchor: viewer._captureAnchor(), agentView: agentWorkspaceView,
+    sessionOverride: agentSessionOverride,
+    conversation: { pinnedOwner: agentPinnedOwner, folderOverride: agentFolderOverride, paperOverride: agentPaperOverride },
+    panels: AI_BLOCKS.map(block => {
+      const body = state.blockMeta?.[block.id]?.body;
+      return body ? { body, top: body.scrollTop, atEnd: body.scrollHeight - body.clientHeight - body.scrollTop < 60 } : null;
+    }).filter(Boolean),
+  };
+  void saveProgressNow({ silent: true }).catch(() => {
+    toast(tr("阅读进度保存失败，当前进度仍在内存中。"), 'err', 5000);
+  });
+}
+
+async function returnToReader() {
+  if (agentNavigationBusy || conversationMoveBusy) return;
+  const loaded = viewer?.pdf && state.viewerDocId === state.doc?.docId
+    && (state.papers.find(paper => (paper.path || paper.name) === state.doc.path)
+      || (state.doc.url?.startsWith('blob:') ? state.doc : null));
+  const moved = organizerReadingPositions.has(state.doc?.path)
+    ? state.papers.find(paper => (paper.path || paper.name) === state.doc.path) : null;
+  const paper = loaded || moved || recentDocs()[0];
+  if (!paper) { toast(tr("还没有阅读记录")); return; }
+  const saved = homeReadingState?.path === paper.path ? homeReadingState : null;
+  agentNavigationBusy = true;
+  try {
+    await parkAgentConversation();
+    await changeAgentScope(saved?.sessionOverride ?? null, saved?.conversation);
+    sessionsCloseOverlays();
+    agentWorkspace?.closePapers();
+    dismissAgentHandoff();
+    if (loaded) await sessionsOpenWorkspace({ choose: !chatViews.has(currentChatKey()) });
+    await openDoc(paper);
+    if (state.viewerDocId !== paper.docId || !viewer?.pdf) {
+      setAgentWorkspaceView('closed');
+      setView('home');
+      return;
+    }
+    setAgentWorkspaceView(saved?.agentView === 'docked' ? 'docked' : 'closed');
+    setView('reading');
+    activateComposerDraft('chat');
+    await viewer.refreshPage?.(viewer.current);
+  } catch (error) {
+    toast(tr("返回阅读失败：{0}", error.message), 'err', 5000);
+  } finally { agentNavigationBusy = false; }
+}
 
 function setAgentWorkspaceView(view) {
   if (view === 'full' && agentWorkspaceView !== 'full' && viewer?.pdf
@@ -2490,16 +2551,17 @@ async function parkAgentConversation() {
   if (hasChatScope() && !sessionsIsEntryMode() && sessionHasChatContent()) await saveSessionNow();
   parkChatSession();
 }
-async function changeAgentScope(next) {
-  if (agentSessionOverride === next && !agentPinnedOwner) return;
+async function changeAgentScope(next, { pinnedOwner = null, folderOverride = null, paperOverride = '' } = {}) {
+  if (agentSessionOverride === next && agentPinnedOwner === pinnedOwner
+      && agentFolderOverride === folderOverride && agentPaperOverride === paperOverride) return;
   await parkAgentConversation();
   sessionNavigationSeq += 1;
   sessionsCloseOverlays();
   sessionsHideEntryCard();
   agentSessionOverride = next;
-  agentPinnedOwner = null;
-  agentFolderOverride = null;
-  agentPaperOverride = '';
+  agentPinnedOwner = pinnedOwner;
+  agentFolderOverride = folderOverride;
+  agentPaperOverride = paperOverride;
   state.history = []; state.sessionSummary = ''; state.summaryCovered = 0; state.paperMemory = '';
   state.sessionEntries = state.sessionEntries.filter(row => row?.block === 'translate');
   mountChatSession();
@@ -2509,7 +2571,8 @@ function initAgentWorkspace() {
   const profile = readAgentProfile();
   agentName = agentDisplayName(profile);
   agentWorkspace = createAgentWorkspace({
-    onOpen: () => openAgentWorkspace(), onExpand: () => openAgentWorkspace({ landing: false }),
+    onOpen: () => agentWorkspaceView === 'full' ? returnToReader() : openAgentWorkspace(),
+    onExpand: () => openAgentWorkspace({ landing: false }),
     onLanding: () => openAgentWorkspace({ landing: true }),
     onStartSearch: () => $('#chatInput').focus({ preventScroll: true }),
     onResume: async () => {
@@ -2561,6 +2624,7 @@ async function openAgentWorkspace({ landing } = {}) {
   if (agentNavigationBusy) return;
   agentNavigationBusy = true;
   try {
+    rememberReadingWorkspace();
     const fresh = landing === true;
     const expanding = landing === false;
     landing ??= agentGlobalLanding ?? true;
@@ -2671,25 +2735,10 @@ async function chooseAgentLocalConversation(fresh) {
 /** 首页只是工作区的另一视图：保留标签、PDF 与会话任务，作废迟到的打开回调。 */
 function showHome() {
   if (conversationMoveBusy) return;
+  rememberReadingWorkspace();
   if (agentWorkspaceView !== 'closed') {
     saveComposerDraft(); parkChatSession(); dismissAgentHandoff();
     setAgentWorkspaceView('closed');
-  }
-  if (document.body.classList.contains('reading') && viewer?.pdf && state.viewerDocId === state.doc?.docId) {
-    viewer.commitZoomPreview?.();
-    homeReadingState = {
-      docId: state.doc.docId, pdf: viewer.pdf, page: viewer.current,
-      ...viewer.capturePosition(), scrollLeft: viewer.container.scrollLeft,
-      fitMode: viewer._fitMode, anchor: viewer._captureAnchor(),
-      panels: AI_BLOCKS.map(block => {
-        const body = state.blockMeta?.[block.id]?.body;
-        return body ? { body, top: body.scrollTop, atEnd: body.scrollHeight - body.clientHeight - body.scrollTop < 60 } : null;
-      }).filter(Boolean),
-    };
-    // 在隐藏前取进度快照；首页不会停止当前会话的保存或生成。
-    void saveProgressNow({ silent: true }).catch(() => {
-      toast(tr("阅读进度保存失败，当前进度仍在内存中。"), 'err', 5000);
-    });
   }
   documentViewSeq += 1;
   cancelSearch({ clearInput: true, close: true, focus: false });
@@ -2717,7 +2766,9 @@ function setView(view) {
     }
     applyResponsiveLayout();
     refitViewer(0);
-    const saved = homeReadingState;
+    // A full Alina workspace still uses the reading layout underneath it.
+    // Restore the snapshot only when the PDF itself becomes visible again.
+    const saved = agentWorkspaceView !== 'full' ? homeReadingState : null;
     if (saved && saved.docId === state.doc?.docId && saved.pdf === viewer?.pdf) {
       homeReadingState = null;
       if (saved.fitMode) {
@@ -3381,6 +3432,7 @@ function initFiles() {
   });
 
   $('#homeOpen')?.addEventListener('click', () => $('#fileInput')?.click());
+  $('#homeOrganize')?.addEventListener('click', () => { void openPaperOrganizer(); });
   for (const node of $$('#home [data-home-icon]')) node.append(iconEl(node.dataset.homeIcon));
   for (const button of $$('#home [data-home-filter]')) button.addEventListener('click', () => chooseHomeView(button.dataset.homeFilter));
   $('#homeSearch')?.addEventListener('input', (e) => {
@@ -3632,6 +3684,108 @@ function bindPaperDrag(list) {
       await moveItem(payload.path, to);
     }
   });
+}
+
+let paperOrganizer = null;
+async function openPaperOrganizer() {
+  if (conversationMoveBusy) return;
+  paperOrganizer ||= createPaperOrganizer({
+    getPapers: async () => { await refreshPaperList(); return state.papers; },
+    getFolders: () => state.folders,
+    getLabel: paper => paperTitles.label(paper),
+    readTitle: readPdfTitle,
+    movePaper: organizePaperMove,
+    onComplete: async () => { await refreshPaperList(); renderHome(); },
+  });
+  try { await paperOrganizer.open(); }
+  catch (error) { toast(tr("整理失败：{0}", error.message), 'err', 5000); }
+}
+
+/** The organizer preserves filenames and only accepts an exclusive move.
+ * Keep every live reader/tab pointing at the new path after each success. */
+async function organizePaperMove({ from, to }) {
+  const paper = state.papers.find(item => (item.path || item.name) === from);
+  if (!paper) throw new Error(tr("文件已不存在，请刷新后重试"));
+  const beingRead = () => ((state.doc?.path || state.doc?.name) === from
+      && (regionCaptureCount > 0 || activeTranslationBatch?.docId === paper.docId
+        || [...translationJobs].some(job => !job.controller.signal.aborted
+          && (!job.entry.root.__sessionRecord?.docId || job.entry.root.__sessionRecord.docId === paper.docId))))
+    || [...chatJobs.values()].some(job => !job.finished && !job.discarded
+    && (job.docId === paper.docId || job.reader?.url === paper.url
+      || job.papers?.some(item => (item.path || item.name) === from)));
+  if (beingRead()) throw new Error(tr("正在生成中，等它跑完或者点停止"));
+  const rangeLoaded = Number(paper.size) > 20 * 1024 * 1024;
+  if (!rangeLoaded) {
+    // Small documents stream in full. Finish that stream before removing its
+    // source path so existing reader proxies remain safe to reuse afterwards.
+    const pdfs = new Set([...pdfHandles.values()].filter(handle => handle.sourcePath === from).map(handle => handle.pdf));
+    if ((state.doc?.path || state.doc?.name) === from && viewer?.pdf) pdfs.add(viewer.pdf);
+    await runWithDeadline(() => Promise.all([...pdfs].map(pdf => pdf.getDownloadInfo())), { timeoutMs: 15000 });
+    if (beingRead()) throw new Error(tr("正在生成中，等它跑完或者点停止"));
+  }
+  // Range transports can issue background requests while /api/move is in
+  // flight. Stop them before the source disappears, retaining positions under
+  // the original path so a failed move can reopen the unchanged source safely.
+  const obsoletePdfs = new Set();
+  const invalidateRanges = rangeLoaded && folderOf(from) !== to;
+  if (invalidateRanges && (state.doc?.path || state.doc?.name) === from && viewer?.pdf) {
+    const position = homeReadingState?.path === from ? homeReadingState : {
+      page: viewer.current, ...viewer.capturePosition(), scrollLeft: viewer.container.scrollLeft,
+      fitMode: viewer._fitMode, anchor: viewer._captureAnchor(),
+    };
+    organizerReadingPositions.set(from, { ...position, pdf: null, path: from });
+    const handle = viewer.detach();
+    if (handle?.pdf) obsoletePdfs.add(handle.pdf);
+    state.viewerDocId = null;
+  }
+  if (invalidateRanges) for (const [docId, handle] of pdfHandles) {
+    if (handle.sourcePath === from) {
+      if (!organizerReadingPositions.has(from)) organizerReadingPositions.set(from, {
+        page: handle.page, scale: handle.scale, fitMode: handle.fitMode, scrollTop: handle.scrollTop, scrollLeft: 0,
+      });
+      pdfHandles.delete(docId);
+      obsoletePdfs.add(handle.pdf);
+    }
+  }
+  await Promise.all([...obsoletePdfs].map(pdf => Promise.resolve().then(() => pdf.destroy()).catch(() => {})));
+  if (beingRead()) throw new Error(tr("正在生成中，等它跑完或者点停止"));
+  const response = await fetch('/api/move', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ from, to, conflict: 'error' }),
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result?.error?.message || `HTTP ${response.status}`);
+  if (!result.moved) return result;
+  const movedPath = result.to;
+  const movedUrl = `/api/pdf?path=${encodeURIComponent(movedPath)}`;
+  const oldUrl = paper.url;
+  for (const handle of pdfHandles.values()) {
+    if (handle.sourcePath === from) { handle.sourcePath = movedPath; handle.url = movedUrl; }
+  }
+  if (organizerReadingPositions.has(from)) {
+    organizerReadingPositions.set(movedPath, organizerReadingPositions.get(from));
+    organizerReadingPositions.delete(from);
+  }
+  paper.path = movedPath; paper.url = movedUrl; paper.folder = folderOf(movedPath);
+  if ((state.doc?.path || state.doc?.name) === from) {
+    state.doc.path = movedPath;
+    state.doc.url = movedUrl;
+    viewer.url = movedUrl;
+  }
+  for (const tab of tabsStore.tabs) {
+    if ((tab.path || tab.name) === from) { tab.path = movedPath; tab.url = movedUrl; }
+  }
+  if (homeReadingState?.path === from) homeReadingState.path = movedPath;
+  state.fileSel.delete(from);
+  paperAccess.release(oldUrl);
+  tabsSyncBar(); tabsPersist();
+  if (serverState.lastUrl === oldUrl) {
+    serverState = { ...serverState, lastUrl: movedUrl };
+    await queueProgressSave(serverState).catch(() => {
+      toast(tr("阅读进度保存失败，当前进度仍在内存中。"), 'err', 5000);
+    });
+  }
+  return result;
 }
 
 /** 批量移动一组 PDF 到目标文件夹（''=根）；完成一次刷新 + 一条提示 */
@@ -4778,6 +4932,24 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
   loadPaperMemory();
   if (saved?.page && saved.page > 1) await viewer.goToPage(saved.page);
   if (superseded()) return;
+  const movedPosition = organizerReadingPositions.get(path || name);
+  if (movedPosition) {
+    await viewer.goToPage(movedPosition.page || 1);
+    if (superseded()) return;
+    if (movedPosition.fitMode) viewer.fitWidth();
+    else { viewer.setScale(movedPosition.scale, { keepCenter: false }); viewer._fitMode = false; }
+    viewer.layout();
+    viewer.container.scrollTop = movedPosition.scrollTop || 0;
+    viewer.container.scrollLeft = movedPosition.scrollLeft || 0;
+    if (movedPosition.anchor && agentWorkspaceView !== 'full') viewer._restoreAnchor(movedPosition.anchor);
+    viewer._handleScroll();
+    if (homeReadingState?.path === (path || name)) homeReadingState.pdf = viewer.pdf;
+    organizerReadingPositions.delete(path || name);
+    await viewer.refreshPage?.(viewer.current);
+    if (superseded()) return;
+    syncZoom(viewer.scale);
+    syncFootPage(viewer.current, viewer.numPages);
+  }
   state.viewerDocId = docId;
   // 底栏控件到这一刻才真的可用（`syncFootEnabled` 要求 viewerDocId === doc.docId）
   syncFootEnabled(true);
@@ -6450,10 +6622,22 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
   return { root, body: textEl, acts, role };
 }
 
+function paperForSessionSource(record) {
+  const exact = record?.docPath && state.papers.find(paper => paper.path === record.docPath && paper.docId === record.docId);
+  if (exact) return exact;
+  // Moving a PDF preserves its ID. Older saved conversations still contain the
+  // original path; only recover it when the surviving identity is unambiguous.
+  const candidates = state.papers.filter(paper => paper.docId === record?.docId);
+  return candidates.length === 1 ? candidates[0] : null;
+}
+
 function navigateEntrySource(root, page, fragment = '') {
   const record = root?.__sessionRecord;
   if (record?.docId && (agentWorkspaceView === 'full' || record.docId !== state.doc?.docId || (record.docPath && record.docPath !== state.doc?.path))) {
-    return openOtherPaperRef(record.docPath || record.docId, page, fragment);
+    const paper = paperForSessionSource(record);
+    if (paper) return openOtherPaperRef(paper.path || paper.docId, page, fragment);
+    toast(tr("找不到《{0}》这篇论文（可能已移出 papers 文件夹）", record.docTitle || record.docId), 'err', 4500);
+    return;
   }
   jumpAndHighlight(page, fragment);
 }
@@ -10832,7 +11016,7 @@ function initPageRefs() {
     const sourceRecord = btn.closest('.msg')?.__sessionRecord;
     const sourceDocId = sourceRecord?.docId;
     if (!btn.dataset.paper && sourceDocId && (agentWorkspaceView === 'full' || sourceDocId !== state.doc?.docId || (sourceRecord.docPath && sourceRecord.docPath !== state.doc?.path))) {
-      const paper = sourceRecord.docPath ? state.papers.find(item => item.path === sourceRecord.docPath) : state.papers.find(item => item.docId === sourceDocId);
+      const paper = paperForSessionSource(sourceRecord);
       if (paper) { openOtherPaperRef(paper.path || paper.docId, page, fragment); return; }
       toast(tr("找不到《{0}》这篇论文（可能已移出 papers 文件夹）", sourceDocId), 'err', 4500);
       return;
@@ -14877,7 +15061,7 @@ window.addEventListener('beforeunload', (event) => {
       }
     } catch { /* unload fallback */ }
   }
-  if (!state.doc || !viewer?.pdf || !document.body.classList.contains('reading')) return;
+  if (!state.doc || !viewer?.pdf || !document.body.classList.contains('reading') || agentWorkspaceView === 'full') return;
   try {
     const docs = { ...(serverState.docs || {}) };
     docs[state.doc.docId] = { page: viewer.current, scale: Number(viewer.scale.toFixed(3)), fit: !!viewer._fitMode, ts: Date.now(), name: state.doc.name };

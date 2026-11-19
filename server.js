@@ -825,9 +825,106 @@ async function handleDeleteFolder(req, res, url) {
   return sendJson(res, 200, { ok: true, path: rel, mode, moved: pdfs.length });
 }
 
+async function updatePaperOrderAfterMove(from, newRel, isFolder = false) {
+  const order = await readPaperOrder();
+  const next = [];
+  const seen = new Set();
+  for (const n of order) {
+    let v = n;
+    if (n === from) v = newRel;
+    else if (isFolder && n.startsWith(`${from}/`)) v = `${newRel}${n.slice(from.length)}`;
+    if (!seen.has(v)) { seen.add(v); next.push(v); }
+  }
+  await writePaperOrder(next);
+}
+
+const organizerMoveError = (status, message) => Object.assign(new Error(message), { status });
+function organizerPath(value, allowEmpty = false) {
+  if (typeof value !== 'string' || value.length > 1000 || value !== value.trim()
+    || /[\\\u0000-\u001f\u007f-\u009f:*?"<>|]/.test(value)
+    || (!value && !allowEmpty)) throw organizerMoveError(400, '整理路径不合法');
+  if (!value) return '';
+  for (const part of value.split('/')) {
+    if (!part || part.length > 255 || part.startsWith('.') || /[.\s]$/.test(part)
+      || /^(?:con|prn|aux|nul|com[1-9¹²³]|lpt[1-9¹²³])(?:\.|$)/i.test(part)) {
+      throw organizerMoveError(400, '整理路径不合法');
+    }
+  }
+  return value;
+}
+
+/** Walk existing components without following links; create destinations one
+ * checked component at a time instead of recursive mkdir through a junction. */
+async function organizerDirectory(root, relative, create = false) {
+  let current = root;
+  for (const part of relative ? relative.split('/') : []) {
+    current = path.join(current, part);
+    let metadata;
+    try { metadata = await fsp.lstat(current); }
+    catch (error) {
+      if (error.code !== 'ENOENT') throw organizerMoveError(500, '无法检查整理文件夹');
+      if (!create) throw organizerMoveError(404, '源文件夹不存在');
+      try { await fsp.mkdir(current); }
+      catch (error) { if (error.code !== 'EEXIST') throw organizerMoveError(500, '无法创建整理文件夹'); }
+      metadata = await fsp.lstat(current);
+    }
+    if (metadata.isSymbolicLink() || !metadata.isDirectory()) throw organizerMoveError(400, '整理路径必须是本地普通文件夹');
+    const resolved = await fsp.realpath(current);
+    const inside = path.relative(root, resolved);
+    if (inside.startsWith('..') || path.isAbsolute(inside)) throw organizerMoveError(400, '整理路径超出论文目录');
+    current = resolved;
+  }
+  return current;
+}
+
+let organizerMoveChain = Promise.resolve();
+async function organizeMovePdf(raw) {
+  const from = organizerPath(raw.from), to = organizerPath(raw.to, true);
+  if (!/\.pdf$/i.test(from)) throw organizerMoveError(400, '整理只支持 PDF 文件');
+  const rootMetadata = await fsp.lstat(PAPERS_DIR);
+  if (rootMetadata.isSymbolicLink() || !rootMetadata.isDirectory()) throw organizerMoveError(400, '论文目录必须是本地普通文件夹');
+  const root = await fsp.realpath(PAPERS_DIR);
+  const sourceParent = from.includes('/') ? from.slice(0, from.lastIndexOf('/')) : '';
+  const sourceDirectory = await organizerDirectory(root, sourceParent);
+  const name = path.basename(from), source = path.join(sourceDirectory, name);
+  let metadata;
+  try { metadata = await fsp.lstat(source); }
+  catch (error) {
+    if (error.code === 'ENOENT') throw organizerMoveError(404, '源不存在（可能已被删除）');
+    throw organizerMoveError(500, '无法检查源文件');
+  }
+  if (metadata.isSymbolicLink() || !metadata.isFile()) throw organizerMoveError(400, '整理只支持本地普通 PDF 文件');
+  const destinationDirectory = await organizerDirectory(root, to, true);
+  if (sourceDirectory === destinationDirectory) return { ok: true, from, to: from, name, moved: false };
+  const destination = path.join(destinationDirectory, name);
+  // link is an atomic no-clobber operation. Never infer duplicate contents from
+  // equal sizes, and never rename a PDF whose name owns its notes and progress.
+  try { await fsp.link(source, destination); }
+  catch (error) {
+    let exists = error.code === 'EEXIST';
+    if (!exists) { try { await fsp.lstat(destination); exists = true; } catch { /* absent */ } }
+    if (exists) throw organizerMoveError(409, '目标已有同名文件，请选择其他文件夹');
+    throw organizerMoveError(500, '移动失败：无法安全创建目标文件，原文件已保留');
+  }
+  try { await fsp.unlink(source); }
+  catch {
+    await fsp.unlink(destination).catch(() => {});
+    throw organizerMoveError(500, '移动失败：原文件可能被占用，原文件已保留');
+  }
+  const newRel = to ? `${to}/${name}` : name;
+  await updatePaperOrderAfterMove(from, newRel).catch(error => sec.diag(`整理排序保存失败: ${error.message}`));
+  return { ok: true, from, to: newRel, name, moved: true };
+}
+
 async function handleMove(req, res, url) {
   const raw = await readJsonBodyOrReq(req, res, sec.BODY_LIMITS.papers);
   if (raw === null) return undefined;
+  if (raw.conflict === 'error') {
+    const pending = organizerMoveChain.catch(() => {}).then(() => organizeMovePdf(raw));
+    organizerMoveChain = pending;
+    try { return sendJson(res, 200, await pending); }
+    catch (error) { return sendJson(res, error.status || 500, { error: { message: error.status ? error.message : '整理移动失败，原文件已保留' } }); }
+  }
   const from = normalizeRel(raw.from);
   const to = normalizeRel(raw.to); // '' = 根
   if (!from) return sendJson(res, 400, { error: { message: '缺少 from' } });
@@ -891,19 +988,7 @@ async function handleMove(req, res, url) {
   }
   // order 前缀替换 + 去重
   const newRel = to ? `${to}/${finalName}` : finalName;
-  const order = await readPaperOrder();
-  const next = [];
-  const seen = new Set();
-  for (const n of order) {
-    let v = n;
-    if (n === from) v = newRel;
-    else if (isFolder && n.startsWith(`${from}/`)) v = `${newRel}${n.slice(from.length)}`;
-    if (!seen.has(v)) {
-      seen.add(v);
-      next.push(v);
-    }
-  }
-  await writePaperOrder(next);
+  await updatePaperOrderAfterMove(from, newRel, isFolder);
   console.log(`[move] ${from} -> ${newRel}`);
   return sendJson(res, 200, { ok: true, from, to: newRel, name: finalName, moved: true });
 }

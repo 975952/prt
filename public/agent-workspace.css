@@ -171,13 +171,17 @@ body.agent-full #rightSide > .agent-paper-picker { width: min(calc(100% - 48px),
 /* Keep the session title ahead of the picker; its close control owns its own row. */
 body.agent-full #rightSide > .sessbar { order: -1; width: 100%; min-height: 63px; padding: 18px 28px 14px; border-bottom: 1px solid color-mix(in srgb, var(--border) 44%, transparent); }
 body.agent-full .sess-label { font-size: 13px; font-weight: 500; }
-body.agent-full #rightSide > .ai { padding: 16px 24px 0; }
+/* Match the message column to the input card, including the scroll gutter. */
+body.agent-full #rightSide > .ai { width: min(100%, 1000px); padding: 16px 14px 0; }
 body.agent-full #rightSide > .composer { width: min(100%, 1000px); padding: 14px 24px 26px; }
 body.agent-full #aiArea .ai-block { background: transparent; }
-body.agent-full #aiArea .ai-body { padding: 4px 0 20px; }
+body.agent-full #aiArea .ai-body { padding: 4px 0 20px; scrollbar-gutter: stable both-edges; }
+body.agent-full #aiArea .ai-body::-webkit-scrollbar { width: 10px; height: 10px; }
 body.agent-full #aiArea .ai-body > .msg { max-width: 100%; flex: 0 0 auto; padding: 10px 16px; gap: 8px; }
-body.agent-full #aiArea .ai-body > .msg.assistant { width: 100%; margin: 0 auto; padding: 16px 16px 21px; }
-body.agent-full #aiArea .ai-body > .msg.user { width: fit-content; max-width: 82%; margin: 12px 16px 8px auto; padding: 10px 15px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 17px 17px 5px 17px; background: color-mix(in srgb, var(--bg-elev) 62%, transparent); }
+body.agent-full #aiArea .ai-body > .msg.assistant { width: 100%; margin: 0 auto; padding: 16px 0 21px; }
+body.agent-full #aiArea .ai-body > .msg.user { width: fit-content; max-width: 82%; margin: 12px 0 8px auto; padding: 10px 15px; border: 1px solid color-mix(in srgb, var(--border) 55%, transparent); border-radius: 17px 17px 5px 17px; background: color-mix(in srgb, var(--bg-elev) 62%, transparent); }
+body.agent-full #aiArea .msg .shot-item { width: fit-content; max-width: 100%; }
+body.agent-full #aiArea .msg .shot-img { width: auto; height: auto; max-width: min(100%, 320px); max-height: 180px; object-fit: contain; }
 body.agent-full #aiArea .ai-body > .msg.assistant + .msg.user { margin-top: 20px; }
 body.agent-full #aiArea .msg .text { font-family: var(--font); font-size: 16px; line-height: 1.75; }
 body.agent-full #aiArea .msg .text :is(h1, h2, h3, h4, h5, h6) { font-size: 1.08em; line-height: 1.5; }
@@ -301,7 +305,7 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
   body.agent-full .agent-nav-recents, body.agent-full .agent-nav-foot { display: none; }
   body.agent-full #rightCols > #rightSide { width: 100%; height: 0; flex: 1 1 auto; border-radius: 17px; }
   body.agent-full #rightSide > .sessbar { min-height: 53px; padding: 13px 15px 11px; }
-  body.agent-full #rightSide > .ai { padding: 9px 12px 0; }
+  body.agent-full #rightSide > .ai { padding-top: 9px; }
 }
 @media (max-width: 440px) {
   .agent-nav-primary [data-agent-icon] { display: none; }
@@ -339,7 +343,7 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
   body.agent-full #rightSide > .composer { padding-inline: 15px; }
   body.agent-full #rightSide > .composer { padding-bottom: 18px; }
   body.agent-full #rightSide > :is(.agent-paper-picker, .agent-status) { width: calc(100% - 30px); }
-  body.agent-full #rightSide > .ai { padding-inline: 1px; }
+  body.agent-full #rightSide > .ai { padding-inline: 5px; }
   .agent-identity-actions { gap: 1px; }
   .agent-identity { gap: 7px; }
   .agent-heading { flex: 1 1 auto; }
