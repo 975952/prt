@@ -1,6 +1,8 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  '调整 Library 侧栏宽度': 'Resize Library sidebar',
+  '拖动调整宽度，双击恢复默认；方向键微调': 'Drag to resize; double-click to reset; arrow keys to adjust',
   "分类只用一层文件夹，请勿输入 / 或反斜线。": "Use a single folder name without slashes.",
   "按名字分类，相似内容放一起。只用一层文件夹，确认后移动。": "Group similar PDFs by filename in flat folders. Review, then move.",
   "分类偏好": "Preferences",

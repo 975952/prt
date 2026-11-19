@@ -1019,7 +1019,7 @@ body.dragging .viewer { pointer-events: none; }
 
 
 .home {
-  flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: 208px minmax(0, 1fr);
+  flex: 1 1 auto; min-height: 0; display: grid; grid-template-columns: var(--library-sidebar-width, var(--library-sidebar-default, 208px)) minmax(0, 1fr);
   overflow: hidden; background: transparent;
   margin: 0; border: 0; border-radius: 0;
 }
@@ -1032,7 +1032,12 @@ body:not(.reading) #viewer { display: none; }
 /* 阅读态下首页整个让位（与 #viewer 互斥） */
 body.reading .home { display: none; }
 
-.home-sidebar { min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 32px 16px 20px; background: var(--bg); border-right: 1px solid var(--border); }
+.home-sidebar { position: relative; min-width: 0; min-height: 0; display: flex; flex-direction: column; padding: 32px 16px 20px; background: var(--bg); border-right: 1px solid var(--border); }
+.home-sidebar-resize { position: absolute; top: 0; bottom: 0; right: -4px; width: 8px; z-index: 5; cursor: col-resize; touch-action: none; -webkit-app-region: no-drag; }
+.home-sidebar-resize::after { content: ''; position: absolute; top: 0; bottom: 0; left: 3px; width: 2px; background: transparent; transition: background .15s; }
+.home-sidebar-resize:hover::after, .home-sidebar-resize:focus-visible::after, .library-sidebar-dragging .home-sidebar-resize::after { background: var(--accent); }
+.home-sidebar-resize:focus-visible { outline: 1px solid var(--accent); outline-offset: -1px; }
+.library-sidebar-dragging, .library-sidebar-dragging * { cursor: col-resize !important; user-select: none !important; }
 .home-brand { display: flex; align-items: center; gap: 10px; padding: 0 12px 34px; }
 .home-brand > div { display: flex; flex-direction: column; gap: 3px; min-width: 0; }
 .home-brand strong { font-size: 24px; font-weight: 650; letter-spacing: -.8px; line-height: 1.2; }
@@ -1165,7 +1170,7 @@ body.reading .home { display: none; }
 
 /* 首页的紧凑导航不写入阅读侧栏偏好。 */
 @container bookshelf (max-width: 900px) {
-  .home { grid-template-columns: 176px minmax(0, 1fr); }
+  .home { --library-sidebar-default: 176px; }
   .home-sidebar { padding: 28px 10px 18px; }
   .home-workspace { padding: 30px 24px 24px; }
   .home-head { gap: 16px; }
@@ -1174,6 +1179,7 @@ body.reading .home { display: none; }
 }
 @container bookshelf (max-width: 700px) {
   .home { display: flex; flex-direction: column; }
+  .home-sidebar-resize { display: none; }
   .home-sidebar { flex-shrink: 0; padding: 10px 16px; border-right: 0; border-bottom: 1px solid var(--border); }
   .home-brand, .home-sidebar-foot, .home-nav-label { display: none; }
   .home-nav { display: flex; gap: 4px; }

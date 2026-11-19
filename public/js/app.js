@@ -20,6 +20,7 @@ import { runWithDeadline } from './task-deadline.js';
 import { createLibraryReader } from './chat-source.js';
 import { createPaperTitleIndex } from './paper-titles.js';
 import { createPaperOrganizer } from './paper-organizer.js';
+import { initLibrarySidebar } from './library-sidebar.js';
 import { createOrganizerHistory } from './organizer-history.js';
 import { groupPaperCollection } from './paper-classifier.js';
 import { CARD_MATERIAL_DEFAULTS, updateTranslationMaterial } from './glass-material.js';
@@ -2951,6 +2952,7 @@ function chooseHomeView(filter, folder = null) {
 
 /** 书架来自磁盘文件，阅读状态来自 serverState；所有入口共用 openDoc。 */
 function renderHome({ navigation = true } = {}) {
+  initLibrarySidebar($('#home'), { storage: localStorage, label: tr('调整 Library 侧栏宽度'), resetLabel: tr('拖动调整宽度，双击恢复默认；方向键微调') });
   const list = $('#homeList');
   if (!list) return;
   stopHomeThumbnailWork();
