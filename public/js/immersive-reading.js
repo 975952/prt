@@ -81,6 +81,17 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     if (show) { prepareChat?.(); side.classList.add('reading-qa-card'); fitChatCard(); raiseCard('chat'); }
     reveal();
   }
+  function dismissMostRecentCard() {
+    const chatOpen = body.classList.contains('immersive-chat-open');
+    const translateOpen = !translation.classList.contains('hidden');
+    if (!chatOpen && !translateOpen) return false;
+    const recent = body.dataset.immersiveCard;
+    if (recent === 'chat' && chatOpen) showChat(false);
+    else if (recent === 'translate' && translateOpen) translation.querySelector('#translationCardClose')?.click();
+    else if (chatOpen) showChat(false);
+    else translation.querySelector('#translationCardClose')?.click();
+    return true;
+  }
   function fitChatCard() {
     if (!active || !body.classList.contains('immersive-chat-open')) return;
     const box = side.getBoundingClientRect();
@@ -161,6 +172,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     const start = down; down = null;
     if (Math.hypot(event.clientX - start.x, event.clientY - start.y) > 5 || performance.now() - start.time > 600) return;
     if (getSelection()?.toString().trim() || getViewer()?.getSelectionInfo()?.cleanText) return;
+    if (dismissMostRecentCard()) return;
     clearTimeout(turnTimer);
     const bounds = viewerElement.getBoundingClientRect();
     turnTimer = setTimeout(() => {

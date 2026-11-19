@@ -22,7 +22,7 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   let historySelectionId = '', historySelectionText = '', submitting = false, composing = false;
   const drafts = new Map();
   let draftKey = String(getDocumentKey() || '');
-  let captureSequence = 0, attachmentSignature = '';
+  let captureSequence = 0, attachmentSignature = '', passageSignature = '';
   const button = (id, label, icon, action) => el('button', {
     id, class: 'reading-card-action', type: 'button', title: label, 'aria-label': label,
     onclick: action,
@@ -74,8 +74,9 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     placeholder: tr('输入或粘贴文字'), 'aria-label': tr('待翻译的文字'), title: tr('Enter 翻译 · Shift+Enter 换行') });
   const submit = button('translationCardSubmit', tr('翻译'), 'arrow-up');
   submit.type = 'submit';
+  const passages = el('div', { id: 'translationCardPassages', class: 'reading-card-passages', hidden: true, 'aria-label': tr('待翻译选段') });
   const attachments = el('div', { id: 'translationCardAttachments', class: 'reading-card-attachments', hidden: true });
-  const editorBody = el('div', { class: 'reading-card-editor-body' }, attachments, input);
+  const editorBody = el('div', { class: 'reading-card-editor-body' }, passages, attachments, input);
   editor.append(editorBody, submit); footer.after(editor);
   input.addEventListener('input', () => { saveDraft(input.value); refresh(); });
   input.addEventListener('compositionstart', () => { composing = true; });
@@ -86,9 +87,9 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   });
   editor.addEventListener('submit', event => { event.preventDefault(); void translateInput(); });
 
-  function saveDraft(text, key = draftKey, images = drafts.get(key)?.images || []) {
+  function saveDraft(text, key = draftKey, images = drafts.get(key)?.images || [], queued = drafts.get(key)?.passages || []) {
     const previousDraft = drafts.get(key);
-    drafts.set(key, { text, images, revision: (previousDraft?.revision || 0) + 1 });
+    drafts.set(key, { text, images, passages: queued, revision: (previousDraft?.revision || 0) + 1 });
   }
   function saveImages(images, key = draftKey) {
     const draft = drafts.get(key) || { text: '', revision: 0 };
@@ -104,6 +105,46 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
       input.focus({ preventScroll: true });
     }
     return true;
+  }
+  function addPassages(items, key = String(getDocumentKey() || '')) {
+    if (disposed || !Array.isArray(items) || !items.length) return false;
+    key = String(key || '');
+    const draft = drafts.get(key) || { text: '', images: [], passages: [], revision: 0 };
+    const additions = items.filter(item => item && String(item.text || '').trim()).map(item => ({
+      id: String(item.id || `card-passage-${++captureSequence}`),
+      text: String(item.text).trim(), page: Number(item.page) || null,
+      endPage: Number(item.endPage || item.page) || null,
+      pages: (Array.isArray(item.pages) ? item.pages : [item.page]).map(Number).filter(page => Number.isInteger(page) && page > 0),
+      docId: String(item.docId || key),
+    }));
+    if (!additions.length) return false;
+    const nextPassages = [...(draft.passages || []), ...additions];
+    if (nextPassages.reduce((length, item) => length + item.text.length, String(draft.text || '').length) > 20000) return false;
+    drafts.set(key, { ...draft, passages: nextPassages, revision: draft.revision + 1 });
+    if (key === String(getDocumentKey() || '')) {
+      syncDraft(); ensureVisible(); resetView(); refresh(); input.focus({ preventScroll: true });
+    }
+    return true;
+  }
+  function renderPassages() {
+    const queued = drafts.get(draftKey)?.passages || [];
+    const signature = queued.map(item => item.id).join('|');
+    passages.hidden = !queued.length;
+    if (signature === passageSignature) return;
+    passageSignature = signature;
+    passages.replaceChildren(...queued.map((item, index) => {
+      const location = item.page ? tr('第{0}页', item.page) : tr('选段');
+      const label = `${location} · ${item.text.replace(/\s+/g, ' ').slice(0, 90)}`;
+      const removePassage = button('', tr('删除'), 'close', () => {
+        const current = drafts.get(draftKey)?.passages || [];
+        saveDraft(input.value, draftKey, drafts.get(draftKey)?.images || [], current.filter(row => row.id !== item.id));
+        refresh(); input.focus({ preventScroll: true });
+      });
+      removePassage.removeAttribute('id');
+      return el('div', { class: 'reading-card-passage', 'data-passage-id': item.id },
+        el('span', { class: 'reading-card-passage-index', text: String(index + 1) }),
+        el('span', { class: 'reading-card-passage-text', text: label, title: item.text }), removePassage);
+    }));
   }
   function renderAttachments() {
     const images = drafts.get(draftKey)?.images || [];
@@ -130,23 +171,27 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     syncDraft();
     const text = input.value.trim();
     const images = [...(drafts.get(draftKey)?.images || [])];
-    if ((!text && !images.length) || submitting || busy || typeof onTranslate !== 'function') return;
+    const queued = [...(drafts.get(draftKey)?.passages || [])];
+    if ((!text && !images.length && !queued.length) || submitting || busy || typeof onTranslate !== 'function') return;
     const sourceKey = draftKey, sourceDraft = input.value;
-    input.value = ''; saveDraft('', sourceKey, []);
+    input.value = ''; saveDraft('', sourceKey, [], []);
     const submittedRevision = drafts.get(sourceKey).revision;
     submitting = true; resetView();
     const restoreDraft = (result) => {
-      const draft = drafts.get(sourceKey) || { text: '', images: [], revision: 0 };
+      const draft = drafts.get(sourceKey) || { text: '', images: [], passages: [], revision: 0 };
       const restoredText = draft.revision === submittedRevision && !draft.text
         ? (typeof result?.remainingText === 'string' ? result.remainingText : sourceDraft) : draft.text;
       const remaining = Array.isArray(result?.remainingImages) ? result.remainingImages : images;
       const currentIds = new Set((draft.images || []).map(image => image.id));
       const restoredImages = [...remaining.filter(image => !currentIds.has(image.id)), ...(draft.images || [])];
-      saveDraft(restoredText, sourceKey, restoredImages);
+      const remainingPassages = Array.isArray(result?.remainingPassages) ? result.remainingPassages : queued;
+      const currentPassageIds = new Set((draft.passages || []).map(item => item.id));
+      const restoredPassages = [...remainingPassages.filter(item => !currentPassageIds.has(item.id)), ...(draft.passages || [])];
+      saveDraft(restoredText, sourceKey, restoredImages, restoredPassages);
       if (String(getDocumentKey() || '') === sourceKey) { syncDraft(); input.value = restoredText; }
     };
     try {
-      const resultPromise = onTranslate({ text, targetLang: language.value, images });
+      const resultPromise = onTranslate({ text, targetLang: language.value, images, passages: queued });
       input.focus({ preventScroll: true });
       const result = await resultPromise;
       if (result === false || result?.status === 'failed' || result?.status === 'stopped') {
@@ -264,8 +309,10 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     locate.title = record?.page ? tr('第{0}页', record.page) : tr('定位原文');
     originalToggle.disabled = !quote.textContent;
     originalToggle.setAttribute('aria-pressed', String(originalOpen));
-    renderAttachments();
-    submit.disabled = busy || submitting || (!input.value.trim() && !drafts.get(draftKey)?.images?.length);
+    renderPassages(); renderAttachments();
+    const draft = drafts.get(draftKey);
+    submit.disabled = busy || submitting || (!input.value.trim() && !draft?.images?.length && !draft?.passages?.length);
+    submit.title = tr('翻译 {0} 项', (draft?.passages?.length || 0) + (draft?.images?.length || 0) + (input.value.trim() ? 1 : 0));
     input.setAttribute('aria-busy', String(submitting));
     setText(count, index >= 0 ? `${index + 1} / ${list.length}` : String(list.length));
     setText(status, actionError || (pending ? tr('翻译中…') : record?.status === 'failed' ? tr('翻译失败')
@@ -286,6 +333,6 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   observer.observe(content, { childList: true, characterData: true, subtree: true });
   observer.observe(quote, { childList: true, characterData: true, subtree: true });
   refresh();
-  return { open, openHistory, select, refresh, resetView, addCapture,
+  return { open, openHistory, select, refresh, resetView, addCapture, addPassages,
     dispose() { disposed = true; observer.disconnect(); if (frame) cancelAnimationFrame(frame); } };
 }

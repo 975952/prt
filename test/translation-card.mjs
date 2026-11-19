@@ -35,12 +35,12 @@ const ui = createTranslationCard({ getRecords:()=>records.filter(row=>row.docId=
  onRetry:record=>{record.status='pending'; record.text=''; save();}, onLocate:()=>{},
  getTargetLanguage:()=>targetLanguage, onTargetLanguageChange:next=>{targetLanguage=next;},
  onCapture:()=>{captureCount++;},
- onTranslate:async({text,targetLang,images})=>{
+ onTranslate:async({text,targetLang,images,passages=[]})=>{
    await Promise.resolve();
    if(launchError){launchError=false;throw new Error('Fixture launch failed');}
    const record={id:'input-'+(++inputSequence),block:'translate',docId:documentKey,page:0,quote:text,text:'',status:'pending',retry:{text}};
    records.push(record);save();ui.select(record);
-   return new Promise(resolve=>inputJobs.push({text,targetLang,images,record,resolve}));
+   return new Promise(resolve=>inputJobs.push({text,targetLang,images,passages,record,resolve}));
  }
 });
 document.getElementById('translationCardClose').onclick=()=>card.classList.add('hidden');
@@ -56,7 +56,8 @@ window.fixture={ui, start(){ const version=++streamVersion; card.dataset.entryId
    job.resolve({status,...recovery});job.resolve=null;
  },
  state:()=>({copied,saved,stopped,ids:records.map(row=>row.id),version:streamVersion,targetLanguage,captureCount,
-   jobs:inputJobs.map(({text,targetLang,images,record})=>({text,targetLang,images,id:record.id,status:record.status}))}), save };
+   jobs:inputJobs.map(({text,targetLang,images,record})=>({text,targetLang,images,id:record.id,status:record.status})),
+   passageJobs:inputJobs.map(({passages})=>passages)}), save };
 ui.openHistory();
 </script></body></html>`;
 const server = http.createServer((req, res) => {
@@ -223,6 +224,33 @@ try {
   await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
   assert.equal(await page.$eval('#translationCardInput',node=>node.value),'');
   assert.deepEqual(await page.$$eval('#translationCardAttachments img',nodes=>nodes.map(node=>node.alt)),['Remaining screenshot']);
+  await page.evaluate(() => window.fixture.ui.addPassages([
+    { id: 'passage-1', text: 'First queued passage', page: 3, docId: 'fixture' },
+    { id: 'passage-2', text: 'Second queued passage', page: 4, docId: 'fixture' },
+  ]));
+  assert.equal(await page.$$eval('#translationCardPassages .reading-card-passage',nodes=>nodes.length),2);
+  assert.equal(await page.evaluate(()=>window.fixture.state().jobs.length),9,'adding passages sends no model request');
+  await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===10);
+  assert.deepEqual(await page.evaluate(()=>window.fixture.state().passageJobs[9].map(({text,page})=>({text,page}))),[
+    {text:'First queued passage',page:3},{text:'Second queued passage',page:4},
+  ]);
+  await page.evaluate(()=>window.fixture.finishInput());
+  await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
+  assert.equal(await page.$$eval('#translationCardPassages .reading-card-passage',nodes=>nodes.length),0,
+    'successful submission clears only the submitted passages');
+  await page.evaluate(() => window.fixture.ui.addPassages([
+    { id: 'recover-1', text: 'Submitted passage', page: 5, docId: 'fixture' },
+    { id: 'recover-2', text: 'Unfinished passage', page: 6, docId: 'fixture' },
+  ]));
+  await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===11);
+  await page.evaluate(()=>window.fixture.finishInput('stopped',{remainingPassages:window.fixture.state().passageJobs[10].slice(1)}));
+  await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
+  assert.deepEqual(await page.$$eval('#translationCardPassages .reading-card-passage-text',nodes=>nodes.map(node=>node.title)),
+    ['Unfinished passage'],'stopped batches restore only the passages that were not completed');
+  await page.click('#translationCardSubmit');await page.waitForFunction(()=>window.fixture.state().jobs.length===12);
+  assert.deepEqual(await page.evaluate(()=>window.fixture.state().passageJobs[11].map(({text})=>text)),['Unfinished passage']);
+  await page.evaluate(()=>window.fixture.finishInput());
+  await page.waitForFunction(()=>document.getElementById('translationCardInput').getAttribute('aria-busy')==='false');
   await page.screenshot({path:path.join(scratch,'translation-card-dark.png')});
   await page.setViewport({width:400,height:700});
   await page.$eval('#translationCard',node=>{node.style.left='12px';node.style.top='60px';node.style.width='';node.style.height='';});

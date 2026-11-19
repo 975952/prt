@@ -1,4 +1,4 @@
-/** 翻书模式「加入译文」：每段单独翻译、各自成条译文，结果显示在浮动译文卡片（上一条 / 下一条翻看）。
+/** 翻书模式先收集多个「加入译文」选段，一次提交后独立翻译并在卡片中逐条翻看。
  *  node test/immersive-translate-segments-ui.mjs
  * Isolated reader + synthetic PDF + controlled local model only.
  */
@@ -9,10 +9,11 @@ import http from 'node:http';
 import { spawn } from 'node:child_process';
 import puppeteer from 'puppeteer-core';
 import { ROOT, SANDBOX, assertIsolatedDataDir } from './_env.mjs';
-import { spawnReader, stopChild } from './_exe.mjs';
+import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 
 fs.mkdirSync(SANDBOX, { recursive: true });
 const scratch = fs.mkdtempSync(path.join(SANDBOX, 'immersive-translate-segments-'));
+const desktop = process.argv.includes('--desktop');
 const data = assertIsolatedDataDir(path.join(scratch, 'data')), papers = path.join(scratch, 'papers');
 fs.mkdirSync(data); fs.mkdirSync(papers);
 fs.copyFileSync(path.join(ROOT, 'test/fixtures/multipage-sample.pdf'), path.join(papers, 'Reading.pdf'));
@@ -57,7 +58,8 @@ try {
   const port = probe.address().port; await new Promise(resolve => probe.close(resolve));
   const base = `http://127.0.0.1:${port}`;
   const env = { PORT: String(port), PRT_DATA_DIR: data, PRT_PAPERS_DIR: papers, PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1', NO_OPEN: '1' };
-  reader = spawn(process.execPath, [path.join(ROOT, 'server.js')], { env: { ...process.env, ...env }, windowsHide: true, stdio: 'ignore' });
+  reader = desktop ? spawnReader(stageExe('immersive-translate-segments').exe, { args: ['--port', String(port)], env })
+    : spawn(process.execPath, [path.join(ROOT, 'server.js')], { env: { ...process.env, ...env }, windowsHide: true, stdio: 'ignore' });
   let ready = false;
   for (let i = 0; i < 100 && !ready; i++) { try { ready = (await fetch(`${base}/api/health`)).ok; } catch {} if (!ready) await pause(100); }
   assert.ok(ready, 'isolated reader starts');
@@ -102,38 +104,45 @@ try {
   const firstSelected = await selectSpan(0, 3, 18);
   assert.ok(firstSelected && firstSelected.length > 3, `first passage selected: ${firstSelected}`);
   const title = await page.$eval('#bubble [data-act="add-translate"]', node => node.title);
-  assert.match(title, /每段单独翻译/, `book-mode 加入译文 explains per-passage translation: ${title}`);
+  assert.match(title, /提交后每段单独显示/, `book-mode 加入译文 explains collect then submit: ${title}`);
   await addTranslate();
+  assert.equal(requests.length, 0, 'adding a passage only queues it; the model is not called yet');
+  assert.equal(await page.$$eval('#translationCardPassages .reading-card-passage', nodes => nodes.length), 1,
+    'the first selected passage is visible in the card draft');
+  assert.ok(await page.$eval('#translationCardPassages', (node, expected) => node.textContent.includes(expected.slice(0, 20)), firstSelected));
+
+  const secondSelected = await selectSpan(1, 4, 16);
+  assert.ok(secondSelected && secondSelected.length > 3, `second passage selected: ${secondSelected}`);
+  await addTranslate();
+  assert.equal(requests.length, 0, 'multiple selections still wait for one explicit submit');
+  assert.equal(await page.$$eval('#translationCardPassages .reading-card-passage', nodes => nodes.length), 2,
+    'the second selected passage joins the same visible draft');
+  assert.equal(await page.$eval('#translationCardSubmit', node => node.disabled), false);
+  await page.click('#translationCardSubmit');
   const firstRequest = await nextRequest(0);
   assert.ok(translatedFragment(firstRequest).includes(firstSelected), 'first passage reaches the model by itself');
   assert.equal(await cardVisible(), true, 'the floating translation card opens in book mode');
+  assert.equal(await page.$$eval('#translationCardPassages .reading-card-passage', nodes => nodes.length), 0,
+    'submitted passages leave the draft list while translating');
   emit(firstRequest, '第一段单独译文。', true);
-  await page.waitForFunction(() => document.querySelector('#translationCardText').textContent.includes('第一段单独译文。'));
+  const secondRequest = await nextRequest(1);
+  assert.ok(translatedFragment(secondRequest).includes(secondSelected), 'second passage is sent after the first completes');
+  assert.ok(!translatedFragment(secondRequest).includes(firstSelected), 'each selected passage is an independent model request');
+  emit(secondRequest, '第二段单独译文。', true);
+  await page.waitForFunction(() => __state.sessionEntries.filter(row => row.block === 'translate' && row.status === 'complete').length === 2);
   const afterFirst = await page.evaluate(() => ({
     records: __state.sessionEntries.filter(row => row.block === 'translate').map(row => ({ id: row.id, kind: row.retry?.kind, text: row.retry?.text, page: row.retry?.page })),
     attachments: __state.attachments.length,
     segmentRows: document.querySelectorAll('#attachRow .translation-segment').length,
     entryId: document.querySelector('#translationCard').dataset.entryId,
   }));
-  assert.equal(afterFirst.records.length, 1, 'one passage produces exactly one translation record');
+  assert.equal(afterFirst.records.length, 2, 'two queued passages produce two translation records from one submit');
   assert.equal(afterFirst.records[0].kind, 'translate', 'the record is a per-selection translation, not a merged draft');
-  assert.equal(afterFirst.records[0].text, firstSelected, 'the record keeps this passage as its own source');
+  assert.deepEqual(afterFirst.records.map(row => row.text), [firstSelected, secondSelected], 'each record keeps its own source');
   assert.equal(afterFirst.attachments, 0, 'no hidden sidebar translation draft is used in book mode');
   assert.equal(afterFirst.segmentRows, 0, 'nothing accumulates in the invisible right-column composer');
-  assert.equal(afterFirst.entryId, afterFirst.records[0].id, 'the card shows the new translation');
-
-  const secondSelected = await selectSpan(1, 4, 16);
-  assert.ok(secondSelected && secondSelected.length > 3, `second passage selected: ${secondSelected}`);
-  await addTranslate();
-  const secondRequest = await nextRequest(1);
-  assert.ok(translatedFragment(secondRequest).includes(secondSelected), 'second passage is translated in its own request');
-  assert.ok(!translatedFragment(secondRequest).includes(firstSelected), 'the first passage is not merged into the second request');
-  emit(secondRequest, '第二段单独译文。', true);
-  await page.waitForFunction(() => document.querySelector('#translationCardText').textContent.includes('第二段单独译文。'));
-  assert.equal(await cardCount(), '1 / 2', 'the card lists both translations with its built-in pager');
-  const afterSecond = await page.evaluate(() => __state.sessionEntries.filter(row => row.block === 'translate')
-    .map(row => row.retry?.text));
-  assert.deepEqual(afterSecond, [firstSelected, secondSelected], 'two passages stay two separate records');
+  assert.ok(afterFirst.records.some(row => row.id === afterFirst.entryId), 'the card shows one of the new translations');
+  assert.equal(await cardCount(), '1 / 2', 'one submit creates two entries in the card pager');
 
   await page.evaluate(() => document.querySelector('#translationCardNext').click());
   await page.waitForFunction(() => document.querySelector('#translationCardText').textContent.includes('第一段单独译文。'));

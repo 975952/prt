@@ -5833,7 +5833,7 @@ function showBubble(sel) {
   const addTranslate = b.querySelector('button[data-act="add-translate"]');
   if (addTranslate) {
     addTranslate.title = immersiveReading?.active
-      ? tr("加入译文：每段单独翻译，逐一显示在译文卡片")
+      ? tr("加入译文：先收集多个选段，提交后每段单独显示")
       : tr("分段加入译文，跳过图注或脚注，最后合并翻译");
   }
   const add = b.querySelector('button[data-act="add"]');
@@ -5954,27 +5954,44 @@ function initReadingTools() {
     onError: error => toast(tr('阅读模式切换失败：{0}', error.message || String(error)), 'err'),
   });
 }
-async function translateCardDraft({ text, targetLang, images = [] }) {
+async function translateCardDraft({ text, targetLang, images = [], passages = [] }) {
   const docId = state.doc?.docId || '', openSeq = state.openSeq, viewSeq = documentViewSeq;
   let cardVersion = translationCardVersion;
+  let cardEntryId = $('#translationCard').dataset.entryId || '';
   const current = () => docId === (state.doc?.docId || '') && openSeq === state.openSeq
     && viewSeq === documentViewSeq && cardVersion === translationCardVersion
-    && !$('#translationCard').classList.contains('hidden') && $('#translationCard').dataset.cardView !== 'history';
+    && !$('#translationCard').classList.contains('hidden') && $('#translationCard').dataset.cardView !== 'history'
+    && ($('#translationCard').dataset.entryId || '') === cardEntryId;
+  const remaining = (status, passageIndex = 0, imageIndex = 0, remainingText = '') => ({
+    status, remainingText, remainingPassages: passages.slice(passageIndex), remainingImages: images.slice(imageIndex),
+  });
   const selectCard = record => {
     if (!current()) return;
     translationCardUI?.select(record);
     cardVersion = translationCardVersion;
+    cardEntryId = record?.id || $('#translationCard').dataset.entryId || '';
   };
+  const ownCard = ({ version, entryId }) => { cardVersion = version; cardEntryId = entryId || ''; };
   if (text) {
+    if (!current()) return remaining('stopped', 0, 0, text);
     const result = await doTranslateText({ text, targetLang, inCard: true, selectCard });
-    if (result?.status !== 'complete') return result || false;
+    if (result?.status !== 'complete') return { ...(result || { status: 'failed' }), ...remaining(result?.status || 'failed', 0, 0, result?.remainingText ?? text) };
+  }
+  for (let index = 0; index < passages.length; index++) {
+    if (!current()) return remaining('stopped', index);
+    const piece = passages[index];
+    const selection = { ...piece, text: piece.text, cleanText: piece.text,
+      page: piece.page || null, endPage: piece.endPage || piece.page || null,
+      pages: piece.pages || (piece.page ? [piece.page] : []), docId };
+    const result = await doTranslate(selection, { targetLang, cardGuard: current, onCardOwner: ownCard });
+    if (result === false || result?.status === 'stopped') return remaining('stopped', index);
+    if (index < passages.length - 1 && !current()) return remaining('stopped', index + 1);
   }
   for (let index = 0; index < images.length; index++) {
-    const result = current()
-      ? await doTranslateShot({ ...images[index], targetLang, docId, inCard: true, selectCard })
-      : { status: 'stopped' };
+    if (!current()) return remaining('stopped', passages.length, index);
+    const result = await doTranslateShot({ ...images[index], targetLang, docId, inCard: true, selectCard });
     if (result?.status !== 'complete') return {
-      ...(result || { status: 'failed' }), remainingText: '', remainingImages: images.slice(index),
+      ...(result || { status: 'failed' }), ...remaining(result?.status || 'failed', passages.length, index),
     };
   }
   return { status: 'complete' };
@@ -11906,15 +11923,10 @@ async function addToTranslate(sel) {
     id: uid(), kind: 'text', text: part.cleanText || cleanText(part.text || ''), docId,
   })).filter((part) => part.text);
   if (!pieces.length) return;
-  /* 翻书模式：可见的译文区就是浮动卡片，没有右栏草稿可攒。
-     逐段单独翻译，每段各成一条译文（卡片里用「上一条 / 下一条」翻看），
-     否则内容只会进到被隐藏的右栏草稿里，卡片看起来毫无反应（用户反馈）。 */
+  /* 翻书模式先把选段累计在浮动卡片里，提交后再逐段翻译。 */
   if (immersiveReading?.active) {
-    for (const piece of pieces) {
-      const part = { ...sel, text: piece.text, cleanText: piece.text, page: piece.page || null,
-        endPage: piece.endPage || piece.page || null, pages: piece.pages || (piece.page ? [piece.page] : []),
-        rectsByPage: piece.rectsByPage || {} };
-      await doTranslate(part);
+    if (!translationCardUI?.addPassages(pieces, docId)) {
+      toast(tr("合并原文最多 20,000 字，请减少选段后重试"), 'err', 4200);
     }
     return;
   }
@@ -12070,10 +12082,10 @@ async function doTranslateText({ text, targetLang = '', force = false, task = nu
   }
 }
 
-async function doTranslate(sel, { targetLang = '', force = false } = {}) {
-  if (!await allowEdit(tr("译文"))) return;
+async function doTranslate(sel, { targetLang = '', force = false, cardGuard = null, onCardOwner = null } = {}) {
+  if (!await allowEdit(tr("译文"))) return false;
   const text = sel.cleanText || cleanText(sel.text);
-  if (!text || !ensureReady()) return;
+  if (!text || !ensureReady()) return false;
   // 目标语言以输入框旁「译成」的选择为准；重试时沿用当时记录的目标语言
   // （用户 m10802：切了 English 仍出中文）
   const lang = resolveTranslateTarget(targetLang);
@@ -12083,13 +12095,16 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
   const docTitle = state.doc?.name;
   const retry = () => { if (isCurrent()) return doTranslate(sel, { targetLang: lang, force: true }); };
   const inCard = immersiveReading?.active || document.body.classList.contains('no-right') || document.body.classList.contains('right-empty');
-  const cardBody = inCard ? showTranslationCard(sel) : null;
+  const cardBody = inCard && (!cardGuard || cardGuard()) ? showTranslationCard(sel) : null;
   if (!inCard) revealTranslatePanel();
 
   const entry = addEntry({ block: 'translate', tag: 'translation', page: sel.page, quote: text,
     retry: { kind: 'translate', docId: state.doc?.docId || null, text, page: sel.page || null, targetLang: lang }, reveal: !inCard });
   const cardVersion = translationCardVersion;
-  if (cardBody) $('#translationCard').dataset.entryId = entry.root.__sessionRecord.id;
+  if (cardBody) {
+    $('#translationCard').dataset.entryId = entry.root.__sessionRecord.id;
+    onCardOwner?.({ version: translationCardVersion, entryId: entry.root.__sessionRecord.id });
+  }
   const ownsCard = () => cardBody && cardVersion === translationCardVersion;
   const target = streamTarget(entry.body);
   const cardTarget = cardBody ? streamTarget(cardBody) : null;
@@ -12108,13 +12123,16 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
       const existing = state.sessionEntries.find(x => x !== entry.root.__sessionRecord && x?.block === 'translate'
         && x?.tag === 'translation' && x?.status === 'complete' && x?.quote === text && x?.text === cached);
       if (existing) {
-        if (ownsCard()) { cardTarget.done(cached); $('#translationCard').dataset.entryId = existing.id; }
+        if (ownsCard()) {
+          cardTarget.done(cached); $('#translationCard').dataset.entryId = existing.id;
+          onCardOwner?.({ version: cardVersion, entryId: existing.id });
+        }
         else [...(state.blockMeta.translate?.body?.children || [])].find(n => n.__sessionRecord?.id === existing.id)?.scrollIntoView({ block: 'nearest' });
-        target.dispose(); deleteTranslationEntry(entry.root); return;
+        target.dispose(); deleteTranslationEntry(entry.root); return { status: 'complete' };
       }
       target.done(cached); if (ownsCard()) cardTarget.done(cached);
       finishEntry(entry, cached, { page: sel.page, retryLabel: tr("重新翻译"), onRetry: retry });
-      return;
+      return { status: 'complete' };
     }
     const full = await chat({
       messages: translateMessages({ text, targetLang: lang, context, page: sel.page, docTitle }),
@@ -12137,15 +12155,18 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
       const record = entry.root.__sessionRecord;
       if (record) { record.text = received; record.status = 'stopped'; }
       finishEntry(entry, received, { page: sel.page, status: 'stopped', retryLabel: tr("重新翻译"), onRetry: retry, restore: !isCurrent() });
+      return { status: 'stopped' };
     }
     else {
       target.fail(errText(e));
       if (ownsCard()) cardTarget.fail(errText(e));
       addFailureRetry(entry, errText(e), retry);
+      return { status: 'failed' };
     }
   } finally {
     job.end(); entry.root.__translationController = null;
   }
+  return { status: 'complete' };
 }
 
 /** 截图翻译的重试描述（只存附件 id + 页码/标签/目标语言，不存 base64 图片本体） */
