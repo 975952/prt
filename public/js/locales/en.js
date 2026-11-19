@@ -1,6 +1,13 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  '阅读模式切换失败：{0}': 'Could not change the reading view: {0}',
+  '沉浸翻书': 'Immersive book', '翻书': 'Book view', '退出翻书': 'Exit book view',
+  '沉浸翻书工具': 'Book view tools', '收起问答': 'Hide chat',
+  '翻译记录': 'Translation history', '展开': 'Expand',
+  '当前文档的翻译记录会自动保留。': 'Translations for this document are kept automatically.',
+  '暂无译文': 'No translation yet', '选中原文后点击翻译，译文会保存在这里。': 'Select text and translate it. Your translations will be kept here.',
+  '翻译失败': 'Translation failed', '自动保留到翻译记录': 'Kept in translation history', '上一条': 'Previous', '下一条': 'Next',
   "还没有历史会话": "No previous conversation yet",
   "回到原文，接着阅读": "Return to the text and keep reading",
   '继续上次会话': 'Resume last conversation',

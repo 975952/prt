@@ -1,0 +1,22 @@
+/* Two complete PDF pages occupy a fixed book spread. The controller owns chrome. */
+.viewer.immersive-viewport { overflow: hidden !important; overscroll-behavior: none; background: var(--paper) !important; }
+.viewer.immersive-viewport > .pages.immersive-spread {
+  width: 100%; height: 100%; min-height: 0; max-width: 100%; padding: 4px 6px;
+  gap: 0; flex-flow: row nowrap; justify-content: center; align-items: center;
+  box-sizing: border-box; overflow: hidden;
+}
+.immersive-spread > .page.immersive-hidden { display: none !important; }
+.immersive-spread > .page {
+  border: 0 !important; border-radius: 0 !important; box-shadow: none !important;
+  background: var(--paper) !important;
+}
+.immersive-spread > .page canvas { border-radius: 0 !important; }
+.immersive-spread > .page::before, .immersive-spread > .page::after,
+.immersive-spread > .page > .page-number { display: none !important; }
+.immersive-turn-snapshot {
+  position: fixed; pointer-events: none; z-index: 75; overflow: hidden;
+  transform-style: preserve-3d; backface-visibility: hidden;
+}
+.immersive-page-turn { position: fixed !important; pointer-events: none !important; z-index: 75; }
+.immersive-flip-page { overflow: hidden; background: var(--paper); }
+.immersive-flip-page > canvas { width: 100% !important; height: 100% !important; top: 0 !important; left: 0 !important; display: block; }

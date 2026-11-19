@@ -1,0 +1,39 @@
+/* The reader keeps a compact file navigator; library management lives in Library. */
+body.reading:not(.agent-full) #leftSide > .side-head {
+  padding: 12px 10px 10px;
+  gap: 7px;
+  min-height: 52px;
+  border-bottom: 1px solid var(--border);
+  cursor: default;
+}
+body.reading:not(.agent-full) #leftSide > .side-head .filter {
+  height: 32px;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--bg-elev) 38%, transparent);
+  font-size: 12px;
+}
+body.reading:not(.agent-full) #leftSide > .side-head :is(.panel-actions, #folderNew),
+body.reading:not(.agent-full) #leftSide > :is(.dropzone, .folder-switch-row) { display: none; }
+body.reading:not(.agent-full) #readerImport {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 32px;
+  width: 32px;
+  height: 32px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  color: var(--fg-dim);
+  background: transparent;
+  cursor: pointer;
+}
+body.reading:not(.agent-full) #readerImport:hover {
+  background: var(--accent-soft);
+  color: var(--fg);
+  border-color: var(--border);
+}
+body.reading:not(.agent-full) #readerImport:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+body.reading:not(.agent-full) #leftSide > .filelist { padding: 6px 7px 14px; }

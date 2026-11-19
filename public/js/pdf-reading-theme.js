@@ -4,6 +4,83 @@
 export const NIGHT_PAPER = '#222426';
 const NIGHT_INK = [226, 228, 230];
 const NIGHT_BG = [34, 36, 38];
+const rectangularReadingPaths = new WeakSet();
+function isRectanglePath(paths) {
+  if (!paths || typeof paths !== 'object') return false;
+  if (rectangularReadingPaths.has(paths)) return true;
+  const shape = paths[0];
+  const rectangle = shape?.length === 13 && shape[0] === 0 && shape[3] === 1
+    && shape[6] === 1 && shape[9] === 1 && shape[12] === 4
+    && ((shape[1] === shape[4] && shape[5] === shape[8] && shape[7] === shape[10] && shape[11] === shape[2])
+      || (shape[2] === shape[5] && shape[4] === shape[7] && shape[8] === shape[11] && shape[10] === shape[1]));
+  // PDF.js replaces drawOPS with a cached Path2D. Retain only shape identity,
+  // not document data, so subsequent zoom/theme renders make the same decision.
+  if (rectangle) rectangularReadingPaths.add(paths);
+  return rectangle;
+}
+
+/** Some text PDFs paint an inset white sheet before their text. Let the screen's
+ * paper surface show through that background, without recoloring illustrations,
+ * later white cutouts, text, transparency masks, or screenshot/export renders. */
+export function applyPaperReading(task, OPS) {
+  let installed = false;
+  task.onContinue = resume => {
+    if (!installed) {
+      installed = true;
+      const gfx = task._internalRenderTask?.gfx;
+      if (!gfx?.ctx || typeof gfx.constructPath !== 'function') { resume(); return; }
+      let painted = false, maskDepth = 0;
+      const wrap = (name, make) => {
+        const original = gfx[name];
+        if (typeof original !== 'function') return;
+        gfx[name] = make(original);
+        if (Number.isFinite(OPS[name])) gfx[OPS[name]] = gfx[name];
+      };
+      for (const name of ['showText', 'showType3Text', 'paintImageXObject', 'paintInlineImageXObject',
+        'paintImageXObjectRepeat', 'paintInlineImageXObjectGroup', 'shadingFill',
+        'paintImageMaskXObject', 'paintImageMaskXObjectRepeat', 'paintImageMaskXObjectGroup', 'paintSolidColorImageMask']) {
+        wrap(name, original => function (...args) { if (!maskDepth) painted = true; return original.apply(this, args); });
+      }
+      wrap('beginGroup', original => function (index, group) {
+        if (group.smask) maskDepth++;
+        return original.call(this, index, group);
+      });
+      wrap('endGroup', original => function (index, group) {
+        const result = original.call(this, index, group);
+        if (group.smask) maskDepth--;
+        return result;
+      });
+      const fills = new Set([OPS.fill, OPS.eoFill].filter(Number.isFinite));
+      const paints = new Set([OPS.fill, OPS.eoFill, OPS.stroke, OPS.closeStroke, OPS.fillStroke,
+        OPS.eoFillStroke, OPS.closeFillStroke, OPS.closeEOFillStroke].filter(Number.isFinite));
+      wrap('constructPath', original => function (index, op, paths, bounds) {
+        const white = /^#(?:ff){3}$/i.test(this.current.fillColor);
+        // PDF.js drawOPS: moveTo, three lineTo operations, closePath. Restrict
+        // removal to rectangles; a white diagram polygon must stay visible.
+        const rectangle = isRectanglePath(paths);
+        let large = false;
+        if (!painted && !maskDepth && white && rectangle && fills.has(op) && bounds?.length === 4) {
+          const m = this.ctx.getTransform(), { width, height } = this.ctx.canvas;
+          const corners = [[bounds[0], bounds[1]], [bounds[2], bounds[1]], [bounds[0], bounds[3]], [bounds[2], bounds[3]]]
+            .map(([x, y]) => [m.a * x + m.c * y + m.e, m.b * x + m.d * y + m.f]);
+          const xs = corners.map(p => p[0]), ys = corners.map(p => p[1]);
+          const w = Math.max(0, Math.min(width, Math.max(...xs)) - Math.max(0, Math.min(...xs)));
+          const h = Math.max(0, Math.min(height, Math.max(...ys)) - Math.max(0, Math.min(...ys)));
+          large = w * h >= width * height * .25;
+        }
+        if (!large) {
+          if (!maskDepth && paints.has(op)) painted = true;
+          return original.call(this, index, op, paths, bounds);
+        }
+        const fill = this.current.fillColor, style = this.ctx.fillStyle;
+        this.current.fillColor = this.ctx.fillStyle = 'transparent';
+        try { return original.call(this, index, op, paths, bounds); }
+        finally { this.current.fillColor = fill; this.ctx.fillStyle = style; }
+      });
+    }
+    resume();
+  };
+}
 
 function nightColor(color, brightness = 90) {
   if (!/^#[0-9a-f]{6}$/i.test(color)) return color;
@@ -111,6 +188,10 @@ export function applyNightReading(task, OPS, { saturation = 50, brightness = 90 
           return original.call(this, index, convert(this.current, kind, color));
         });
       }
+      wrap('constructPath', original => function (index, op, paths, bounds) {
+        isRectanglePath(paths);
+        return original.call(this, index, op, paths, bounds);
+      });
       const textColors = new Map();
       const textColor = color => {
         if (!textColors.has(color)) textColors.set(color, nightTextColor(color, saturation, brightness));

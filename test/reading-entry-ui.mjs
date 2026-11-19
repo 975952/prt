@@ -70,6 +70,7 @@ try {
   assert.ok(Math.max(...tops) - Math.min(...tops) < 2);
   await page.hover('#agentStartSearch'); await pause(350);
   const hoverTransform = await page.$eval('#agentStartSearch', n => getComputedStyle(n).transform);
+  assert.ok(await page.$eval('#agentStartSearch', n => { const m = new DOMMatrixReadOnly(getComputedStyle(n).transform); return m.a > 1 && m.m42 === 0; }), 'hover gently enlarges without vertical movement');
   await page.mouse.down(); await pause(120);
   const pressTransform = await page.$eval('#agentStartSearch', n => getComputedStyle(n).transform);
   assert.notEqual(pressTransform, hoverTransform, 'pressing a launch card must visibly depress it');

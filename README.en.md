@@ -27,6 +27,8 @@ PDF organization uses filenames first, then first-page text or images when neede
 
 Saving model changes tests the connection immediately; saving unchanged settings closes the dialog. Source citations show the full document title and page number, with a link back to the original.
 
+The separate **Book view** mode shows a fixed two-page spread fullscreen with a realistic page fold. Click the left or right half to turn pages; toolbars hide automatically. Translation and chat use movable floating cards, with saved translation history, source comparison, copying, and notes. Ordinary F11 fullscreen keeps the continuous reading layout.
+
 Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach. During reading, use the top-bar Home button to browse the library, then select a tab to return with its reading position, zoom, and background generation preserved.
 
 ![prt reading workspace with a paper and an illustrative answer](docs/assets/reading-english.png)

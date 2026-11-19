@@ -14,6 +14,10 @@
 <link rel="stylesheet" href="/paper-organizer.css" />
 <link rel="stylesheet" href="/session-move.css" />
 <link rel="stylesheet" href="/session-history.css" />
+<link rel="stylesheet" href="/reading-cards.css" />
+<link rel="stylesheet" href="/immersive-viewer.css" />
+<link rel="stylesheet" href="/immersive-reading.css" />
+<link rel="stylesheet" href="/reader-library.css" />
 <!-- 公式渲染：本地内置 KaTeX，不联网 -->
 <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
 <link rel="icon" type="image/svg+xml" href="/icon.svg" />
@@ -40,6 +44,7 @@
     <button class="tbtn agent-open" id="agentBtn" type="button" title="打开Alina" aria-label="打开Alina" aria-expanded="false"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>Alina</span></button>
   </nav>
   <button class="tbtn" id="settingsBtn" title="设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="6.4"/><path d="M12 2.2v3.4"/><path d="M12 18.4v3.4"/><path d="M2.2 12h3.4"/><path d="M18.4 12h3.4"/><path d="m5.1 5.1 2.4 2.4"/><path d="m16.5 16.5 2.4 2.4"/><path d="m18.9 5.1-2.4 2.4"/><path d="m7.5 16.5-2.4 2.4"/></svg></button>
+  <button class="tbtn" id="immersiveBtn" type="button" title="沉浸翻书" aria-label="沉浸翻书" aria-pressed="false"><span data-agent-icon="book" aria-hidden="true"></span><span>翻书</span></button>
   <!-- 全屏：有桌面壳时走 IPC 让窗口真正无边框全屏（盖住任务栏）；浏览器里降级用 Fullscreen API。
        进入后保留标签栏、首页与阅读控件；Esc 退出（快捷键与 Esc 的优先级见 app.js initShortcuts）。 -->
   <button class="tbtn" id="fullscreenBtn" type="button" title="全屏　F11（Esc 退出）" aria-label="进入全屏" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/><path d="M9 9 4.6 4.6"/><path d="M15 9l4.4-4.4"/><path d="M9 15l-4.4 4.4"/><path d="M15 15l4.4 4.4"/></svg></button>
@@ -83,6 +88,7 @@
          ensurePanel 补上）。筛选框 + 拖入区 + 文件列表三块一起收起，见 style.css 的相邻兄弟规则 -->
     <div class="side-head" hidden>
       <input id="fileFilter" class="filter" placeholder="筛选文件…" />
+      <button type="button" class="tbtn" id="readerImport" title="导入 PDF" aria-label="导入 PDF"><svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><path d="M12 16V4m-4 4 4-4 4 4M4 16v4h16v-4"/></svg></button>
       <button type="button" class="tbtn folder-new" id="folderNew" title="新建文件夹" aria-label="新建文件夹"><svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5v14M5 12h14"/></svg></button>
     </div>
     <div class="dropzone" id="dropzone">
@@ -238,11 +244,10 @@
          点标题打开快速切换浮层；☰ 打开全高历史面板；老的 #sessionMenu 保留作
          reader.session.historyPanel='0' 时的兜底渲染容器。 -->
     <div class="sessbar hidden" id="sessBar">
-      <button type="button" class="sess-btn" id="sessBtn" title="切换会话" aria-haspopup="dialog" aria-expanded="false">
+      <div class="sess-btn" id="sessBtn">
         <span class="sess-dot" id="sessDot" hidden aria-hidden="true"></span>
         <span class="sess-label" id="sessLabel">会话</span>
-        <span class="sess-caret" aria-hidden="true"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M6.6 9.5 12 14.6l5.4-5.1"/></svg></span>
-      </button>
+      </div>
       <button type="button" class="sess-icon-btn" id="sessNew" title="新建会话（Ctrl+Shift+N）" aria-label="新建会话">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5.2v13.6M5.2 12h13.6"/></svg>
         <span class="agent-session-label">新对话</span>

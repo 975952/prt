@@ -390,8 +390,7 @@ function renderHeader() {
   const name = headerName();
   if (label) label.textContent = name;
   if (ui.btn) {
-    ui.btn.title = tr("{0} · 点击切换会话", name);
-    ui.btn.setAttribute('aria-expanded', String(st.quickOpen));
+    ui.btn.title = name;
   }
   if (ui.dot) {
     ui.dot.hidden = !st.busy;
@@ -1536,10 +1535,8 @@ export function initSessions(ctx) {
     'aria-label': tr("选择进入哪个会话"),
   });
 
-  buildQuick();
   buildHistory();
 
-  ui.btn?.addEventListener('click', (e) => { e.stopPropagation(); toggleQuick(); });
   ui.newBtn?.addEventListener('click', (e) => { e.stopPropagation(); doNewSession(); });
   ui.histBtn?.addEventListener('click', (e) => { e.stopPropagation(); toggleHistory(); });
   ui.bar.addEventListener('click', (e) => e.stopPropagation());

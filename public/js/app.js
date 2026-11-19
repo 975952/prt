@@ -13,6 +13,8 @@ import { renderPaperDiscovery, normalizePaperDiscovery } from './paper-discovery
 import { isPaperNavigationRequest, normalizePaperSearchPlan, PAPER_SEARCH_PLAN_PROMPT } from './paper-request.js';
 import { AGENT_PROFILE_KEY, readAgentProfile, writeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
+import { createTranslationCard } from './translation-card.js';
+import { createImmersiveReading } from './immersive-reading.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle, paperAccess } from './pdfview.js';
 import { disposePdfDocument } from './pdf-lifecycle.js';
 import { resolvePaperTarget, snapshotPaperTarget } from './paper-target.js';
@@ -919,6 +921,7 @@ let serverState = {};
   // 会话系统 P0：会话头 / 快速切换 / 历史面板 / 进文件夹选择卡片（sessions.js 需要 app.js 注入回调）
   initSessions(sessionsContext());
   initAgentWorkspace();
+  initReadingTools();
 
   await profileStore.load();
   await loadServerState();
@@ -1689,6 +1692,7 @@ async function toggleFullscreen(force) {
 
 document.addEventListener('fullscreenchange', () => {
   if (!WINDOW_IPC) applyFullscreenUi(!!document.fullscreenElement);
+  if (!document.fullscreenElement && !WINDOW_IPC && immersiveReading?.active) void immersiveReading.setActive(false);
 });
 
 /** Rust 侧窗口状态变化时用 evaluate_script 调它（最大化图标 / 全屏沉浸式布局） */
@@ -2128,6 +2132,7 @@ function initViewer() {
       $('#pageInput').value = String(cur);
       $('#pageCount').textContent = String(total || 0);
       syncFootPage(cur, total);
+      immersiveReading?.sync();
       saveProgress();
       // 翻到别的页 = 离开引用所在页：自动清掉橙色高亮（同页内的滚动不触发这里）
       if (quoteState.page && cur !== quoteState.page) clearQuoteHighlight();
@@ -2208,6 +2213,7 @@ function initViewer() {
     get translateSid() { return TRANSLATE_SID; },
     get lastHotTrace() { return window.__lastHotTrace || null; },
     openDoc, closeTab, activateTab, moveTab, reopenClosedTab, goWelcome, openReaderWindow, windowId,
+    get immersiveReading() { return immersiveReading; },
     get activeSession() { return activeSidFor(state.doc?.docId); },
     openAgentWorkspace, openAgentPaper,
     discoverPapers: (query, keywords = [], options = {}) => discoverPapersForQuery(query, keywords, options),
@@ -2644,6 +2650,7 @@ function initAgentWorkspace() {
   });
 }
 async function openAgentWorkspace({ landing } = {}) {
+  if (immersiveReading?.active) await immersiveReading.setActive(false);
   if (agentNavigationBusy) return;
   agentNavigationBusy = true;
   try {
@@ -2757,6 +2764,7 @@ async function chooseAgentLocalConversation(fresh) {
 
 /** 首页只是工作区的另一视图：保留标签、PDF 与会话任务，作废迟到的打开回调。 */
 function showHome() {
+  if (immersiveReading?.active) { void immersiveReading.setActive(false).then(showHome); return; }
   if (conversationMoveBusy) return;
   rememberReadingWorkspace();
   if (agentWorkspaceView !== 'closed') {
@@ -4566,6 +4574,7 @@ async function importLocalFiles(files) {
  * 这里只维护「工作区标签列表 + 活动标签 + 持久化」。
  */
 async function openDoc(target = {}) {
+  if (immersiveReading?.active && target.docId && target.docId !== state.doc?.docId) await immersiveReading.setActive(false);
   if (conversationMoveBusy && target.docId !== moveTargetNavigation) return;
   if (agentWorkspaceView === 'full' && !agentNavigationBusy) return openAgentPaper(target);
   if (agentWorkspaceView === 'closed' && agentSessionOverride && !agentNavigationBusy) {
@@ -5856,6 +5865,46 @@ function onRightSelectionChanged({ deselect = false } = {}) {
 
 let translationCardVersion = 0;
 let translationCardStream = null;
+let translationCardUI = null;
+let immersiveReading = null;
+function translationRoot(record) {
+  return [...(state.blockMeta.translate?.body?.children || [])].find(node => node.__sessionRecord?.id === record.id);
+}
+function initReadingTools() {
+  let layoutBeforeBook = null;
+  $('#readerImport').onclick = () => $('#fileInput').click();
+  translationCardUI = createTranslationCard({
+    getRecords: () => state.sessionEntries.filter(row => row.block === 'translate' && (!row.docId || row.docId === state.doc?.docId)),
+    beforeSelect: hideTranslationCard, render: renderMarkdown, onCopy: copyText,
+    getTargetLanguage: selectedTranslateTarget,
+    onTargetLanguageChange: value => { $('#translateTargetLang').value = value; $('#translateTargetLang').dispatchEvent(new Event('change', { bubbles: true })); },
+    onCapture: () => { hideTranslationCard(); state.startRegion?.('translate'); },
+    onSave: async record => {
+      const root = translationRoot(record); if (!root) return;
+      const entry = { root }; openAnswerNoteEditor(entry); await confirmAnswerNote(entry);
+    },
+    onDelete: record => { const root = translationRoot(record); if (root) deleteTranslationEntry(root); },
+    onStop: record => translationRoot(record)?.__translationController?.abort('user'),
+    onRetry: record => restoreRetryCallback(record, { root: translationRoot(record) })?.(),
+    onLocate: record => jumpToPageWithHistory(record.page),
+  });
+  immersiveReading = createImmersiveReading({
+    getViewer: () => viewer, isFullscreen: fullscreenActive,
+    enterFullscreen: () => toggleFullscreen(true), leaveFullscreen: () => toggleFullscreen(false),
+    openTranslations: () => translationCardUI.openHistory(),
+    beforeEnter: () => { layoutBeforeBook = { panels: structuredClone(state.panels), side: structuredClone(sideIntent) }; },
+    prepareChat: () => { showAiBlock('chat'); applyPanels(); },
+    restoreLayout: () => {
+      if (layoutBeforeBook) {
+        state.panels = layoutBeforeBook.panels; Object.assign(sideIntent, layoutBeforeBook.side); layoutBeforeBook = null;
+        savePanels(); saveUi();
+      }
+      applyPanels(); applyResponsiveLayout();
+    },
+    onExit: () => { hideTranslationCard(); saveProgress(); },
+    onError: error => toast(tr('阅读模式切换失败：{0}', error.message || String(error)), 'err'),
+  });
+}
 function hideTranslationCard() {
   translationCardVersion += 1;
   translationCardStream?.dispose();
@@ -5871,6 +5920,7 @@ function showTranslationCard(sel) {
   const body = $('#translationCardText');
   $('#translationCardQuote').textContent = sel.cleanText || sel.text || '';
   body.innerHTML = '';
+  translationCardUI?.resetView();
   card.classList.remove('hidden');
   const box = sel.box || { left: window.innerWidth / 2, right: window.innerWidth / 2, top: 80, bottom: 80 };
   const w = card.offsetWidth;
@@ -6687,6 +6737,7 @@ function deleteTranslationEntry(root) {
 }
 
 function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs, kind = 'assistant', text, retry, restore = false, reveal = true, docId = '', docTitle = '' }) {
+  if (!restore && reveal && block === 'chat' && immersiveReading?.active) immersiveReading.showChat(true);
   // 恢复历史时只把内容装回对应块，不强行打开右栏；用户可从下方开关按需展开。
   if (!restore && reveal && !state.panels[block].visible) setPanelVisible(block, true);
   // A translation card can record a result before its sidebar block has ever been opened.
@@ -6812,6 +6863,7 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
   // 新结果进入时把它放到结果区顶部，用户可以继续向上滚查看更早的结果。
   scrollEntryToTop(bodyEl, root);
   refreshCounts();
+  if (isTranslateEntry && !restore && reveal && immersiveReading?.active) translationCardUI?.select(record);
   return { root, body: textEl, acts, role };
 }
 
@@ -6866,6 +6918,7 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
     rec.basis = String(basis || rec.basis || '').slice(0, 240);
     rec.status = status;
   }
+  translationCardUI?.refresh();
   // R7：内容长出来之后刷新底部渐隐（下一帧量，等布局落定）
   requestAnimationFrame(updateScrollFades);
   // 同一个条目可能被收尾多次（典型：操作「重试」复用同一条），
@@ -6919,6 +6972,7 @@ function addFailureRetry(entry, message, onRetry) {
   const rec = entry.root.__sessionRecord;
   const partial = entry.root.__partialText || '';
   if (rec) { rec.status = 'failed'; rec.text = partial; rec.meta = ''; }
+  translationCardUI?.refresh();
   if (rec?.block === 'translate') {
     renderTranslationInterruption(entry, { text: partial, message, onRetry });
     scheduleSessionSave();
@@ -11370,6 +11424,10 @@ function streamTarget(node) {
         entryEl.__sessionRecord.text = hideStreamTail(pending).slice(0, 48000);
         if (!entryEl.__chatJob.saveTimer) scheduleChatJobSave(entryEl.__chatJob);
       }
+      if (entryEl?.__sessionRecord?.block === 'translate') {
+        entryEl.__sessionRecord.text = hideStreamTail(pending).slice(0, 48000);
+        translationCardUI?.refresh();
+      }
       if (raf || timer) return;
       raf = requestAnimationFrame(paint);
       timer = setTimeout(paint, 120);   // rAF 被节流时的兜底
@@ -11721,6 +11779,11 @@ function syncScopePrefs() {
 }
 
 function revealPanel(id) {
+  if (immersiveReading?.active) {
+    if (id === 'chat') immersiveReading.showChat(true);
+    else translationCardUI?.openHistory();
+    return;
+  }
   const p = state.panels[id];
   if (!p) return;
   hideTranslationCard();
@@ -11922,7 +11985,7 @@ async function doTranslate(sel, { targetLang = '', force = false } = {}) {
   const isCurrent = () => docId === (state.doc?.docId || null) && openSeq === state.openSeq;
   const docTitle = state.doc?.name;
   const retry = () => { if (isCurrent()) return doTranslate(sel, { targetLang: lang, force: true }); };
-  const inCard = document.body.classList.contains('no-right') || document.body.classList.contains('right-empty');
+  const inCard = immersiveReading?.active || document.body.classList.contains('no-right') || document.body.classList.contains('right-empty');
   const cardBody = inCard ? showTranslationCard(sel) : null;
   if (!inCard) revealTranslatePanel();
 
@@ -15102,12 +15165,19 @@ function initShortcuts() {
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
 
     if (e.key === 'Escape') {
-      // Esc 的第一优先级：退出全屏（全屏时用户只有这个明确预期；引用高亮不再用 Esc 取消）
-      if (fullscreenActive()) { e.preventDefault(); toggleFullscreen(false); return; }
-      if (!$('#regionOverlay').classList.contains('hidden')) { state.stopRegion?.(); return; }
+      if (!$('#regionOverlay').classList.contains('hidden')) { e.preventDefault(); state.stopRegion?.(); return; }
       if (!$('#settingsModal').classList.contains('hidden')) { closeSettings(); return; }
-      if (!$('#searchBar').classList.contains('hidden')) { $('#searchClose').click(); return; }
       if (!$('#noteBox').classList.contains('hidden')) { saveNoteBox(); return; }
+      if (immersiveReading?.active) {
+        e.preventDefault();
+        if (!$('#translationCard').classList.contains('hidden')) hideTranslationCard();
+        else if (document.body.classList.contains('immersive-chat-open')) immersiveReading.showChat(false);
+        else void immersiveReading.setActive(false);
+        return;
+      }
+      // 工具弹层关闭后，Esc 退出当前阅读模式；引用高亮仍由正文点击取消。
+      if (fullscreenActive()) { e.preventDefault(); toggleFullscreen(false); return; }
+      if (!$('#searchBar').classList.contains('hidden')) { $('#searchClose').click(); return; }
       if (state.abort || translationJobs.size) {
         abortStream('user', userStopScope());
         $('#composerHint').textContent = tr("正在停止…"); return;
@@ -15119,7 +15189,7 @@ function initShortcuts() {
       return;
     }
     // 全屏切换：F11（浏览器里也照常用；桌面壳走窗口 IPC）
-    if (e.key === 'F11') { e.preventDefault(); toggleFullscreen(); return; }
+    if (e.key === 'F11') { e.preventDefault(); if (immersiveReading?.active) void immersiveReading.setActive(false); else toggleFullscreen(); return; }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && ['=', '+', '-', '_', '0'].includes(e.key)) {
       e.preventDefault();
       const reset = e.key === '0', step = ['=', '+'].includes(e.key) ? 1 : -1;

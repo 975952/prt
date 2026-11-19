@@ -2,7 +2,8 @@ import { t as tr } from './i18n.js';
 import { clamp, throttle, sleep } from './util.js';
 import { stripPageLabels } from './reading-context.js';
 import { orderSelectionRuns, clipSelectionRuns, selectionTextOf, selectionRunAt } from './selection-reading-order.js';
-import { applyNightReading, NIGHT_PAPER } from './pdf-reading-theme.js';
+import { applyNightReading, applyPaperReading, NIGHT_PAPER } from './pdf-reading-theme.js';
+import { PageFlip } from '../vendor/page-flip.module.js';
 import { cleanPaperTitle, firstPageTitle } from './paper-titles.js';
 import { createPaperAccess } from './paper-access.js';
 import { runWithDeadline } from './task-deadline.js';
@@ -113,7 +114,7 @@ function createPaperShadows(viewer) {
   };
   const update = () => {
     frame = 0;
-    if (!viewer.pdf || !container.clientWidth || !container.clientHeight || viewer._destroyed) { clear(); return; }
+    if (!viewer.pdf || !container.clientWidth || !container.clientHeight || viewer._destroyed || viewer.immersive) { clear(); return; }
     const rect = container.getBoundingClientRect();
     const scaleX = rect.width / container.offsetWidth || 1;
     const scaleY = rect.height / container.offsetHeight || 1;
@@ -391,6 +392,10 @@ export class PdfViewer {
     this._prefetchRunning = false;
     // 双页显示（两页并排）：排版交给 `.pages.two-up` 的 flex 换行，布局仍按 offsets/heights 走
     this._twoUp = !!opts.twoUp;
+    this._immersive = false;
+    this._immersiveRevision = 0;
+    this._immersiveRestore = null;
+    this._immersiveOverlays = [];
     this._paperShadows = createPaperShadows(this);
 
     this._onScroll = throttle(() => this._handleScroll(), 60);
@@ -399,6 +404,7 @@ export class PdfViewer {
     // work is deferred separately; throttling the fit itself leaves the old
     // paper width visible for 200 ms and makes release visibly snap into place.
     this._onResize = () => {
+      if (this._immersive) { this.fitImmersive(); return; }
       if (this._fitMode && this.container.clientWidth !== this._fitViewportWidth) this.fitWidth();
     };
     window.addEventListener('resize', this._onResize);
@@ -601,6 +607,7 @@ export class PdfViewer {
   }
 
   close() {
+    this._resetImmersive();
     this._paperShadows?.clear();
     this._cancelPrefetch();
     this._cancelZoomPreview();
@@ -635,6 +642,7 @@ export class PdfViewer {
    * @returns {null|{pdf:object,url:string,name:string,numPages:number,baseSizes:Array,page:number,scale:number,fitMode:boolean,scrollTop:number}}
    */
   detach() {
+    this._resetImmersive();
     this._paperShadows?.clear();
     if (!this.pdf) return null;
     this._cancelPrefetch();
@@ -942,6 +950,7 @@ export class PdfViewer {
    * 双页只是排版变化：两页一行、按行换行；页尺寸/虚拟化/预渲染都沿用 offsets/heights。
    */
   setTwoUp(on) {
+    if (this._immersive) return;
     const next = !!on;
     if (next === this._twoUp && this.pagesEl?.classList.contains('two-up') === next) return;
     this._twoUp = next;
@@ -970,14 +979,171 @@ export class PdfViewer {
     return this.goToPage(clamp(start + delta * 2, 1, this.numPages || 1));
   }
 
+  get immersive() { return this._immersive; }
+
+  _clearImmersiveOverlays() {
+    this._immersiveFlip?.();
+    this._immersiveFlip = null;
+    for (const node of this._immersiveOverlays) { node.getAnimations?.().forEach(animation => animation.cancel()); node.remove(); }
+    this._immersiveOverlays = [];
+  }
+
+  _resetImmersive() {
+    ++this._immersiveRevision;
+    this._clearImmersiveOverlays();
+    if (this._immersiveRestore) this._twoUp = this._immersiveRestore.twoUp;
+    this._immersiveRestore = null;
+    this._immersive = false;
+    this.container.classList.remove('immersive-viewport');
+    this.pagesEl?.classList.remove('immersive-spread');
+    for (const page of this.pageEls) page?.classList.remove('immersive-hidden');
+  }
+
+  /** A temporary two-page book view. The caller owns fullscreen and toolbars. */
+  async setImmersive(on) {
+    const next = !!on;
+    if (next === this._immersive || (next && !this.pdf)) return;
+    this.commitZoomPreview();
+    this._cancelPrefetch();
+    if (next) {
+      this._immersiveRestore = { twoUp: this._twoUp, scale: this.scale, fitMode: this._fitMode,
+        page: this.current, anchor: this._captureAnchor(), scrollTop: this.container.scrollTop, scrollLeft: this.container.scrollLeft,
+        width: this.container.clientWidth, height: this.container.clientHeight };
+      this._immersive = true;
+      this._twoUp = true;
+      this._applyTwoUpClass();
+      this.container.classList.add('immersive-viewport');
+      this.pagesEl.classList.add('immersive-spread');
+      await this._goToImmersive(this.current, { animate: false });
+    } else {
+      const restore = this._immersiveRestore;
+      const finalPage = this.current;
+      this._resetImmersive();
+      this._applyTwoUpClass();
+      if (!this.pdf || !restore) return;
+      this.scale = restore.scale;
+      this._fitMode = restore.fitMode;
+      this._softRescale();
+      this.layout();
+      this.current = finalPage;
+      if (restore.fitMode) this.fitWidth();
+      if (finalPage === restore.page) this._restoreAnchor(restore.anchor);
+      else this.container.scrollTop = this.offsets[this._rowStartOf(finalPage)] || 0;
+      this.container.scrollLeft = restore.scrollLeft;
+      this.opts.onScale?.(this.scale);
+      this.opts.onPageChange?.(this.current, this.numPages);
+      await this._renderVisible(true);
+      this._schedulePrefetch(80);
+    }
+  }
+
+  fitImmersive() {
+    if (!this._immersive || !this.pdf || !this.pagesEl || !this.container.clientWidth || !this.container.clientHeight) return;
+    const start = this._rowStartOf(this.current), end = Math.min(start + 1, this.numPages);
+    const first = this._sizeOf(start), second = this._sizeOf(end);
+    const width = this.container.clientWidth, height = this.container.clientHeight;
+    const nextScale = Math.max(.025, Math.min((width - 12) / (first.width + second.width), (height - 8) / Math.max(first.height, second.height), 6));
+    const changed = Math.abs(this.scale - nextScale) > .001;
+    this.scale = nextScale;
+    this._fitMode = true;
+    this._fitViewportWidth = width;
+    if (changed) this._softRescale();
+    this.layout();
+    this.container.scrollTop = 0; this.container.scrollLeft = 0;
+    if (changed) this._scheduleRerender(80);
+    this.opts.onScale?.(this.scale);
+  }
+
+  _snapshotImmersivePage(page) {
+    const source = this.pageEls[page], bitmap = this.rendered.get(page)?.canvas;
+    if (!source || !bitmap || !bitmap.width) return null;
+    const rect = source.getBoundingClientRect(), clone = document.createElement('div');
+    clone.className = 'immersive-turn-snapshot'; clone.setAttribute('aria-hidden', 'true');
+    Object.assign(clone.style, { left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`, background: getComputedStyle(source).backgroundColor });
+    const canvas = document.createElement('canvas'); canvas.width = bitmap.width; canvas.height = bitmap.height;
+    canvas.getContext('2d').drawImage(bitmap, 0, 0);
+    Object.assign(canvas.style, { position: 'absolute', left: bitmap.style.left, top: bitmap.style.top, width: bitmap.style.width, height: bitmap.style.height });
+    clone.append(canvas); document.body.append(clone); this._immersiveOverlays.push(clone);
+    return clone;
+  }
+
+  async _goToImmersive(page, { animate = true } = {}) {
+    const target = clamp(Math.round(Number(page) || 1), 1, this.numPages || 1);
+    const start = this._rowStartOf(target), oldStart = this._rowStartOf(this.current);
+    const revision = ++this._immersiveRevision, gen = this._gen;
+    this._clearImmersiveOverlays();
+    const motionSetting = document.documentElement.dataset.motion;
+    const motion = motionSetting === 'on' || (motionSetting !== 'off' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+    const turning = animate && motion && start !== oldStart;
+    const forward = start > oldStart;
+    const staticPage = turning ? this._snapshotImmersivePage(oldStart + (forward ? 0 : 1)) : null;
+    const leaf = turning ? this._snapshotImmersivePage(oldStart + (forward ? 1 : 0)) : null;
+    try {
+      await this._ensureSizesAround(target, 2);
+      if (revision !== this._immersiveRevision || gen !== this._gen || !this._immersive) return;
+      this.current = target;
+      this.fitImmersive();
+      const end = Math.min(start + 1, this.numPages);
+      await Promise.all(Array.from({ length: end - start + 1 }, async (_, index) => {
+        const pageNumber = start + index;
+        await this.renderTasks.get(pageNumber);
+        if (revision !== this._immersiveRevision || gen !== this._gen) return;
+        await this._renderPage(pageNumber, { force: true, priority: true, gen });
+      }));
+      if (revision !== this._immersiveRevision || gen !== this._gen || !this._immersive) return;
+      this.opts.onPageChange?.(target, this.numPages);
+      if (leaf && staticPage) await this._animateImmersiveTurn({ start, end, forward, leaf, staticPage });
+    } finally {
+      // A malformed target page must not leave an opaque snapshot over the book.
+      // A newer navigation owns its own snapshots and must not be cleaned here.
+      if (revision === this._immersiveRevision) this._clearImmersiveOverlays();
+    }
+  }
+
+  _animateImmersiveTurn({ start, end, forward, leaf, staticPage }) {
+    const nextLeft = this._snapshotImmersivePage(start), nextRight = this._snapshotImmersivePage(end);
+    if (!nextLeft || !nextRight) return;
+    const old = forward ? [staticPage, leaf] : [leaf, staticPage];
+    const rect = old[0].getBoundingClientRect(), rightRect = old[1].getBoundingClientRect();
+    const stage = document.createElement('div'); stage.className = 'immersive-page-turn'; stage.setAttribute('aria-hidden', 'true');
+    Object.assign(stage.style, { left: `${rect.left}px`, top: `${Math.min(rect.top, rightRect.top)}px`, width: `${rect.width * 2}px`, height: `${Math.max(rect.height, rightRect.height)}px` });
+    const pages = forward ? [...old, nextLeft, nextRight] : [nextLeft, nextRight, ...old];
+    for (const page of pages) {
+      page.className = 'immersive-flip-page';
+      const bg = page.style.background; page.removeAttribute('style'); page.style.background = bg;
+      stage.append(page);
+    }
+    document.body.append(stage); this._immersiveOverlays.push(stage);
+    return new Promise(resolve => {
+      let done = false, started = false, timer;
+      const flip = new PageFlip(stage, { width: Math.max(1, rect.width), height: Math.max(1, rect.height),
+        size: 'fixed', usePortrait: false, autoSize: false, useMouseEvents: false, showCover: false,
+        drawShadow: true, maxShadowOpacity: .22, flippingTime: 480, startPage: forward ? 0 : 2 });
+      const finish = () => {
+        if (done) return; done = true; clearTimeout(timer);
+        flip.destroy(); resolve();
+      };
+      this._immersiveFlip = finish;
+      flip.on('changeState', event => {
+        if (event.data === 'flipping') started = true;
+        if (event.data === 'read' && started) finish();
+      });
+      flip.on('init', () => { if (!done) forward ? flip.flipNext('bottom') : flip.flipPrev('bottom'); });
+      flip.loadFromHTML(pages);
+      timer = setTimeout(finish, 900);
+    });
+  }
+
   layout({ keepAnchor = false } = {}) {
     if (!this.pagesEl) return;
     const visible = this.container.clientWidth > 0 && this.container.clientHeight > 0;
-    const anchor = keepAnchor && visible ? this._captureAnchor() : null;
+    const anchor = keepAnchor && visible && !this._immersive ? this._captureAnchor() : null;
+    const spreadStart = this._rowStartOf(this.current);
     for (let i = 1; i <= this.numPages; i++) {
       const { width, height } = this._sizeOf(i);
       const page = this.pageEls[i];
       if (!page) continue;
+      page.classList.toggle('immersive-hidden', this._immersive && (i < spreadStart || i > spreadStart + 1));
       page.style.width = `${Math.round(width * this.scale)}px`;
       page.style.height = `${Math.round(height * this.scale)}px`;
       page.style.setProperty('--total-scale-factor', String(this.scale));
@@ -1227,6 +1393,7 @@ export class PdfViewer {
   }
 
   previewScale(scale, { clientX = null, clientY = null } = {}) {
+    if (this._immersive) return;
     if (!this.pdf || !this.baseSizes[1] || !this.pagesEl) return;
     this._touchPerf('手势·缩放');
     const next = clamp(scale, 0.15, 6);
@@ -1483,7 +1650,7 @@ export class PdfViewer {
 
   /** 安排一次后台预渲染（合并短时间内的多次请求） */
   _schedulePrefetch(delay = 120) {
-    if (this._destroyed || this._viewportResizing) return;
+    if (this._destroyed || this._viewportResizing || this._immersive) return;
     this._cancelPrefetch();
     this._prefetchTimer = setTimeout(() => {
       this._prefetchTimer = 0;
@@ -1542,6 +1709,7 @@ export class PdfViewer {
   }
 
   setScale(scale, { keepCenter = true } = {}) {
+    if (this._immersive) { this.fitImmersive(); return; }
     if (!this.pdf || !this.baseSizes[1]) return;
     this.commitZoomPreview();
     const next = clamp(scale, 0.15, 6);
@@ -1581,6 +1749,7 @@ export class PdfViewer {
   }
 
   fitWidth() {
+    if (this._immersive) { this.fitImmersive(); return; }
     if (!this.pdf || !this.baseSizes[1]) return;
     if (!(this.container.clientWidth > 0 && this.container.clientHeight > 0)) return;
     this.commitZoomPreview();
@@ -1617,6 +1786,7 @@ export class PdfViewer {
   /* ------------------------------------------------- 虚拟化渲染 */
 
   _visibleRange() {
+    if (this._immersive) { const start = this._rowStartOf(this.current); return [start, Math.min(start + 1, this.numPages)]; }
     const top = this.container.scrollTop;
     const viewH = this.container.clientHeight;
     const bottom = top + viewH;
@@ -1648,6 +1818,7 @@ export class PdfViewer {
    * 与 `current` 的区别：这里每次按 scrollTop 现算，不受滚动事件节流影响。
    */
   currentVisiblePage() {
+    if (this._immersive) return this.current || 1;
     if (!this.pdf || !this.pageEls.length || !this.offsets.length) return this.current || 1;
     const viewTop = this.container.scrollTop || 0;
     const viewH = this.container.clientHeight || 0;
@@ -1680,8 +1851,8 @@ export class PdfViewer {
   async _renderVisible(force = false, gen = this._gen) {
     if (!this.pdf || !this.offsets.length || gen !== this._gen || this._zoomPreview || this._viewportResizing) return;
     const [first, last] = this._visibleRange();
-    const lo = Math.max(1, first - 1);
-    const hi = Math.min(this.numPages, last + 1);
+    const lo = this._immersive ? first : Math.max(1, first - 1);
+    const hi = this._immersive ? last : Math.min(this.numPages, last + 1);
     let hasDirty = false;
     for (let i = lo; i <= hi; i++) {
       const entry = this.rendered.get(i);
@@ -1904,6 +2075,7 @@ export class PdfViewer {
       });
       entry.task = renderTask;
       if (paper === NIGHT_PAPER) applyNightReading(renderTask, pdfjsLib.OPS, { saturation: Number(nightSaturation), brightness: Number(nightBrightness) });
+      else if (pageEl.dataset.imageOnly !== 'true') applyPaperReading(renderTask, pdfjsLib.OPS);
       try {
         await renderTask.promise;
       } catch (e) {
@@ -2036,6 +2208,7 @@ export class PdfViewer {
   /* ------------------------------------------------------------ 滚动/页码 */
 
   _handleScroll() {
+    if (this._immersive) { this.container.scrollTop = 0; this.container.scrollLeft = 0; this._renderVisible(); return; }
     if (!this.pdf || !this.pageEls.length || !this.offsets.length) return;
     this._touchPerf('滚动');
     const [first, last] = this._visibleRange();
@@ -2059,6 +2232,7 @@ export class PdfViewer {
   }
 
   async goToPage(n, { smooth = false } = {}) {
+    if (this._immersive) return this._goToImmersive(n);
     if (document.documentElement.dataset.motion === 'off' || window.matchMedia?.('(prefers-reduced-motion: reduce)').matches) smooth = false;
     const target = clamp(Math.round(n), 1, this.numPages || 1);
     if (!this.pageEls[target]) return;
@@ -2657,6 +2831,7 @@ export class PdfViewer {
   }
 
   async goToDest({ page, top = null }, { smooth = true, margin = 6 } = {}) {
+    if (this._immersive) return this.goToPage(page);
     const target = clamp(Math.round(page || 1), 1, this.numPages || 1);
     if (!this.pageEls[target]) return;
     let y = this.offsets[target] ?? 0;

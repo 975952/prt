@@ -25,6 +25,7 @@ function writePanelFixture(destination) {
 0 g BT /F1 18 Tf 36 240 Td (Pale blue panel) Tj ET
 0 g BT /F1 18 Tf 262 240 Td (Pale yellow panel) Tj ET
 0 g BT /F1 18 Tf 36 100 Td (Neutral panel) Tj ET
+1 g 300 55 30 30 re f
 `;
   const objects = [
     '<< /Type /Catalog /Pages 2 0 R >>',
@@ -57,7 +58,7 @@ try {
   await page.evaluate(async ({ pdfURL, themeURL, workerURL, fontsURL, wasmURL }) => {
     const pdfjs = await import(pdfURL), theme = await import(themeURL);
     pdfjs.GlobalWorkerOptions.workerSrc = workerURL;
-    window.renderPDF = async ({ bytes, pageNumber = 1, night = false, brightness = 90, scale = 2 }) => {
+    window.renderPDF = async ({ bytes, pageNumber = 1, night = false, paper = false, brightness = 90, scale = 2 }) => {
       const data = Uint8Array.from(atob(bytes), c => c.charCodeAt(0));
       const loading = pdfjs.getDocument({ data, standardFontDataUrl: fontsURL, wasmUrl: wasmURL, isEvalSupported: false, useSystemFonts: true });
       const doc = await loading.promise;
@@ -65,9 +66,15 @@ try {
       const canvas = document.createElement('canvas'); canvas.width = Math.ceil(viewport.width); canvas.height = Math.ceil(viewport.height);
       document.body.replaceChildren(canvas);
       const context = canvas.getContext('2d', { willReadFrequently: true });
-      const task = pdfPage.render({ canvasContext: context, viewport, background: night ? theme.NIGHT_PAPER : '#ffffff' });
+      const task = pdfPage.render({ canvasContext: context, viewport, background: night ? theme.NIGHT_PAPER : paper ? 'rgba(0,0,0,0)' : '#ffffff' });
       if (night) theme.applyNightReading(task, pdfjs.OPS, { brightness, saturation: 50 });
+      else if (paper) theme.applyPaperReading(task, pdfjs.OPS);
       await task.promise;
+      if (paper) {
+        // Reusing this page also reuses PDF.js's cached Path2D operators.
+        const repeat = pdfPage.render({ canvasContext: context, viewport, background: 'rgba(0,0,0,0)' });
+        theme.applyPaperReading(repeat, pdfjs.OPS); await repeat.promise;
+      }
       const text = await pdfPage.getTextContent();
       window.rendered = { canvas, context, scale, width: viewport.width / scale, height: viewport.height / scale };
       const result = { png: canvas.toDataURL(), width: canvas.width, height: canvas.height,
@@ -101,6 +108,16 @@ try {
     fs.writeFileSync(path.join(scratch, `${tag}.png`), Buffer.from(result.png.split(',')[1], 'base64'));
     delete result.png; return result;
   };
+  await render(panels, 'paper-background', { paper: true });
+  const paperPixels = await page.evaluate(() => {
+    const r = window.rendered;
+    const at = (x, y) => [...r.context.getImageData(x * r.scale, (r.height - y) * r.scale, 1, 1).data];
+    return { blank: at(10, 10), blue: at(30, 180), green: at(260, 50), cutout: at(315, 70) };
+  });
+  check('explicit white sheet becomes transparent while colored panels remain intact', paperPixels.blank[3] === 0
+    && JSON.stringify(paperPixels.blue) === JSON.stringify([214, 235, 250, 255])
+    && JSON.stringify(paperPixels.green) === JSON.stringify([0, 255, 0, 255])
+    && JSON.stringify(paperPixels.cutout) === JSON.stringify([255, 255, 255, 255]), paperPixels);
   for (const brightness of [90, 65]) {
     await render(fixture, `composite-night-${brightness}`, { night: true, brightness });
     const images = await page.evaluate(() => Object.fromEntries(Object.entries({ paper: [10, 10], orange: [50, 490], repeated: [260, 490], masked: [260, 270], white: [170, 370], black: [50, 370], blue: [170, 490], blueShape: [34, 520], greenShape: [256, 520] })
