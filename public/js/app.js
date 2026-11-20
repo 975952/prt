@@ -12,6 +12,7 @@ import { findOnlinePapers, paperDiscoveryIntent, safePaperLink } from './paper-d
 import { renderPaperDiscovery, normalizePaperDiscovery } from './paper-discovery-ui.js';
 import { isPaperNavigationRequest, normalizePaperSearchPlan, PAPER_SEARCH_PLAN_PROMPT } from './paper-request.js';
 import { AGENT_PROFILE_KEY, readAgentProfile, writeAgentProfile, agentDisplayName } from './agent-profile.js';
+import { showAgentWelcome } from './agent-settings.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { createTranslationCard, getTranslationOriginalOpen, setTranslationOriginalOpen, TRANSLATION_ORIGINAL_OPEN_EVENT } from './translation-card.js';
 import { createImmersiveReading } from './immersive-reading.js';
@@ -957,6 +958,7 @@ let serverState = {};
   await prepareStartupDisplay();
   window.__prtStartup?.finish();
   finishWindowBoot();
+  showAgentWelcome(async () => { await openSettings(); showSettingsPane('agent'); });
 })().catch(error => window.__prtStartup?.fail(error));
 
 /** Boot restores sessions and panels after loading the PDF. Publish only the
