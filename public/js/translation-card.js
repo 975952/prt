@@ -63,8 +63,12 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   const locate = button('translationCardLocate', tr('定位原文'), 'book', () => current() && onLocate?.(current()));
   const status = el('span', { class: 'reading-card-status', 'aria-live': 'polite' });
   meta.append(status); original.before(meta);
+  // Originals flow at their full height with the translation in one scroll area.
+  const readingBody = el('div', { class: 'reading-card-body' });
+  const message = card.querySelector('.translation-card-message');
+  message.before(readingBody); readingBody.append(original, message);
   const history = el('div', { class: 'reading-card-history', id: 'translationCardHistoryList', role: 'list', hidden: true });
-  card.insertBefore(history, card.querySelector('.translation-card-message'));
+  card.insertBefore(history, readingBody);
   const footer = el('div', { class: 'reading-card-footer' });
   const tools = el('div', { class: 'reading-card-tools' });
   const copy = button('translationCardCopy', tr('复制译文'), 'copy', () => perform(onCopy, current()?.text));
@@ -333,6 +337,7 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     const showHistory = card.dataset.cardView === 'history';
     history.hidden = !showHistory;
     original.hidden = showHistory || !quote.textContent || !originalOpen;
+    readingBody.hidden = showHistory;
     meta.hidden = showHistory || !status.textContent; footer.hidden = showHistory;
     card.querySelector('.translation-card-message').hidden = showHistory;
     if (showHistory) renderHistory(list);

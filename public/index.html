@@ -106,6 +106,7 @@
   </div>
   <span class="doc-name" id="docName" data-wry-drag-region>Library</span>
   <span class="spacer"></span>
+  <button class="tbtn" id="immersiveBtn" type="button" title="沉浸翻书" aria-label="沉浸翻书" aria-pressed="false"><span data-agent-icon="book" aria-hidden="true"></span><span>翻书</span></button>
   <button class="tbtn" id="opsBtn" title="读懂论文：先给我讲明白 / 我需要先懂什么 / 带我一步步读 / 讲懂图表与公式"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="m9.6 3.4 1.6 4.2 4.2 1.6-4.2 1.6-1.6 4.2-1.6-4.2L3.8 9.2l4.2-1.6z"/><path d="m17.4 13.4.9 2.4 2.4.9-2.4.9-.9 2.4-.9-2.4-2.4-.9 2.4-.9z"/></svg></button>
   <button class="tbtn" id="searchBtn" title="全文搜索　Ctrl+F"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="10.8" cy="10.8" r="6.4"/><path d="M15.6 15.6 20.8 20.8"/></svg></button>
   <div class="topbar-side-controls" role="group" aria-label="侧栏控制">
@@ -118,7 +119,6 @@
     <button class="tbtn agent-open" id="agentBtn" type="button" title="打开Alina" aria-label="打开Alina" aria-expanded="false"><span class="agent-icon" data-agent-icon="alina" aria-hidden="true"></span><span data-agent-name>Alina</span></button>
   </nav>
   <button class="tbtn" id="settingsBtn" title="设置"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><circle cx="12" cy="12" r="3.2"/><circle cx="12" cy="12" r="6.4"/><path d="M12 2.2v3.4"/><path d="M12 18.4v3.4"/><path d="M2.2 12h3.4"/><path d="M18.4 12h3.4"/><path d="m5.1 5.1 2.4 2.4"/><path d="m16.5 16.5 2.4 2.4"/><path d="m18.9 5.1-2.4 2.4"/><path d="m7.5 16.5-2.4 2.4"/></svg></button>
-  <button class="tbtn" id="immersiveBtn" type="button" title="沉浸翻书" aria-label="沉浸翻书" aria-pressed="false"><span data-agent-icon="book" aria-hidden="true"></span><span>翻书</span></button>
   <!-- 全屏：有桌面壳时走 IPC 让窗口真正无边框全屏（盖住任务栏）；浏览器里降级用 Fullscreen API。
        进入后保留标签栏、首页与阅读控件；Esc 退出（快捷键与 Esc 的优先级见 app.js initShortcuts）。 -->
   <button class="tbtn" id="fullscreenBtn" type="button" title="全屏　F11（Esc 退出）" aria-label="进入全屏" aria-pressed="false"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M4 9V4h5"/><path d="M20 9V4h-5"/><path d="M4 15v5h5"/><path d="M20 15v5h-5"/><path d="M9 9 4.6 4.6"/><path d="M15 9l4.4-4.4"/><path d="M9 15l-4.4 4.4"/><path d="M15 15l4.4 4.4"/></svg></button>

@@ -3340,7 +3340,7 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 }
 .ai-block[data-block="translate"] .translation-direction .translation-delete { width: 26px; height: 28px; }
 .ai-block[data-block="translate"] .translation-notice { font-size: var(--ui-fs-xs); }
-.ai-block[data-block="translate"] .translation-original[open] .translation-source { max-height: 260px; overflow: auto; }
+.ai-block[data-block="translate"] .translation-original[open] .translation-source { max-height: none; overflow: visible; }
 @media (max-width: 600px) {
   :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body > .msg.user { max-width: 90%; margin-right: 8px; }
 }
