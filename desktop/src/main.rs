@@ -285,5 +285,5 @@ fn main() {
     }
 
     // 主线程交给窗口；HTTP 在后台线程里，窗口关掉即整个进程结束
-    window::run(url, background);
+    window::run(url, background, !pdfs.is_empty());
 }

@@ -40,7 +40,7 @@ const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(35);
 /// `{type:"fullscreen", on?:boolean}`（不传 on 就切换；Esc 由页面发 on=false）。
 #[derive(Debug, Clone)]
 enum WindowAction {
-    ShellPdfWaiting,
+    ShellPdf(String),
     Drag,
     Resize(ResizeDirection),
     Minimize,
@@ -360,6 +360,7 @@ fn create_reader(
         }) { window.set_outer_position(PhysicalPosition::new(x as i32, y as i32)); }
     }
     let mut url = url::Url::parse(base).map_err(|e| e.to_string())?;
+    if let Some(path) = geometry["shellPdf"].as_str() { url.query_pairs_mut().append_pair("shellPdf", path); }
     if !doc.is_empty() { url.query_pairs_mut().append_pair("document", doc); }
     let init = format!("window.__PRT_WINDOW_ID = {};", json!(key));
     let webview = decorate_builder(
@@ -373,7 +374,7 @@ fn create_reader(
 }
 
 fn save_windows(windows: &HashMap<WindowId, ReaderWindow>) {
-    let mut rows: Vec<_> = windows.values().map(|r| {
+    let mut rows: Vec<_> = windows.values().filter(|r| !r.key.starts_with("shell-")).map(|r| {
         let size = r.window.inner_size().to_logical::<f64>(r.window.scale_factor());
         let pos = r.window.outer_position().unwrap_or(PhysicalPosition::new(0, 0));
         let normal = !r.window.is_maximized() && !is_fullscreen(&r.window);
@@ -382,6 +383,7 @@ fn save_windows(windows: &HashMap<WindowId, ReaderWindow>) {
             "height":if normal {size.height} else {DEFAULT_H},
             "maximized":r.window.is_maximized()})
     }).collect();
+    if rows.is_empty() { return; }
     rows.sort_by_key(|r| r["key"].as_str().unwrap_or("").to_string());
     store::write_json("reader-windows.json", &json!({"windows":rows}));
 }
@@ -393,7 +395,7 @@ fn request_close(reader: &mut ReaderWindow) {
     }
 }
 
-pub fn run(url: String, background: bool) -> ! {
+pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
     let event_loop = EventLoopBuilder::<WindowMessage>::with_user_event().build();
     let proxy = event_loop.create_proxy();
     let origin = url::Url::parse(&url).expect("local service URL").origin().ascii_serialization().to_ascii_lowercase();
@@ -404,6 +406,13 @@ pub fn run(url: String, background: bool) -> ! {
     let mut rows = saved["windows"].as_array().cloned().unwrap_or_default();
     rows.retain(|r| r["key"].as_str().map(valid_key).unwrap_or(false));
     rows.truncate(10);
+    if shell_launch {
+        match crate::shell_pdf::next(util::dirs()) {
+            Ok(Some(path)) => rows = vec![json!({"key":"shell-1", "shellPdf":path})],
+            Err(e) => crate::migration::notify(&e.to_string()),
+            Ok(None) => {}
+        }
+    }
     if rows.is_empty() { rows.push(json!({"key":"main"})); }
     let mut windows = HashMap::new();
     for row in rows {
@@ -418,12 +427,13 @@ pub fn run(url: String, background: bool) -> ! {
     let shell_proxy = proxy.clone();
     let source = *windows.keys().next().unwrap();
     std::thread::spawn(move || {
-        let queue = util::dirs().data.join("shell-open");
         loop {
             std::thread::sleep(std::time::Duration::from_millis(700));
-            let waiting = std::fs::read_dir(&queue).is_ok_and(|mut files|
-                files.any(|f| f.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "request"))));
-            if waiting && shell_proxy.send_event(WindowMessage { source, action: WindowAction::ShellPdfWaiting }).is_err() { break; }
+            match crate::shell_pdf::next(util::dirs()) {
+                Ok(Some(path)) => if shell_proxy.send_event(WindowMessage { source, action: WindowAction::ShellPdf(path) }).is_err() { break; },
+                Ok(None) => {}
+                Err(e) => crate::log_line(&format!("[shell] {e}")),
+            }
         }
     });
     let mut last_save = Instant::now();
@@ -431,17 +441,17 @@ pub fn run(url: String, background: bool) -> ! {
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(WindowMessage { action: WindowAction::ShellPdfWaiting, .. }) => {
-                if let Some(r) = windows.values().find(|r| r.window.is_focused())
-                    .or_else(|| windows.values().find(|r| r.key == "main")).or_else(|| windows.values().next()) {
-                    if !background { r.window.set_minimized(false); r.window.set_focus(); }
-                    emit(r, json!({"type":"shell-pdf-waiting"}));
+            Event::UserEvent(WindowMessage { action: WindowAction::ShellPdf(path), .. }) => {
+                let key = (1..).map(|n| format!("shell-{n}")).find(|k| windows.values().all(|r| &r.key != k)).unwrap();
+                match create_reader(target, &mut context, proxy.clone(), &url, &origin, &key, "", &json!({"shellPdf":path}), background) {
+                    Ok(r) => { windows.insert(r.window.id(), r); }
+                    Err(e) => crate::migration::notify(&e),
                 }
             }
             Event::UserEvent(WindowMessage { source, action }) => {
                 if !windows.contains_key(&source) { return; }
                 match action {
-                    WindowAction::ShellPdfWaiting => unreachable!(),
+                    WindowAction::ShellPdf(_) => unreachable!(),
                     WindowAction::CancelOpen(request) => {
                         windows.retain(|_, r| !r.pending.as_ref().map(|(parent, req, _)| *parent == source && *req == request).unwrap_or(false));
                         save_windows(&windows);

@@ -25,11 +25,18 @@ try {
     catch { await new Promise(resolve => setTimeout(resolve, 200)); }
   }
   assert.ok(browser);
-  const target = await browser.waitForTarget(t => t.type() === 'page' && t.url().startsWith('http://127.0.0.1:'));
-  const page = await target.page();
-  const opened = wanted => page.waitForFunction(name => window.__state?.doc?.name === name
-    && __state.viewerDocId === __state.doc.docId && document.body.classList.contains('reading'), {}, wanted);
-  await opened(name);
+  const seen = new Set();
+  async function opened(wanted) {
+    const target = await browser.waitForTarget(t => t.type() === 'page' && !seen.has(t)
+      && t.url().startsWith('http://127.0.0.1:') && new URL(t.url()).searchParams.get('shellPdf') === wanted);
+    seen.add(target);
+    const page = await target.page();
+    await page.waitForFunction(name => window.__state?.doc?.name === name
+      && __state.viewerDocId === __state.doc.docId && document.body.matches('.reading.no-left.no-right'), {}, wanted);
+    return page;
+  }
+  const first = await opened(name);
+  assert.equal((await browser.pages()).filter(p => p.url().startsWith('http://127.0.0.1:')).length, 1);
   fs.copyFileSync(fixture('multipage-sample.pdf'), source);
   const forward = async file => {
     const child = spawnReader(staged.exe, { args: [file], env });
@@ -37,6 +44,7 @@ try {
   };
   await forward(source);
   await opened('阅读 sample (1).pdf');
+  assert.equal(await first.evaluate(() => __state.doc.name), name);
   await forward(path.join(env.PRT_PAPERS_DIR, name));
   await opened(name);
   await forward(source);
