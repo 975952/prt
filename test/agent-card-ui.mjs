@@ -39,11 +39,12 @@ await withChatHarness({ tag: 'agent-card', papers: [] }, async h => {
   await page.click('#agentCardBuilder summary');
   await page.evaluate(async () => { (await import('/js/ai.js')).Settings.data.hasApiKey = false; });
   await page.click('#agentCardAsk');
-  assert.match(await page.$eval('#agentCardConversation', node => node.textContent), /what would you like me to help with/);
+  assert.equal(await page.$eval('#agentCardConversation .agent-card-message', node => node.lastChild.textContent), 'What kind of personality would you like me to have?');
+  assert.equal(await page.$$eval('#agentCardConversation .agent-card-message', nodes => nodes.length), 1, 'start shows only the first question');
   assert.equal(await page.evaluate(() => __mockChatRequests.length), 0, 'the first question works without an API key');
-  await input('#agentCardInput', 'Help me study.');
+  await input('#agentCardInput', 'Warm, playful and independent.');
   await page.click('#agentCardSend');
-  assert.match(await page.$eval('#agentCardConversation', node => node.textContent), /What personality/);
+  assert.match(await page.$eval('#agentCardConversation', node => node.textContent), /What tone would you like/);
   await page.click('#agentCardGenerate');
   assert.match(await page.$eval('#agentCardConversation', node => node.textContent), /one step before we can chat/);
   assert.equal(await page.$eval('#agentCardStatus', node => node.classList.contains('error')), false);
@@ -58,22 +59,24 @@ await withChatHarness({ tag: 'agent-card', papers: [] }, async h => {
   await input('#agentCardInput', 'PREFERENCE_MARKER: warm but direct, female, brief answers.');
   await page.click('#agentCardSend');
   assert.equal(await page.$$eval('#agentCardConversation .agent-card-message', nodes => nodes.length), 3);
-  for (const answer of ['Warm but direct.', 'Mira, female.', 'Brief answers.']) {
+  for (const answer of ['Casual, with playful teasing.', 'Brief replies.', 'Mira.', 'Female.', 'Loves music.', 'An old friend.']) {
+    const before = await page.$$eval('#agentCardConversation .agent-card-message', nodes => nodes.length);
     await input('#agentCardInput', answer); await page.click('#agentCardSend');
+    assert.equal(await page.$$eval('#agentCardConversation .agent-card-message', nodes => nodes.length), before + 2, 'each answer advances exactly one question');
   }
-  assert.equal(await page.$$eval('#agentCardConversation .agent-card-message', nodes => nodes.length), 9);
+  assert.equal(await page.$$eval('#agentCardConversation .agent-card-message', nodes => nodes.length), 15);
   assert.equal(await page.evaluate(() => __mockChatRequests.length), 0, 'all interview turns are collected locally');
   pass('the guide asks one question at a time without a key; generation without a key gives a normal reply and settings button');
 
-  await input('#agentCardInput', 'A study partner, please.');
+  await input('#agentCardInput', 'Disagree honestly, avoid pet names.');
   await page.click('#agentCardGenerate'); await finishGeneration(JSON.stringify(card));
   assert.equal(await page.$eval('#agentNameInput', node => node.value), card.name);
   assert.equal(await page.$eval('#agentRoleEnabled', node => node.checked), false);
   assert.equal(await saved(), null);
   const generation = await page.evaluate(marker => __mockChatRequests.find(r => r.source.includes(marker)).body, generateMarker);
-  assert.equal(generation.messages.filter(message => message.role === 'assistant').length, 5);
+  assert.equal(generation.messages.filter(message => message.role === 'assistant').length, 8);
   assert.equal(await page.evaluate(() => __mockChatRequests.length), 1, 'only Generate sends the collected conversation');
-  assert.ok(JSON.stringify(generation.messages).includes('A study partner, please.'));
+  assert.ok(JSON.stringify(generation.messages).includes('Disagree honestly, avoid pet names.'));
   assert.ok(!generation.messages[0].content.includes('Assistant expression preferences'));
   pass('generation receives the complete interview plus unsent preferences and only fills an editable draft');
 
