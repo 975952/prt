@@ -2,6 +2,8 @@ import { t as tr, locale, localizeStaticDocument, localizedError, LOCALE_KEY, RE
 import { windowStorage as localStorage, storageKey, windowId, startWindows, finishWindowBoot, windowReady, openReaderWindow, canWrite, allowEdit, isWindowClosed, releaseDocument, notifySessionSaved } from './windows.js';
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
+import { createImportQueue } from './import-queue.js';
+import { createImportPanel } from './import-panel.js';
 import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
 import { createComposerDraftStore } from './composer-drafts.js';
 import { createDraftPersistence } from './draft-persistence.js';
@@ -4596,26 +4598,68 @@ function closeDeletedDoc() {
   setView('home');
 }
 
+let fileImportQueue = null;
 let localObjectUrl = null;
+function enqueueImports(files, folder = '', open = false) {
+  if (!fileImportQueue) {
+    const showPdf = j => openDoc({ name: j.name, url: j.url, docId: j.docId, path: j.path || j.name });
+    const panel = createImportPanel({ open: showPdf, retry: task => fileImportQueue.retry(task), clear: () => fileImportQueue.clearFinished() });
+    fileImportQueue = createImportQueue({
+      run: (task, progress) => uploadPdfFile(task.file, task.folder, task.id, progress),
+      changed: tasks => panel.render(tasks), duplicate: task => panel.duplicate(task),
+      completed: async task => { await refreshPaperList(); if (task.open) await showPdf(task.result); },
+      failed: async task => {
+        if (!task.open || task.presentation) return;
+        toast(tr("导入失败（{0}），先用临时方式打开", task.error), 'err', 5000);
+        if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
+        localObjectUrl = URL.createObjectURL(task.file);
+        await openDoc({ name: task.name, url: localObjectUrl, docId: `local-${task.name}-${task.file.size}` });
+      },
+    });
+    fileImportQueue.show = () => panel.show();
+    window.addEventListener('beforeunload', event => {
+      if (fileImportQueue.hasPending()) { event.preventDefault(); event.returnValue = ''; }
+    });
+  }
+  fileImportQueue.show();
+  fileImportQueue.add(files, folder, open);
+}
 
 /** 上传一个 PDF 到 papers/（folder=''=根；返回服务端落盘信息） */
-async function uploadPdfFile(file, folder = '') {
+async function uploadPdfFile(file, folder = '', taskId = '', progress = () => {}) {
   if (file.size > 256 * 1024 * 1024) throw new Error(tr('文件超过 256MB，无法导入'));
   const presentation = /\.pptx?$/i.test(file.name);
-  if (presentation) toast(tr('正在将 {0} 转为 PDF，请稍候…', file.name), 'info', 6000);
   const buf = await file.arrayBuffer();
-  const q = new URLSearchParams({ name: file.name });
+  const q = new URLSearchParams({ name: file.name, taskId });
   if (folder) q.set('folder', folder);
-  const r = await fetch(`/api/upload?${q}`, {
-    method: 'POST',
-    headers: { 'Content-Type': presentation ? 'application/octet-stream' : 'application/pdf' },
-    body: buf,
-    signal: AbortSignal.timeout(presentation ? 135000 : 60000),
-  });
-  let j = {};
-  try { j = await r.json(); } catch { /* 非 JSON */ }
-  if (!r.ok) throw new Error(localizedError(j?.error?.message || `HTTP ${r.status}`));
-  return j;
+  let stopped = false, polling = false;
+  const poll = async () => {
+    if (polling || stopped) return;
+    polling = true;
+    try {
+      const r = await fetch(`/api/upload-status?${new URLSearchParams({ taskId })}`, { signal: AbortSignal.timeout(3000) });
+      if (r.ok) {
+        const info = await r.json();
+        if (!stopped && ['waiting', 'converting'].includes(info.status)) progress(info.status);
+      }
+    } catch { /* The upload response remains authoritative. */ }
+    finally { polling = false; }
+  };
+  const timer = presentation ? setInterval(poll, 700) : null;
+  try {
+    if (presentation) progress('waiting');
+    const r = await fetch(`/api/upload?${q}`, {
+      method: 'POST',
+      headers: { 'Content-Type': presentation ? 'application/octet-stream' : 'application/pdf' },
+      body: buf,
+      // The server starts its conversion deadline only after this job reaches PowerPoint.
+      ...(presentation ? {} : { signal: AbortSignal.timeout(60000) }),
+    });
+    let j = {};
+    try { j = await r.json(); } catch { /* 非 JSON */ }
+    if (!r.ok) throw new Error(localizedError(j?.error?.message || `HTTP ${r.status}`));
+    return j;
+  } finally { stopped = true; clearInterval(timer); }
 }
 
 /** 外部拖入（资源管理器）：PDF 导入目标夹；文件夹建同名夹导入一层（v1 忽略子文件夹） */
@@ -4694,68 +4738,14 @@ async function importExternalFolder(entry, parent) {
 }
 
 async function importPdfsToFolder(pdfs, folder) {
-  for (const f of pdfs) {
-    try {
-      await uploadPdfFile(f, folder);
-    } catch (e) {
-      toast(tr("导入 {0} 失败：{1}", f.name, e.message), 'err', 4000);
-    }
-  }
-}
-
-/**
- * 单文件打开：先上传到服务端的 papers/ 存下来，再从服务端打开。
- * 这样下次启动还在列表里（以前用 blob URL，关掉就没了）。
- * 万一上传失败（比如 papers/ 不可写），退回临时打开，至少还能看。
- */
-async function openLocalFile(file) {
-  if (!/\.(pdf|pptx?)$/i.test(file.name)) { toast(tr("支持 PDF、PPT 和 PPTX 文件"), 'err'); return; }
-  const presentation = /\.pptx?$/i.test(file.name);
-  setBusy(true, presentation ? tr('正在将 PPT 转为 PDF…') : tr("正在导入…"));
-  try {
-    const j = await uploadPdfFile(file);
-    await refreshPaperList();
-    await openDoc({ name: j.name, url: j.url, docId: j.docId, path: j.path || j.name });
-    toast(tr("已存到 papers/：{0}", j.name), 'ok', 2600);
-  } catch (e) {
-    if (presentation) { toast(tr('PPT 导入失败：{0}', e.message), 'err', 7000); return; }
-    toast(tr("导入失败（{0}），先用临时方式打开", e.message), 'err', 5000);
-    if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
-    localObjectUrl = URL.createObjectURL(file);
-    await openDoc({ name: file.name, url: localObjectUrl, docId: `local-${file.name}-${file.size}` });
-  } finally {
-    setBusy(false);
-  }
+  enqueueImports(pdfs, folder);
 }
 
 async function importLocalFiles(files) {
-  const pdfs = pdfFilesFrom(files);
-  if (!pdfs.length) { toast(tr("支持 PDF、PPT 和 PPTX 文件"), 'err'); return; }
-  if (pdfs.length === 1) return openLocalFile(pdfs[0]);
-  setBusy(true, tr("正在导入 1/{0}…", pdfs.length));
-  const imported = [];
-  const failed = [];
-  for (let i = 0; i < pdfs.length; i++) {
-    setBusy(true, /\.pptx?$/i.test(pdfs[i].name)
-      ? tr('正在转换 PPT {0}/{1}…', i + 1, pdfs.length)
-      : tr("正在导入 {0}/{1}…", i + 1, pdfs.length));
-    try {
-      imported.push(await uploadPdfFile(pdfs[i]));
-    } catch (e) {
-      failed.push({ name: pdfs[i].name, msg: e.message });
-    }
-  }
-  setBusy(false);
-  await refreshPaperList();
-  if (imported.length) {
-    const note = failed.length ? tr("，{0} 篇失败（{1}：{2}）", failed.length, failed[0].name, failed[0].msg) : '';
-    toast(tr("已导入 {0} 篇 PDF{1}", imported.length, note), failed.length ? 'err' : 'ok', failed.length ? 6000 : 3400);
-  } else {
-    toast(tr("导入失败：{0} {1}", failed[0]?.name || '', failed[0]?.msg || tr("未知错误")), 'err', 6000);
-  }
-  if (failed.length) console.warn('[import] 导入失败的 PDF：', failed);
+  const supported = pdfFilesFrom(files);
+  if (!supported.length) { toast(tr("支持 PDF、PPT 和 PPTX 文件"), "err"); return; }
+  enqueueImports(supported, "", supported.length === 1);
 }
-
 
 /**
  * 打开文档（多标签包装）：B 线 P1 的冷切换 —— 真正的加载/状态清理仍由 openDocColdSwitch 完成，

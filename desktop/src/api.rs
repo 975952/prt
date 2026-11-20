@@ -2855,7 +2855,7 @@ pub fn upload(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     }
     let converted;
     let body = if is_presentation {
-        converted = match crate::powerpoint::convert(body, &raw) {
+        converted = match crate::powerpoint::convert(body, &raw, &query_get(raw_query, "taskId").unwrap_or_default()) {
             Ok(pdf) => pdf,
             Err((status, message)) => return send_json(rq, status, &err_json(message)),
         };

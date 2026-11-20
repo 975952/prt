@@ -9,7 +9,7 @@ const crypto = require('crypto');
 const { Readable } = require('stream');
 const sec = require('./security');
 const modelProfiles = require('./model-profiles');
-const { convertPowerPoint } = require('./powerpoint');
+const { convertPowerPoint, conversionStatus } = require('./powerpoint');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -1999,7 +1999,7 @@ async function handleUpload(req, res, url) {
   }
   if (!body.length) return sendJson(res, 400, { error: { message: '空文件' } });
   if (isPresentation) {
-    try { body = await convertPowerPoint(body, rawName); }
+    try { body = await convertPowerPoint(body, rawName, url.searchParams.get('taskId')); }
     catch (e) { return sendJson(res, e.status || 500, { error: { message: e.status ? e.message : 'PowerPoint 转换失败，请检查磁盘空间与目录权限' } }); }
   }
   if (body.subarray(0, 5).toString('latin1') !== '%PDF-') {
@@ -2488,6 +2488,10 @@ async function handle(req, res) {
   if (pathname === '/api/upload') {
     if (req.method !== 'POST') return send(res, 405, 'Method Not Allowed');
     return handleUpload(req, res, url);
+  }
+  if (pathname === '/api/upload-status') {
+    if (req.method !== 'GET') return send(res, 405, 'Method Not Allowed');
+    return sendJson(res, 200, { status: conversionStatus(url.searchParams.get('taskId')) });
   }
 
   if (pathname === '/api/import-pdf') return handleImportPdf(res, url);

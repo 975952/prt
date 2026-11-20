@@ -1,0 +1,22 @@
+.import-panel { position: fixed; right: 20px; bottom: 20px; z-index: 85; width: min(370px, calc(100vw - 32px)); color: var(--fg); background: var(--bg-elev); border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow); font-size: 13px; overflow: hidden; }
+.import-panel[hidden], .import-panel [hidden] { display: none !important; }
+.import-panel-head { display: flex; align-items: center; gap: 8px; padding: 11px 13px; border-bottom: 1px solid var(--border); }
+.import-panel button { font: inherit; cursor: pointer; }
+.import-toggle { flex: 1; text-align: left; background: none; border: 0; color: var(--fg); font-weight: 600 !important; }
+.import-toggle::before { content: '▾'; margin-right: 7px; }
+.import-toggle[aria-expanded="false"]::before { content: '▸'; }
+.import-clear { background: none; border: 0; color: var(--fg-dim); font-size: 12px !important; }
+.import-clear:disabled { opacity: .45; cursor: default; }
+.import-notice { padding: 9px 14px; color: var(--accent); background: var(--bg-sunken); overflow-wrap: anywhere; }
+.import-task-list { list-style: none; padding: 0; margin: 0; max-height: min(42vh, 340px); overflow: auto; overscroll-behavior: contain; }
+.import-task { display: grid; grid-template-columns: minmax(0, 1fr) auto; column-gap: 10px; row-gap: 5px; padding: 12px 14px; border-bottom: 1px solid var(--border); }
+.import-task:last-child { border-bottom: 0; }
+.import-task-name { grid-column: 1 / -1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.import-task-status { color: var(--fg-dim); }
+.import-task-detail { grid-column: 1; color: var(--fg-faint); font-size: 12px; overflow-wrap: anywhere; }
+.import-task-action { grid-column: 2; grid-row: 2 / 4; align-self: center; border: 1px solid var(--border-strong); border-radius: 8px; background: var(--bg-sunken); color: var(--fg); padding: 5px 9px; }
+.import-task[data-status="done"] .import-task-status { color: var(--ok-text); }
+.import-task[data-status="failed"] .import-task-status, .import-task[data-status="failed"] .import-task-detail { color: var(--err-text); }
+.import-task[data-status="converting"] .import-task-status::before, .import-task[data-status="uploading"] .import-task-status::before { content: ''; display: inline-block; width: 9px; height: 9px; margin-right: 7px; border: 2px solid var(--border-strong); border-top-color: var(--accent); border-radius: 50%; animation: import-spin .9s linear infinite; }
+@keyframes import-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .import-task-status::before { animation: none !important; } }

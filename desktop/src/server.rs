@@ -190,6 +190,11 @@ fn handle(mut rq: Request, ctx: &Ctx) {
         }
         "/api/pdf" => return api::pdf(rq, &raw_query, &method),
         "/api/upload" => return api::upload(rq, &method, &raw_query, &body),
+        "/api/upload-status" => {
+            if method != Method::Get { return send_text(rq, 405, "Method Not Allowed"); }
+            let id = query_get(&raw_query, "taskId").unwrap_or_default();
+            return send_json(rq, 200, &serde_json::json!({ "status": crate::powerpoint::status(&id) }));
+        },
         "/api/config" => return api::config(rq, &method, &body),
         "/api/state" => return api::state(rq, &method, &raw_query, &body),
         "/api/organizer-history" => return api::organizer_history(rq, &method, &body),

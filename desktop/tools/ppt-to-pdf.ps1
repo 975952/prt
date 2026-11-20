@@ -1,10 +1,12 @@
 # Shared by the Node server and embedded Rust desktop server. ASCII only.
 param([Parameter(Mandatory=$true)][string]$InputPath,
-      [Parameter(Mandatory=$true)][string]$OutputPath)
+      [Parameter(Mandatory=$true)][string]$OutputPath,
+      [Parameter(Mandatory=$true)][string]$StatePath)
 $ErrorActionPreference = 'Stop'
+[IO.File]::WriteAllText($StatePath, 'waiting')
 $mutex = New-Object Threading.Mutex($false, 'Local\prt-powerpoint-conversion')
-try { $locked = $mutex.WaitOne(0) } catch [Threading.AbandonedMutexException] { $locked = $true }
-if (-not $locked) { $mutex.Dispose(); exit 3 }
+try { [void]$mutex.WaitOne() } catch [Threading.AbandonedMutexException] { }
+[IO.File]::WriteAllText($StatePath, 'converting')
 $app = $null
 $deck = $null
 $oldSecurity = $null

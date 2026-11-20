@@ -32,8 +32,8 @@ try {
     if (!ready) await new Promise(resolve => setTimeout(resolve, 100));
   }
   assert.ok(ready);
-  const upload = async (name, body, folder = '') => {
-    const r = await fetch(`${base}/api/upload?${new URLSearchParams({ name, folder })}`, {
+  const upload = async (name, body, folder = '', taskId = '') => {
+    const r = await fetch(`${base}/api/upload?${new URLSearchParams({ name, folder, taskId })}`, {
       method: 'POST', headers: { 'Content-Type': 'application/octet-stream' }, body,
       signal: AbortSignal.timeout(135000),
     });
@@ -43,12 +43,23 @@ try {
   assert.equal((await upload('empty.ppt', Buffer.alloc(0))).status, 400);
   assert.equal((await upload('bad-folder.pptx', pptx, '../outside')).status, 400);
   assert.deepEqual(fs.readdirSync(papers), [], 'invalid requests leave no output');
-  const first = await upload('中文 演示.PPTX', pptx);
+  const firstPending = upload('中文 演示.PPTX', pptx, '', 'test-first');
+  let firstStatus;
+  for (let n = 0; n < 100; n++) {
+    firstStatus = (await (await fetch(`${base}/api/upload-status?taskId=test-first`)).json()).status;
+    if (firstStatus === 'converting') break;
+    await new Promise(resolve => setTimeout(resolve, 100));
+  }
+  assert.equal(firstStatus, 'converting', 'actual worker state is observable');
+  const secondPending = upload('中文 演示.PPTX', pptx, '', 'test-second');
+  await new Promise(resolve => setTimeout(resolve, 150));
+  assert.equal((await (await fetch(`${base}/api/upload-status?taskId=test-second`)).json()).status, 'waiting', 'concurrent upload queues without rejecting');
+  const first = await firstPending;
   assert.equal(first.status, 200, JSON.stringify(first));
   assert.equal(first.json.name, '中文 演示.pdf');
   const originalPdf = fs.readFileSync(path.join(papers, first.json.name));
   assert.ok(originalPdf.subarray(0, 5).equals(Buffer.from('%PDF-')));
-  const second = await upload('中文 演示.PPTX', pptx);
+  const second = await secondPending;
   assert.equal(second.status, 200, JSON.stringify(second));
   assert.equal(second.json.name, '中文 演示 (2).pdf');
   assert.deepEqual(fs.readFileSync(path.join(papers, first.json.name)), originalPdf, 'existing PDF is preserved');
@@ -67,19 +78,29 @@ try {
   await page.goto(base, { waitUntil: 'networkidle0' });
   assert.match(await page.$eval('#fileInput', el => el.accept), /\.pptx/);
   await (await page.$('#fileInput')).uploadFile(path.join(scratch, 'fixture.pptx'));
+  await page.waitForSelector('#importPanel:not([hidden])');
+  await (await page.$('#fileInput')).uploadFile(path.join(scratch, 'fixture.pptx'));
+  assert.equal(await page.$$eval('#importPanel .import-task', rows => rows.length), 1, 'duplicate input stays one queued task');
+  fs.copyFileSync(path.join(scratch, 'fixture.pptx'), path.join(scratch, 'next.pptx'));
+  await (await page.$('#fileInput')).uploadFile(path.join(scratch, 'next.pptx'));
+  await page.waitForSelector('#importPanel [data-status="queued"]');
+  await page.waitForSelector('#importPanel [data-status="converting"]', { timeout: 20000 });
+  await page.screenshot({ path: path.join(scratch, 'queue-active.png') });
   await page.waitForFunction(() => window.__viewer?.numPages === 2 && window.__state?.doc?.name === 'fixture.pdf', { timeout: 135000 });
   const text = await page.evaluate(async () => {
     const pdf = window.__viewer.pdf;
     return (await (await pdf.getPage(1)).getTextContent()).items.map(item => item.str).join(' ');
   });
   assert.match(text, /PRT conversion fixture/);
+  await page.waitForFunction(() => document.querySelectorAll('#importPanel [data-status="done"]').length === 2
+    && window.__state?.doc?.name === 'next.pdf', { timeout: 135000 });
   console.log('PASS UI: converted file opens with two readable pages');
   fs.writeFileSync(path.join(scratch, 'broken.pptx'), 'invalid data');
   const rejected = page.waitForResponse(r => r.url().includes('/api/upload?') && r.url().includes('broken.pptx'));
   await (await page.$('#fileInput')).uploadFile(path.join(scratch, 'broken.pptx'));
   assert.equal((await rejected).status(), 400);
   await page.waitForFunction(() => document.body.innerText.includes('这不是有效的 PPT/PPTX 文件'), { timeout: 10000 });
-  assert.equal(await page.evaluate(() => window.__state.doc.name), 'fixture.pdf', 'failed PPT never opens as a PDF blob');
+  assert.equal(await page.evaluate(() => window.__state.doc.name), 'next.pdf', 'failed PPT never opens as a PDF blob');
   console.log('PASS UI: invalid PPT returns 400 and preserves current reader');
   fs.copyFileSync(path.join(scratch, 'fixture.ppt'), path.join(scratch, 'batch.ppt'));
   fs.writeFileSync(path.join(scratch, 'batch-pdf.pdf'), originalPdf);

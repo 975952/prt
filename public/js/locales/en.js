@@ -1,6 +1,17 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  '文件导入': 'File imports',
+  '清除已结束': 'Clear finished',
+  '文件导入 · {0} 项进行中': 'File imports · {0} pending',
+  '文件导入 · 已结束': 'File imports · Finished',
+  '等待中 · 第 {0} 项': 'Queued · Position {0}',
+  '等待 PowerPoint · 自动排队': 'Waiting for PowerPoint · Queued automatically',
+  '正在转换为 PDF · {0} 秒': 'Converting to PDF · {0}s',
+  '正在导入 · {0} 秒': 'Importing · {0}s',
+  '导入失败': 'Import failed',
+  '已完成 · PDF 已加入书架': 'Completed · PDF added to library',
+  '「{0}」已在队列中，无需重复添加': '“{0}” is already queued; no need to add it again',
   '导入 PDF / PPT': 'Import PDF / PPT',
   '打开 PDF / PPT': 'Open PDF / PPT',
   '拖入 PDF / PPT，或': 'Drop PDF / PPT files, or',
