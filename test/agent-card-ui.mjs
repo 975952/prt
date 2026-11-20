@@ -24,6 +24,13 @@ await withChatHarness({ tag: 'agent-card', papers: [] }, async h => {
   const choice = async index => (await page.$$('#agentCardChoices button'))[index].click();
 
   await visible('#agentWelcome');
+  assert.equal(await page.evaluate(() => localStorage.getItem('reader.agent.welcome.v1')), null);
+  await page.reload({ waitUntil: 'networkidle0' });
+  await visible('#agentWelcome');
+  await page.evaluate(() => localStorage.setItem('reader.agent.welcome.v1', '1'));
+  await page.reload({ waitUntil: 'networkidle0' });
+  await visible('#agentWelcome');
+  pass('unanswered invitations survive reopening, including the legacy seen-only marker');
   await page.click('#agentWelcomeSkip');
   assert.equal(await saved(), null);
   await page.reload({ waitUntil: 'networkidle0' });
@@ -181,8 +188,10 @@ await withChatHarness({ tag: 'agent-card', papers: [] }, async h => {
   await page.evaluate(() => {
     const profile = JSON.parse(localStorage.getItem('reader.agent.profile.v1'));
     delete profile.customized; localStorage.setItem('reader.agent.profile.v1', JSON.stringify(profile));
+    localStorage.setItem('reader.agent.welcome.v1', '1');
   });
   await page.reload({ waitUntil: 'networkidle0' });
+  assert.equal(await page.$('#agentWelcome'), null);
   await page.click('#settingsBtn'); await page.click('#settingsNavAgent'); await visible('#agentExistingCard');
   pass('existing cards created before this redesign are recognized without a migration write');
 

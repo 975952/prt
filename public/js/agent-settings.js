@@ -1,5 +1,5 @@
 import { t as tr, locale } from './i18n.js';
-import { DEFAULT_AGENT_PROFILE, normalizeAgentProfile, agentDisplayName } from './agent-profile.js';
+import { AGENT_PROFILE_KEY, DEFAULT_AGENT_PROFILE, normalizeAgentProfile, agentDisplayName, readAgentProfile } from './agent-profile.js';
 import { Settings, streamChat } from './ai.js';
 import { AGENT_CARD_QUESTIONS, AGENT_CARD_CHOICES, cardGenerationMessages, parseAgentCard } from './agent-card.js';
 import { modelSetupReply, isModelSetupError } from './model-onboarding.js';
@@ -218,11 +218,20 @@ export function createAgentSettings({ onSave, onConfigureModel } = {}) {
 /** A one-time invitation; all subsequent editing stays in Settings. */
 export function showAgentWelcome(onCustomize) {
   const key = 'reader.agent.welcome.v1';
+  if (document.getElementById('agentWelcome') || readAgentProfile().customized) return;
   try {
-    if (globalThis.localStorage.getItem(key)) return;
-    globalThis.localStorage.setItem(key, '1');
-  } catch { return; }
+    // Older versions wrote '1' before the reader had a chance to respond.
+    if (localStorage.getItem(key) === 'acknowledged') return;
+  } catch { /* The invitation still works for this window without storage. */ }
   const card = document.createElement('section');
+  function dismiss() {
+    window.removeEventListener('storage', onStorage);
+    card.remove();
+  }
+  function onStorage(event) {
+    if ((event.key === key && event.newValue === 'acknowledged')
+      || (event.key === AGENT_PROFILE_KEY && readAgentProfile().customized)) dismiss();
+  }
   card.id = 'agentWelcome'; card.className = 'agent-welcome';
   card.setAttribute('aria-labelledby', 'agentWelcomeTitle');
   const title = document.createElement('h2'), detail = document.createElement('p'), actions = document.createElement('div');
@@ -234,9 +243,11 @@ export function showAgentWelcome(onCustomize) {
     button.className = 'model-profile-button'; button.textContent = tr(text);
     button.addEventListener('click', async () => {
       if (customize) { await onCustomize(); }
-      card.remove();
+      try { localStorage.setItem(key, 'acknowledged'); } catch { /* Dismiss locally. */ }
+      dismiss();
     });
     actions.append(button);
   }
+  window.addEventListener('storage', onStorage);
   card.append(title, detail, actions); document.body.append(card);
 }
