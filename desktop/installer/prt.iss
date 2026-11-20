@@ -39,6 +39,7 @@ ArchitecturesInstallIn64BitMode=x64compatible
 MinVersion=10.0
 OutputDir={#SetupOutputDir}
 OutputBaseFilename=prt-setup
+SetupIconFile=..\assets\book-spine.ico
 Compression=lzma2
 SolidCompression=yes
 WizardStyle=modern

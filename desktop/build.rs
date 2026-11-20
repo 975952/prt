@@ -68,13 +68,20 @@ fn build_ico(sizes: &[u32]) -> Vec<u8> {
 }
 
 fn main() {
+    println!("cargo:rerun-if-changed=assets/book-spine.rgba");
+    println!("cargo:rerun-if-changed=assets/book-spine.ico");
     println!("cargo:rerun-if-changed=src/icon_geometry.rs");
     println!("cargo:rerun-if-changed=build.rs");
 
     let out_dir = PathBuf::from(env::var("OUT_DIR").expect("OUT_DIR"));
     let ico = out_dir.join("app.ico");
     // 16/24/32/48/64/128/256：从任务栏小图标到资源管理器大图标都覆盖
-    fs::write(&ico, build_ico(&[16, 24, 32, 48, 64, 128, 256])).expect("写 app.ico 失败");
+    let rendered = build_ico(&[16, 24, 32, 48, 64, 128, 256]);
+    assert!(
+        rendered.as_slice() == include_bytes!("assets/book-spine.ico"),
+        "The setup icon must match the rendered application icon"
+    );
+    fs::write(&ico, rendered).expect("写 app.ico 失败");
 
     #[cfg(windows)]
     {

@@ -32,6 +32,8 @@ const INCLUDE = [
   '.gitattributes',
   'public',
   'desktop/src',
+  'desktop/assets/book-spine.ico',
+  'desktop/assets/book-spine.rgba',
   'desktop/Cargo.toml',
   'desktop/Cargo.lock',
   'desktop/README.md',
