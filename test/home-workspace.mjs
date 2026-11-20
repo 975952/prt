@@ -49,7 +49,9 @@ try {
   const search = async text => {
     await page.$eval('#homeSearch', (n, value) => { n.value = value; n.dispatchEvent(new Event('input', { bubbles: true })); }, text);
   };
-  check('empty library gives an actionable welcome', await page.$eval('#homeList', n => n.textContent.includes('还没有论文')));
+  check('empty library guides readers to their first PDF or a conversation', await visible('#homeStartPdf')
+    && await visible('#homeStartChat') && !await visible('#homeReadingEntry') && !await visible('#homeOrganize'));
+  if (await page.$('#agentWelcomeSkip')) await page.click('#agentWelcomeSkip');
   check('Library is the single top-level name', await page.$eval('#homeHeading', n => n.textContent === 'Library')
     && await page.$eval('#homeBtn', n => n.textContent.includes('Library'))
     && await page.$eval('#docName', n => n.textContent === 'Library'));

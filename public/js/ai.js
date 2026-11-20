@@ -112,19 +112,20 @@ export async function streamChat(opts) {
     onTick,
     tools,
     rawResponse = false,
+    useAgentProfile = true,
   } = opts;
   // Read shared preferences on every request, including tool follow-ups. Keep
   // task-specific rules in their original system message and never mutate callers.
-  const profilePrompt = buildAgentProfilePrompt();
+  const profilePrompt = useAgentProfile ? buildAgentProfilePrompt() : '';
   const languageRule = responseLanguageRule();
   let hasSystem = false;
   const messages = originalMessages.map((message) => {
     if (message.role !== 'system') return message;
-    const prefix = hasSystem ? '' : `${profilePrompt}\n\n`;
+    const prefix = hasSystem || !profilePrompt ? '' : `${profilePrompt}\n\n`;
     hasSystem = true;
     return { ...message, content: `${prefix}${message.content}\n\n${languageRule}` };
   });
-  if (!hasSystem) messages.unshift({ role: 'system', content: `${profilePrompt}\n\n${languageRule}` });
+  if (!hasSystem) messages.unshift({ role: 'system', content: [profilePrompt, languageRule].filter(Boolean).join('\n\n') });
 
   // 自己的 controller：既能被调用方 abort，也能被看门狗 abort
   const ctl = new AbortController();

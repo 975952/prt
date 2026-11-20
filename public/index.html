@@ -560,13 +560,30 @@
           <div class="settings-pane-title">智能体</div>
           <div class="settings-pane-sub">名字与交流方式，在所有对话中共用。</div>
           <form id="agentProfileForm" class="agent-settings-form">
+            <label class="agent-role-toggle"><input id="agentRoleEnabled" type="checkbox" /><span>启用角色模式</span></label>
+            <p class="modal-note">关闭时直接正常提问；开启并保存后，在所有对话中使用这张角色卡。关闭不会删除设定。</p>
+            <details class="agent-card-builder" id="agentCardBuilder">
+              <summary>让 AI 帮我设定</summary>
+              <p class="modal-note">先一步步聊聊你的偏好，最后把整段对话一起交给 AI 生成角色卡。也可以直接粘贴已有对话，或随时提前生成。</p>
+              <div id="agentCardConversation" class="agent-card-conversation" role="log" aria-label="角色设定对话" aria-live="polite"></div>
+              <label class="field" for="agentCardInput"><span>你的偏好</span><textarea id="agentCardInput" maxlength="6000" rows="3" placeholder="例如：我想要一个温柔但不一味附和的女性助手，回答简洁，像学习搭档"></textarea></label>
+              <div class="agent-settings-actions">
+                <button type="button" class="model-profile-button" id="agentCardAsk">让 AI 询问我</button>
+                <button type="button" class="model-profile-button" id="agentCardSend">发送</button>
+                <button type="button" class="model-profile-button" id="agentCardGenerate">生成角色卡</button>
+                <button type="button" class="model-profile-button" id="agentCardStop" hidden>停止</button>
+                <button type="button" class="model-profile-button" id="agentCardClear">清空设定对话</button>
+              </div>
+              <p id="agentCardStatus" class="agent-settings-status" role="status" aria-live="polite"></p>
+            </details>
             <label class="field" for="agentNameInput"><span>助手的名字</span><input id="agentNameInput" type="text" maxlength="32" autocomplete="off" /></label>
             <p class="modal-note" id="agentNameAlias" hidden>中文称呼：Alina</p>
             <label class="field" for="agentPersonalityInput"><span>性格</span><input id="agentPersonalityInput" type="text" maxlength="180" autocomplete="off" placeholder="例如：温和、敏锐、表达清楚" /></label>
             <label class="field" for="agentGenderSelect"><span>性别（可选）</span><select id="agentGenderSelect"><option value="">不设定</option><option value="女">女</option><option value="男">男</option><option value="custom">自定义</option></select></label>
             <label class="field" id="agentGenderCustomField" for="agentGenderCustom" hidden><span>自定义性别</span><input id="agentGenderCustom" type="text" maxlength="40" autocomplete="off" /></label>
             <label class="field" for="agentHabitsInput"><span>交流习惯</span><textarea id="agentHabitsInput" maxlength="600" rows="3" placeholder="例如：先直接回答，再按需要展开"></textarea></label>
-            <div class="agent-settings-actions"><button type="submit" class="model-profile-button" id="agentProfileSave">保存</button><button type="button" class="model-profile-button" id="agentProfileReset">撤销修改</button><span class="agent-settings-status" id="agentProfileStatus" role="status" aria-live="polite"></span></div>
+            <label class="field" for="agentDescriptionInput"><span>角色背景与关系</span><textarea id="agentDescriptionInput" maxlength="1600" rows="3" placeholder="例如：耐心的学习搭档，陪我阅读论文，会适时追问我的理解"></textarea></label>
+            <label class="field" for="agentExamplesInput"><span>示例对话（可选）</span><textarea id="agentExamplesInput" maxlength="1600" rows="3" placeholder="写一小段你喜欢的问答风格"></textarea></label>
           </form>
         </section>
         <section class="settings-pane hidden" id="settingsPaneAppearance" data-pane="appearance" role="tabpanel" aria-labelledby="settingsNavAppearance">
@@ -694,6 +711,7 @@
         <button type="button" id="resetSettings" title="重置外观、布局和阅读偏好；保留模型配置与阅读记录">重置阅读偏好</button>
       </div>
       <span class="test-result" id="testResult" role="status" aria-live="polite"></span>
+      <div class="agent-settings-actions agent-profile-footer"><span class="agent-settings-status" id="agentProfileStatus" role="status" aria-live="polite"></span><button type="button" class="model-profile-button" id="agentProfileReset">撤销修改</button><button type="submit" form="agentProfileForm" class="primary" id="agentProfileSave">保存</button></div>
       <button class="primary" id="saveSettings">保存并使用</button>
     </div>
   </div>

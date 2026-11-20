@@ -10,7 +10,7 @@ import { initAgentResize } from './agent-resize.js';
 /** UI only: the caller owns conversation scope, persistence, and document navigation. */
 export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, onOpenPapers,
   onContinue, onRestore, onNew, onStartSearch, onResume, onHistory, onLanding, onSessionSelect, onSettings,
-  getPapers = () => [], onNameChange, onProfileChange } = {}) {
+  getPapers = () => [], onNameChange, onProfileChange, onConfigureModel } = {}) {
   const byId = id => document.getElementById(id);
   const ui = Object.fromEntries(['agentBtn', 'homeAgent', 'agentIdentity', 'agentNameDisplay', 'agentExpand', 'agentPapersToggle', 'agentLandingBack',
     'agentLanding', 'agentLaunchActions', 'agentStartSearch', 'agentResume', 'agentHistory', 'agentRecentTitle', 'chatInput',
@@ -42,7 +42,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   let paperRevision = 0, handoffFrame = 0, handoffVersion = 0, handoffAnimation = null, handoffClosing = false;
   let landing = false, hasRecent = false, composerAnimation = null, composerFrame = 0, composerVersion = 0;
   const motion = createAgentMotion();
-  const settings = createAgentSettings({ onSave: async next => {
+  const settings = createAgentSettings({ onConfigureModel, onSave: async next => {
     if (onProfileChange) await onProfileChange(next);
     else await onNameChange?.(next.name);
     profile = normalizeAgentProfile(next); setName(profile.name);

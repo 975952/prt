@@ -13,6 +13,7 @@ import { renderPaperDiscovery, normalizePaperDiscovery } from './paper-discovery
 import { isPaperNavigationRequest, normalizePaperSearchPlan, PAPER_SEARCH_PLAN_PROMPT } from './paper-request.js';
 import { AGENT_PROFILE_KEY, readAgentProfile, writeAgentProfile, agentDisplayName } from './agent-profile.js';
 import { showAgentWelcome } from './agent-settings.js';
+import { modelSetupReply, isModelSetupError } from './model-onboarding.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { createTranslationCard, getTranslationOriginalOpen, setTranslationOriginalOpen, TRANSLATION_ORIGINAL_OPEN_EVENT } from './translation-card.js';
 import { createImmersiveReading } from './immersive-reading.js';
@@ -2672,6 +2673,7 @@ function refreshReadingEntries() {
     button.querySelector('.home-reading-title, .agent-resume-name').textContent = paperName;
     button.querySelector('.home-reading-meta, .agent-resume-meta').textContent = detail;
     button.disabled = !paper;
+    button.hidden = !paper;
     button.title = paper ? `${label} · ${paper.name}` : tr('还没有阅读记录');
     button.setAttribute('aria-label', button.title);
     button.onclick = () => void returnToReader();
@@ -2791,6 +2793,7 @@ function initAgentWorkspace() {
       refreshAgentTitle();
       finishAgentNaming();
     },
+    onConfigureModel: openModelKeySettings,
     onNameDismiss: finishAgentNaming,
   });
   agentWorkspace.setProfile(profile);
@@ -3154,6 +3157,7 @@ function renderHome({ navigation = true } = {}) {
   const rows = recentDocs();
   const recById = new Map(rows.map((r) => [r.docId, r]));
   const allPapers = state.papers || [];
+  $('#home').classList.toggle('home-onboarding', !allPapers.length);
   const recent = $('#homeRecent');
   const folders = [...(state.folders || [])];
   // 根目录与缺少文件夹条目的服务端结果也有明确的导航入口。
@@ -3216,6 +3220,16 @@ function renderHome({ navigation = true } = {}) {
     resultCount.textContent = showCount ? query ? tr("找到 {0} 篇论文", visible.length) : tr("{0} 篇论文", visible.length) : '';
   }
   if (!visible.length) {
+    if (!allPapers.length) {
+      list.append(el('li', { class: 'home-start' },
+        el('h2', { text: tr('从一篇论文，或一个问题开始') }),
+        el('p', { text: tr('打开 PDF，就能开始阅读、标注和整理思路。还没选好论文？也可以先和助手聊聊。') }),
+        el('div', { class: 'home-start-actions' },
+          el('button', { id: 'homeStartPdf', type: 'button', class: 'workspace-action workspace-action-primary', text: tr('打开第一份 PDF'), onclick: () => $('#fileInput')?.click() }),
+          el('button', { id: 'homeStartChat', type: 'button', class: 'workspace-action', text: tr('直接与助手聊天'), onclick: () => openAgentWorkspace({ landing: true }) })),
+        el('span', { class: 'home-start-note', text: tr('也可以把 PDF 拖到这里。阅读文件不需要 API Key。') })));
+      return;
+    }
     const emptyTitle = !allPapers.length ? tr("还没有论文") : query ? tr("没有找到匹配的论文")
       : homeView.filter === 'recent' ? tr("还没有阅读记录") : homeView.filter === 'unread' ? tr("所有论文都已开始阅读") : tr("这个文件夹还没有论文");
     const emptyHint = !allPapers.length || homeView.folder !== null && !query ? tr("点「打开 PDF」选一个，或直接把 PDF 拖进来")
@@ -7168,6 +7182,7 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
     ? el('button', { class: 'act-icon', title: tr("复制译文"), 'aria-label': tr("复制译文"), onclick: () => copyText(fullText) }, iconEl('copy'))
     : null;
   appendAll(entry.acts,
+    rec?.tag === 'model-setup' ? el('button', { type: 'button', class: 'model-setup-link', text: tr('设置 API Key'), onclick: openModelKeySettings }) : null,
     bare ? translationCopy : el('button', {
       class: 'act-icon', title: tr("复制这段回答"), 'aria-label': tr("复制这段回答"),
       onclick: () => copyText(fullText),
@@ -13544,7 +13559,6 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     return;
   }
   if (!pending && !ta.value.trim() && !state.attachments.length) return;
-  if (!ensureReady()) return;
   // 会话选择卡片（用户拍板 B）：不选会话直接输入发送 = 自动开一个新会话，再发这条消息
   if (!pending && sessionsIsEntryMode()) {
     const entryInput = ta.value;
@@ -13667,6 +13681,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       record.generation = Math.min(Number.MAX_SAFE_INTEGER, Math.max(Date.now(), previousGeneration + 1));
       record.generationId = globalThis.crypto?.randomUUID?.() || `${windowId}-${uid()}`.replace(/[^A-Za-z0-9_-]/g, '').slice(0, 80);
       record.text = ''; record.meta = ''; record.status = 'pending';
+      if (record.tag === 'model-setup') record.tag = 'answer';
       delete record.discovery;
       delete record.discoveries;
       record.retry = chatRetryPayload(pending);
@@ -13731,6 +13746,18 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   let meta = '';
   let docCtx = null;
   let citationMat = null;
+  const finishModelSetup = () => {
+    const record = pending.entry.root.__sessionRecord;
+    Object.assign(record, { tag: 'model-setup', page: null, basis: '', sources: [], docId: '', docPath: '', docTitle: '' });
+    pending.entry.root.dataset.page = '';
+    pending.entry.role?.querySelectorAll('.pg').forEach(node => node.remove());
+    pending.entry.role?.classList.add('hidden');
+    received = modelSetupReply(); target.done(received);
+    job.view.history = replaceReadingTurn(job.view.history, pending.reading, received, record, pending.historyInsertAt);
+    if (chatJobVisible(job)) state.history = job.view.history;
+    finishEntry(pending.entry, received, { status: 'complete', retryLabel: tr('重新生成'), onRetry: () => send(pending) });
+    scheduleChatJobSave(job);
+  };
   try {
     /**
      * 截图附件单独存：等上传完再发请求（本机 HTTP，几毫秒），把返回的 id 写进这条用户消息
@@ -13754,6 +13781,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // window cannot move this conversation while its answer is being generated.
     await saveChatJob(job);
     assertTaskActive();
+    if (!Settings.ready) { finishModelSetup(); return; }
     const outdatedReplyIntent = pending.reading?.intent !== 'acknowledgement' && !images.length
       && readingIntent(pending.question, pending.quoteText) === 'acknowledgement';
     const reading = pending.reading && !outdatedReplyIntent && (!images.length || pending.reading.screenshotCount === images.length)
@@ -14148,6 +14176,8 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       finishEntry(pending.entry, kept, {
         page: pending.firstPage, sources: citedSources(kept, sources), meta, status: 'stopped', basis: citationMat?.basis, onRetry: () => send(pending),
       });
+    } else if (!received && isModelSetupError(e)) {
+      finishModelSetup();
     } else {
       target.fail(errText(e));
       addFailureRetry(pending.entry, errText(e), () => send(pending));
@@ -15428,6 +15458,16 @@ function initSettings() {
       settingsStatus(e.message, 'err');
     } finally { settingsOperation = ''; updateModelControls(); }
   };
+}
+
+async function openModelKeySettings() {
+  if ($('#settingsModal').classList.contains('hidden')) await openSettings();
+  showSettingsPane('model');
+  setTimeout(() => {
+    if ($('#settingsModal').classList.contains('hidden') || $('#settingsPaneModel').classList.contains('hidden')) return;
+    $('#cfgApiKey').scrollIntoView({ block: 'center' });
+    $('#cfgApiKey').focus({ preventScroll: true });
+  }, 80);
 }
 
 function checkConfigWarning() {

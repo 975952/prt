@@ -66,13 +66,19 @@ try {
     await frames();
   };
   const close = async () => { await page.click('#closeSettings'); await page.waitForSelector('#settingsModal.hidden'); };
+  const stablePanes = async label => {
+    const before = await rect();
+    for (const pane of ['Language', 'Agent', 'Appearance', 'Behavior', 'Session', 'Memory', 'Library', 'Model']) {
+      await page.click(`#settingsNav${pane}`); await frames();
+      const after = await rect();
+      check(`${label}: ${pane} preserves frame position and size`,
+        ['x', 'y', 'width', 'height'].every(key => Math.abs(before[key] - after[key]) < 1), { before, after });
+    }
+  };
   await open();
   await centered('initial Settings is centered in the viewport');
   await page.screenshot({ path: path.join(scratch, 'settings-centered.png') });
-  for (const pane of ['Language', 'Agent', 'Appearance', 'Model']) {
-    await page.click(`#settingsNav${pane}`);
-    await centered(`${pane} settings stays centered as content height changes`);
-  }
+  await stablePanes('centered');
   await page.click('#settingsNavLanguage');
   const beforeDrag = await rect();
   const handle = await page.$eval('#settingsModal .modal-head', n => { const r = n.getBoundingClientRect(); return { x: r.left + 50, y: r.top + 12 }; });
@@ -80,6 +86,7 @@ try {
   await page.mouse.move(handle.x + 110, handle.y + 65, { steps: 8 }); await page.mouse.up();
   const dragged = await rect();
   check('Settings remains draggable during the current open', dragged.position === 'fixed' && dragged.x - beforeDrag.x > 90 && dragged.y - beforeDrag.y > 45, dragged);
+  await stablePanes('after dragging');
   await close(); await open();
   await centered('reopening Settings discards the previous drag offset');
   check('reopened Settings returns to normal layout', (await rect()).position !== 'fixed');
@@ -95,6 +102,7 @@ try {
   for (const [width, height] of [[900, 420], [480, 720], [360, 560]]) {
     await page.setViewport({ width, height });
     await open(); await centered(`Settings fits and centers at ${width} by ${height}`);
+    await stablePanes(`${width} by ${height}`);
     await page.screenshot({ path: path.join(scratch, `settings-${width}.png`) });
     await close();
   }

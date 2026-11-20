@@ -20,7 +20,8 @@ try {
   assert.deepEqual(readAgentProfile(), DEFAULT_AGENT_PROFILE);
   assert.equal(writes, 0, 'opening the app must not persist defaults');
   assert.equal(agentDisplayName(), 'Alina');
-  assert.match(buildAgentProfilePrompt(), /Alina/);
+  assert.equal(buildAgentProfilePrompt(), '', 'character mode is opt-in');
+  assert.match(buildAgentProfilePrompt({ ...DEFAULT_AGENT_PROFILE, enabled: true }), /Alina/);
   assert.equal(agentDisplayName({ name: '自定义名字' }), '自定义名字');
   const english = spawnSync(process.execPath, ['--input-type=module', '-e',
     `const { agentDisplayName } = await import(${JSON.stringify(new URL('../public/js/agent-profile.js', import.meta.url).href)}); console.log(agentDisplayName());`],
@@ -36,14 +37,14 @@ try {
   values.set(AGENT_PROFILE_KEY, JSON.stringify({ habits: '简短回答', unknown: 'discard me' }));
   assert.deepEqual(readAgentProfile(), { ...DEFAULT_AGENT_PROFILE, name: '旧名字', habits: '简短回答' });
   const saved = writeAgentProfile({ name: ' 新名字 ', personality: '认真', gender: '女' });
-  assert.deepEqual(saved, { name: '新名字', personality: '认真', gender: '女', habits: '简短回答' });
+  assert.deepEqual(saved, { ...DEFAULT_AGENT_PROFILE, name: '新名字', personality: '认真', gender: '女', habits: '简短回答' });
   assert.deepEqual(JSON.parse(values.get(AGENT_PROFILE_KEY)), saved);
   assert.equal(values.get('reader.agent.name'), '新名字');
   const normalized = writeAgentProfile({ name: '😀'.repeat(40), habits: '', gender: 123, unknown: 'ignored' });
   assert.equal([...normalized.name].length, 32, 'length limits preserve Unicode characters');
   assert.equal(normalized.habits, '', 'users may clear optional preferences');
   assert.equal(normalized.gender, '女', 'invalid partial fields preserve the saved value');
-  assert.deepEqual(Object.keys(normalized).sort(), ['gender', 'habits', 'name', 'personality']);
+  assert.deepEqual(Object.keys(normalized).sort(), Object.keys(DEFAULT_AGENT_PROFILE).sort());
   console.log('PASS: legacy names, malformed storage, partial edits, clearing and Unicode limits are handled');
 
   Object.defineProperty(globalThis, 'localStorage', { configurable: true, get() { throw new Error('storage denied'); } });
@@ -57,7 +58,7 @@ try {
   assert.notEqual(readAgentProfile().name, 'unsaved');
   console.log('PASS: unavailable or full storage never reports unsaved preferences as saved');
 
-  writeAgentProfile(DEFAULT_AGENT_PROFILE);
+  writeAgentProfile({ ...DEFAULT_AGENT_PROFILE, enabled: true });
   let request, reply = 'A direct answer.';
   globalThis.fetch = async (_url, options) => {
     request = JSON.parse(options.body);
@@ -104,6 +105,27 @@ try {
   assert.deepEqual(request.messages.slice(1), followup);
   assert.deepEqual(request.tools, tools);
   console.log('PASS: edits apply to the next request while tool calls, results and schemas remain intact');
+
+  await streamChat({ messages: [{ role: 'user', content: 'Design a new card.' }], useAgentProfile: false, stream: false });
+  assert.ok(!JSON.stringify(request.messages).includes(prefix), 'card design bypasses the active persona');
+  writeAgentProfile({ enabled: false });
+  await streamChat({ messages: [{ role: 'system', content: 'Normal chat' }, { role: 'user', content: 'Hi' }], stream: false });
+  assert.ok(!JSON.stringify(request.messages).includes(prefix), 'disabled mode adds no character prompt');
+  assert.equal(readAgentProfile().name, 'Mira', 'turning mode off preserves the card');
+  writeAgentProfile({ enabled: true });
+  assert.match(buildAgentProfilePrompt(), /Mira/);
+  console.log('PASS: disabling and re-enabling retains the card; design requests never inherit its personality');
+
+  const { parseAgentCard, cardGenerationMessages } = await import('../public/js/agent-card.js');
+  const card = { ...DEFAULT_AGENT_PROFILE, name: 'Card', description: 'Study partner', examples: 'Q: Hi\nA: Hello', enabled: true };
+  assert.equal(parseAgentCard(JSON.stringify(card), DEFAULT_AGENT_PROFILE).enabled, false, 'model cannot turn mode on');
+  assert.equal(parseAgentCard('```json\n' + JSON.stringify(card) + '\n```', DEFAULT_AGENT_PROFILE).description, 'Study partner');
+  for (const invalid of ['[]', 'null', '{}', '{"name":"Only a name"}', 'not json', JSON.stringify({ ...card, habits: [] })]) {
+    assert.throws(() => parseAgentCard(invalid, DEFAULT_AGENT_PROFILE));
+  }
+  const history = [{ role: 'assistant', content: 'What personality?' }, { role: 'user', content: 'Calm and direct.' }];
+  assert.deepEqual(cardGenerationMessages(history, card).slice(1, -1), history, 'full design conversation reaches generation');
+  console.log('PASS: generated cards are validated, preserve the toggle, and use the complete design conversation');
 } finally {
   globalThis.fetch = nativeFetch;
   if (nativeStorage) Object.defineProperty(globalThis, 'localStorage', nativeStorage);
