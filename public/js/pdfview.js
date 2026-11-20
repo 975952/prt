@@ -3114,6 +3114,7 @@ export class PdfViewer {
       textByPage: Object.fromEntries([...new Set(selected.map((run) => run.page))]
         .map((page) => [page, selectionTextOf(selected.filter((run) => run.page === page))])),
       page: pageNum,
+      readingStart: { page: pageNum, run: this._selectionRunsForPage(pageNum).findIndex(run => run.node === selected[0].node), offset: selected[0].start },
       endPage,
       rects: byPage.get(pageNum) || [],
       rectsByPage: Object.fromEntries(byPage),

@@ -1,4 +1,5 @@
 /** Typed translations stay in one floating card, stream independently and survive reload. */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,7 +68,7 @@ try {
     await page.waitForFunction(() => document.body.classList.contains('immersive-chrome-visible'));
     await page.click('#immersiveTranslate'); await page.waitForSelector('#translationCard:not(.hidden)');
   };
-  await page.click('#immersiveBtn'); await open();
+  await clickReaderTool(page, '#immersiveBtn'); await open();
   await page.waitForSelector('#translationCardInput', { visible: true });
   const bounds = () => page.$eval('#translationCard', node => {
     const r = node.getBoundingClientRect(); return { left: r.left, top: r.top, width: r.width, height: r.height };
@@ -138,7 +139,7 @@ try {
   const persisted = await fetch(`${base}/api/session?doc=${encodeURIComponent(docId)}&sid=__translate`).then(r => r.json());
   assert.match(JSON.stringify(persisted), /第一段译文已完成。/); assert.match(JSON.stringify(persisted), /第二段译文已完成。/);
   await page.reload({ waitUntil: 'domcontentloaded' }); await loaded();
-  await page.click('#immersiveBtn'); await open();
+  await clickReaderTool(page, '#immersiveBtn'); await open();
   if (await page.$eval('#translationCard', node => node.dataset.cardView !== 'history')) await page.click('#translationCardHistory');
   await page.waitForFunction(() => document.querySelector('#translationCardHistoryList').textContent.includes('第一段译文已完成。')
     && document.querySelector('#translationCardHistoryList').textContent.includes('第二段译文已完成。'));

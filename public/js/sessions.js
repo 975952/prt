@@ -667,6 +667,10 @@ function openSessionMove(row, trigger, { current = false } = {}) {
   void st.moveUi?.open(source, trigger);
 }
 
+export function sessionsMoveCurrent(trigger) {
+  openSessionMove(null, trigger, { current: true });
+}
+
 function buildQuick() {
   const quick = st.ui.quick;
   if (!quick) return;

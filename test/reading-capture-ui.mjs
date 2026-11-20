@@ -1,4 +1,5 @@
 /** Screenshot selection suspends both reading cards and restores usable drafts. */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -56,7 +57,7 @@ try {
   });
   const loaded = () => page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId);
   await page.goto(`${base}/?open=Capture.pdf&topbar=static`, { waitUntil: 'domcontentloaded' }); await loaded();
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => document.body.classList.contains('immersive-reading') && __viewer.immersive);
   const openTool = async selector => {
     await page.mouse.move(750, 2);
@@ -267,7 +268,7 @@ try {
   assert.equal(await page.evaluate(() => document.body.classList.contains('reading')), false);
   await page.click('#homeReadingEntry'); await loaded();
   await page.waitForFunction(() => document.body.classList.contains('reading'));
-  await page.click('#immersiveBtn'); await openTool('#immersiveTranslate');
+  await clickReaderTool(page, '#immersiveBtn'); await openTool('#immersiveTranslate');
   assert.equal(await page.$$eval('#translationCardAttachments img', images => images.length), 1, 'returning to the reader restores the remaining screenshot');
   console.log('PASS closing the card, selecting history and opening Library stop queued screenshots without stealing visibility or losing drafts');
   assert.deepEqual(errors, []);

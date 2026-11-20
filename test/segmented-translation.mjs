@@ -113,10 +113,12 @@ try {
   browser = await puppeteer.launch({ executablePath: CHROME, headless: 'shell', args: ['--no-sandbox', '--disable-gpu'],
     userDataDir: path.join(scratch, 'browser'), defaultViewport: { width: 1400, height: 940 } });
   page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.agent.welcome.v1', 'acknowledged'));
   await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   const errors = []; page.on('pageerror', (error) => errors.push(String(error)));
   await page.goto(`${base}/?open=segments-a.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
   const loaded = () => page.waitForFunction(() => window.__viewer?.pdf && window.__ctx?.addToTranslate
+    && !document.documentElement.hasAttribute('data-startup')
     && window.__state.viewerDocId === window.__state.doc?.docId, { timeout: 15000 });
   await loaded();
   await page.evaluate(async () => {
@@ -264,6 +266,8 @@ try {
   const firstResult = firstRows.find((row) => row.text === translation);
   assert.ok(firstResult); assert.equal(firstRows.filter((row) => row.text === translation).length, 1);
   assert.equal(firstResult.retry.text, combined, 'retry keeps the complete combined source');
+  assert.ok(firstResult.retry.segments[1].rectsByPage[1].length, 'the real PDF selection keeps a page-relative anchor after editing and reordering');
+  assert.ok(firstResult.retry.segments[1].readingStart.run >= 0, 'the selection stores its reading order within the PDF page');
   await page.evaluate((id) => {
     window.__copiedTranslation = null;
     Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { writeText: async (text) => { window.__copiedTranslation = text; } } });

@@ -71,10 +71,12 @@ try {
   const errors = []; page.on('pageerror', error => errors.push(String(error)));
   await page.evaluateOnNewDocument(() => {
     localStorage.setItem('reader.locale', 'zh-CN');
+    localStorage.setItem('reader.agent.welcome.v1', 'acknowledged');
     Element.prototype.requestFullscreen = () => Promise.resolve(); document.exitFullscreen = () => Promise.resolve();
   });
   await page.goto(`${base}/?open=Reading.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.pdf && __state.viewerDocId === __state.doc?.docId);
+  await page.click('#readerMore');
   await page.click('#immersiveBtn');
   await page.waitForFunction(() => __viewer.immersive && !__viewer._immersiveNavigation);
   await pause(400);

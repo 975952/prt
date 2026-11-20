@@ -167,7 +167,6 @@ body.agent-full {
     radial-gradient(ellipse at 92% 96%, rgba(77, 104, 120, .10), transparent 65%),
     linear-gradient(135deg, color-mix(in srgb, var(--bg) 82%, #10151c), color-mix(in srgb, var(--bg-sunken) 82%, #253646));
 }
-body.agent-full #tabBarMount,
 body.agent-full #main :is(#leftSide, #splitLeft, #railLeft, #railRight, .viewer-wrap, #splitRight, .viewer-foot),
 body.agent-full #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { display: none !important; }
 :root body.agent-full #main { height: calc(100vh - var(--topbar-h)); grid-template-rows: minmax(0, 1fr); }
@@ -496,11 +495,6 @@ body.agent-full.agent-landing #rightSide[data-sess-view="history"] > #sessHistor
   color-scheme: dark;
   background: var(--bg);
 }
-:root[data-theme="dark"] body:is(.agent-full, :not(.reading)) #topbar {
-  background: var(--bg);
-  border-bottom: 1px solid #25272c;
-  box-shadow: none;
-}
 :root[data-theme="dark"] body:is(.agent-full, :not(.reading)) #main {
   background: var(--bg);
 }
@@ -649,4 +643,77 @@ body.agent-nav-collapsed .agent-resize { display: none; }
   body.agent-full .agent-nav-foot { flex-basis: 38px; max-height: none; overflow: visible; }
   body.agent-full #agentNav .agent-resume-copy { display: none; }
   body.agent-full #agentLaunchActions :is(.agent-resume-kicker, .agent-resume-name, .agent-resume-meta, .agent-resume-arrow) { display: block; }
+}
+
+/* The full assistant shares its navigation and content surfaces with Library.
+   Keep the reader's docked assistant on its own compact layout. */
+:root[data-theme] body.agent-full #main > .main-row { padding: 0; }
+:root body.agent-full #main #rightCols { position: relative; isolation: isolate; gap: 0; }
+:root[data-theme] body.agent-full #agentNav,
+:root[data-theme] body.agent-full #rightCols > #rightSide {
+  border: 0;
+  border-radius: 0;
+  box-shadow: none;
+  backdrop-filter: none;
+}
+:root[data-theme] body.agent-full #agentNav {
+  background: var(--workspace-chrome, var(--bg));
+  border-inline-end: 1px solid var(--workspace-line, var(--border));
+}
+:root[data-theme] body.agent-full #rightCols > #rightSide {
+  background: var(--workspace-content, var(--bg));
+  color: var(--workspace-ink, var(--fg));
+}
+body.agent-full #agentNav .agent-nav-new { background: var(--workspace-raised, var(--bg-elev)); color: var(--workspace-ink, var(--fg)); }
+body.agent-full #agentNav .agent-nav-new[aria-current="page"],
+body.agent-full #agentNav .agent-nav-session[aria-current="page"] {
+  background: var(--workspace-selected, var(--accent-soft));
+  color: var(--workspace-ink, var(--fg));
+}
+.agent-recent-group { margin: 14px 11px 3px; font-size: 11px; font-weight: 550; color: var(--workspace-muted, var(--fg-dim)); }
+.agent-nav-recents:has(.agent-recent-group) > h2 { display: none; }
+body.agent-full #agentNav .agent-nav-session { display: flex; align-items: center; gap: 9px; font-size: 13px; }
+.agent-nav-session svg { flex-shrink: 0; color: var(--workspace-muted, var(--fg-dim)); }
+.agent-nav-session span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+:root[data-theme] body.agent-full .agent-launch,
+:root[data-theme] body.agent-full #composer .composer-row {
+  background: var(--workspace-raised, var(--bg-elev));
+  border-color: var(--workspace-line, var(--border)); border-radius: 13px; backdrop-filter: none;
+  box-shadow: 0 2px 7px color-mix(in srgb, var(--fg) 5%, transparent);
+}
+:root[data-theme] body.agent-full #composer .composer-row:focus-within {
+  background: var(--workspace-raised, var(--bg-elev));
+  border-color: var(--workspace-accent, var(--accent)) !important;
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--workspace-accent, var(--accent)) 17%, transparent);
+}
+.agent-resume-icon img { width: 32px; height: 44px; object-fit: cover; object-position: top; border-radius: 3px; }
+.agent-resume-icon:has(img[src]) > svg { display: none; }
+.agent-resume-icon img:not([src]), .agent-resume-detail:empty { display: none; }
+.agent-resume-detail { color: var(--workspace-muted, var(--fg-dim)); font-size: 11px; }
+body.agent-full .agent-landing-hero h1 { font-size: clamp(25px, 4vw, 42px); font-weight: 600; }
+body.agent-full .agent-landing-hero p { margin-top: 6px; color: var(--workspace-muted, var(--fg-dim)); }
+.agent-chat-heading, .agent-sources { display: none; }
+body.agent-full .agent-chat-heading:not([hidden]), body.agent-full .agent-sources:not([hidden]) { display: flex; }
+body:not(.agent-full) .agent-answer-sources { display: none; }
+.agent-chat-heading { align-items: center; justify-content: space-between; gap: 12px; flex: 0 0 auto; min-height: 45px; padding: 6px 19px; border-bottom: 1px solid var(--workspace-line, var(--border)); }
+.agent-chat-heading strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 15px; }
+.agent-chat-heading #agentChatMove { margin-inline-start: auto; }
+.agent-chat-heading #agentChatMove[hidden] { display: none; }
+.agent-chat-heading button, .agent-sources header button { display: inline-flex; flex: none; align-items: center; gap: 6px; min-height: 30px; padding: 3px 7px; border: 0; border-radius: 6px; background: transparent; color: var(--workspace-muted, var(--fg-dim)); font: inherit; cursor: pointer; }
+.agent-chat-heading button span[data-agent-icon], .agent-sources header button span { display: inline-flex; }
+.agent-chat-heading button:hover, .agent-sources header button:hover, .agent-source-page:hover { background: var(--workspace-selected, var(--accent-soft)); }
+.agent-sources { flex: 0 0 clamp(225px, 19vw, 296px); flex-direction: column; min-height: 0; min-width: 0; overflow: hidden; color: var(--workspace-ink, var(--fg)); background: var(--workspace-chrome, var(--bg)); border-inline-start: 1px solid var(--workspace-line, var(--border)); }
+.agent-sources header { flex: 0 0 auto; display: flex; align-items: center; justify-content: space-between; min-height: 45px; padding: 5px 11px 5px 15px; border-bottom: 1px solid var(--workspace-line, var(--border)); }
+.agent-sources h2, .agent-sources h3 { margin: 0; font-size: 13px; line-height: 1.45; font-weight: 600; }
+.agent-source-list { overflow: auto; overscroll-behavior: contain; padding: 12px; }
+.agent-source-paper { margin: 0 0 9px; padding: 12px 9px 8px; border: 1px solid var(--workspace-line, var(--border)); border-radius: 9px; background: var(--workspace-raised, var(--bg-elev)); }
+.agent-source-paper h3 { display: flex; align-items: flex-start; gap: 7px; padding: 0 3px 8px; overflow-wrap: anywhere; }
+.agent-source-paper h3 svg { flex: none; margin-top: 2px; color: var(--workspace-muted, var(--fg-dim)); }
+.agent-source-page { display: flex; gap: 8px; align-items: center; width: 100%; min-height: 31px; text-align: start; padding: 5px; border: 0; border-radius: 5px; color: inherit; background: transparent; font: inherit; font-size: 12px; cursor: pointer; }
+.agent-source-page strong { flex: none; color: var(--workspace-accent, var(--accent)); }
+.agent-source-page span { min-width: 0; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.agent-source-page svg { flex: none; margin-inline-start: auto; }
+.agent-sources-empty { margin: 6px 3px; color: var(--workspace-muted, var(--fg-dim)); font-size: 13px; line-height: 1.6; }
+@media (max-width: 1050px) {
+  .agent-sources { position: absolute; inset: 0 0 0 auto; z-index: 9; width: min(300px, 90%); box-shadow: -8px 0 20px color-mix(in srgb, var(--fg) 9%, transparent); }
 }

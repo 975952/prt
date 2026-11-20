@@ -1,3 +1,4 @@
+import { showReaderPanel } from './_reader-controls.mjs';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, resolveDataDir } from './_env.mjs';
 import fs from 'node:fs';
@@ -136,7 +137,7 @@ async function openRelPanel() {
     return { collapsed: sec.classList.contains('panel-collapsed'), onScreen: r.height > 0 && r.width > 0 };
   });
   if (!st.onScreen) {
-    await page.evaluate(() => document.querySelector('#railLeft .rail-btn[data-rail="rel"]')?.click());
+    await showReaderPanel(page, 'rel');
     await sleep(300);
   }
   const stillCollapsed = await page.evaluate(() => document.getElementById('relSec').classList.contains('panel-collapsed'));

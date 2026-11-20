@@ -73,6 +73,7 @@ try {
   browser = await puppeteer.launch({ executablePath: process.env.CHROME || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
     headless: true, args: ['--no-sandbox'], defaultViewport: { width: 1440, height: 960 } });
   page = await browser.newPage(); page.on('pageerror', e => errors.push(String(e)));
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.agent.welcome.v1', 'acknowledged'));
   page.on('dialog', async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
   await page.goto(`${base}/?open=concurrency-first.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
   const loaded = () => page.waitForFunction(() => window.__viewer?.pdf && window.__ctx?.doTranslate

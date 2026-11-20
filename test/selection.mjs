@@ -1,3 +1,4 @@
+import { clickReaderTool } from './_reader-controls.mjs';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, resolveDataDir } from './_env.mjs';
 import fs from 'node:fs';
@@ -243,8 +244,8 @@ await sleep(1200);
 await selectIn(1, 1, 4);
 await sleep(500);
 const alignBefore = await page.evaluate(() => window.__ctx.alignProbe());
-// 2026-10：缩放按钮搬到底栏，id 由 `#zoomIn` 改成 `#footZoomIn`。
-await page.click('#footZoomIn');
+// Open the percentage menu to zoom while the selection is on screen.
+await clickReaderTool(page, '#footZoomIn');
 await sleep(1600);
 const alignAfter = await page.evaluate(() => window.__ctx.alignProbe());
 check('缩放后方块仍然跟着选中的文字（没有跑位）',

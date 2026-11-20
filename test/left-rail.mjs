@@ -1,9 +1,9 @@
 import puppeteer from 'puppeteer-core';
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
 import fs from 'node:fs';
-import os from 'node:os';
 import path from 'node:path';
+import { SANDBOX, assertIsolatedDataDir } from './_env.mjs';
+import { showReaderPanel } from './_reader-controls.mjs';
 
 // 仓库根目录：不再写死本机路径 —— 换台电脑 clone 下来也能直接跑
 const ROOT = path.resolve(import.meta.dirname, '..');
@@ -32,16 +32,13 @@ function check(name, ok, actual = '') {
 const fmt = (v) => { try { return typeof v === 'string' ? v : JSON.stringify(v); } catch { return String(v); } };
 
 fs.mkdirSync(path.join(ROOT, 'test', 'artifacts', 'ug-left'), { recursive: true });
-const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'prt-left-'));
-const DATA = path.join(tmp, 'data');
+const tmp = fs.mkdtempSync(path.join(SANDBOX, 'left-rail-'));
+const DATA = assertIsolatedDataDir(path.join(tmp, 'data'));
 const PAPERS = path.join(tmp, 'papers');
 fs.mkdirSync(DATA, { recursive: true });
 fs.mkdirSync(PAPERS, { recursive: true });
 fs.copyFileSync(FIXTURE_PDF, path.join(PAPERS, 'left-sample.pdf'));
 
-const REAL_CONFIG = path.join(ROOT, 'data', 'config.json');
-const sha = (p) => { try { return createHash('sha256').update(fs.readFileSync(p)).digest('hex'); } catch { return '(读不到)'; } };
-const REAL_CONFIG_BEFORE = sha(REAL_CONFIG);
 const browserPath = BROWSERS.find((p) => { try { return fs.existsSync(p); } catch { return false; } });
 
 console.log('══════════════════════════════════════════════════════════');
@@ -133,13 +130,6 @@ const PROBE = () => {
         leftActive: (() => { try { return JSON.parse(localStorage.getItem('reader.ui') || '{}').leftActive || ''; } catch { return ''; } })(),
       };
     },
-    /** 点活动栏里的某个图标（走真实 click） */
-    clickRail(key) { document.querySelector(`#railLeft .rail-btn[data-rail="${key}"]`).click(); },
-    /** 点左栏底部的图标坞（左栏四块的另一个入口） */
-    clickDock(id) {
-      const name = { files: 'files', outline: 'outline', notes: 'notes', relations: 'rel' }[id] || id;
-      document.querySelector(`#railLeft .rail-btn[data-rail="${name}"]`).click();
-    },
     /** 直接设某块可见（模拟「划词翻译顺带打开」这类内部路径） */
     show(id) { window.__ctx.setPanelVisible(id, true); },
     hide(id) { window.__ctx.setPanelVisible(id, false); },
@@ -186,9 +176,10 @@ try {
     });
 
     async function boot({ clear = true } = {}) {
-      await page.goto(`${BASE}/?topbar=static`, { waitUntil: 'domcontentloaded' });
+      await page.goto(`${BASE}/?open=left-sample.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
       if (clear) { await page.evaluate(() => localStorage.clear()); await page.reload({ waitUntil: 'domcontentloaded' }); }
-      await page.waitForFunction(() => !!window.__state && !!window.__ctx && !!document.querySelector('#railLeft'), { timeout: 25000 });
+      await page.waitForFunction(() => !!window.__viewer?.pdf && document.body.classList.contains('reading') && !document.querySelector('#startupStatus'), { timeout: 25000 });
+      await showReaderPanel(page, 'files');
       await page.evaluate(PROBE);
       await sleep(450);
     }
@@ -216,7 +207,7 @@ try {
     check('R1a 六种「先开 A 再开 B」的组合都只剩 B 一块（模型与 DOM 都只有一个）',
       combosOk, comboActual.join(' | '));
 
-    await page.evaluate(() => window.__L.clickDock('outline'));
+    await showReaderPanel(page, 'outline');
     await sleep(250);
     const viaDock = await page.evaluate(() => window.__L.snapshot());
     check('R1b 走左栏图标坞打开目录，也只剩目录一块',
@@ -228,47 +219,43 @@ try {
     await page.evaluate(() => window.__L.hide('outline'));
     await sleep(200);
     const hidden = await page.evaluate(() => window.__L.snapshot());
-    check('R2a 四块都收起时不留空白侧栏，左侧收成活动栏且仍可点开',
-      hidden.shown.length === 0 && hidden.leftW === 0 && hidden.railVisible && hidden.railW >= 30 && hidden.railW <= 60,
+    check('R2a 四块都收起时不留空白侧栏，可从阅读工具栏重新展开',
+      hidden.shown.length === 0 && hidden.leftW === 0 && !hidden.railVisible && await page.$eval('#topbarLeftToggle', n => n.getBoundingClientRect().width > 0),
       `shown=${hidden.shown.length} leftW=${hidden.leftW} railVisible=${hidden.railVisible} railW=${hidden.railW} noLeft=${hidden.noLeft}`);
 
-    await page.evaluate(() => window.__L.clickRail('rel'));
+    await showReaderPanel(page, 'rel');
     await sleep(400);
     const relOpen = await page.evaluate(() => window.__L.snapshot());
     check('R2b 点活动栏「文献关系」→ 展开的就是文献关系',
       relOpen.shown.join() === 'relations' && relOpen.noLeft === false,
       `shown=[${relOpen.shown.join(',')}] noLeft=${relOpen.noLeft} leftW=${relOpen.leftW}`);
 
-    // 再点同一个 → 收成活动栏
-    await page.evaluate(() => window.__L.clickRail('rel'));
+    await page.locator('#railLeft [data-rail="rel"]').click();
     await sleep(450);
     const collapsed = await page.evaluate(() => window.__L.snapshot());
-    check('R3a 再点同一块是 no-op（新契约：不再收成活动栏）',
-      collapsed.leftW > 100 && collapsed.shown.includes('relations'),
+    check('R3a 再点选中的页签收起左栏',
+      collapsed.noLeft && !collapsed.railVisible && collapsed.leftW === 0,
       `noLeft=${collapsed.noLeft} leftW=${collapsed.leftW} shown=[${collapsed.shown.join(',')}]`);
     check('R3b 再点同一块也不会把它隐藏（visible 仍为 true）',
       collapsed.model.relations.visible === true && collapsed.shown.join() === 'relations',
       `relations.visible=${collapsed.model.relations.visible} shown=[${collapsed.shown.join(',')}]`);
 
-    // R6：从「收起」状态点图标能回来 —— 改用顶栏按钮收起，再点图标展开
-    await page.evaluate(() => document.getElementById('topbarLeftToggle').click());
+    await page.locator('#topbarLeftToggle').click();
+    await page.locator('#topbarLeftToggle').click();
     await sleep(500);
     const viaTopbar = await page.evaluate(() => window.__L.snapshot());
-    check('R6a 顶栏「收起左栏」能把左栏收成活动栏',
-      viaTopbar.noLeft === true && viaTopbar.railVisible === true,
+    check('R6a 阅读工具栏收起整个左栏',
+      viaTopbar.noLeft === true && viaTopbar.railVisible === false,
       `noLeft=${viaTopbar.noLeft} railVisible=${viaTopbar.railVisible}`);
-    await page.evaluate(() => window.__L.clickRail('rel'));
+    await page.locator('#topbarLeftToggle').click();
     await sleep(500);
     const backAgain = await page.evaluate(() => window.__L.snapshot());
-    check('R6b 收起后再点同一个图标 → 回来的还是文献关系（不是默认的文件块）',
+    check('R6b 从阅读工具栏展开后回到文献关系',
       backAgain.noLeft === false && backAgain.shown.join() === 'relations',
       `noLeft=${backAgain.noLeft} shown=[${backAgain.shown.join(',')}]`);
 
     /* ── R4/R5 选中态 ── */
     section('R4–R5 活动栏选中态：唯一、且跟着「此刻显示谁」走');
-    // 先收起来，看高亮是否停在 relations
-    await page.evaluate(() => window.__L.clickRail('rel'));
-    await sleep(450);
     const sel1 = await page.evaluate(() => window.__L.snapshot());
     check('R4a 活动栏里恰好一个选中项，且是文献关系',
       sel1.activeCount === 1 && sel1.activeRail === 'rel' && sel1.railBtns.find((b) => b.rail === 'rel').ariaCurrent === 'true',
@@ -278,7 +265,7 @@ try {
     check('R4b 选中项有可见的选中样式（背景与未选中不同）',
       relBtn.bg !== filesBtn.bg, `rel bg=${relBtn.bg} / files bg=${filesBtn.bg}`);
 
-    await page.evaluate(() => window.__L.clickRail('notes'));
+    await showReaderPanel(page, 'notes');
     await sleep(450);
     const sel2 = await page.evaluate(() => window.__L.snapshot());
     check('R5a 点「笔记」之后高亮切到笔记，且打开的就是笔记',
@@ -295,15 +282,16 @@ try {
 
     /* ── R7 持久化 ── */
     section('R7 刷新后仍记得上次选的是哪一块');
-    await page.evaluate(() => window.__L.clickRail('outline'));
+    await showReaderPanel(page, 'outline');
     await sleep(400);
-    await page.evaluate(() => window.__L.clickRail('outline'));   // 收成活动栏
+    await page.locator('#topbarLeftToggle').click();
     await sleep(400);
     const beforeReload = await page.evaluate(() => window.__L.snapshot());
     check('R7a 收起前已记录 leftActive=outline',
       beforeReload.leftActive === 'outline', `leftActive=${beforeReload.leftActive}`);
     await page.reload({ waitUntil: 'domcontentloaded' });
-    await page.waitForFunction(() => !!window.__state && !!document.querySelector('#railLeft'), { timeout: 25000 });
+    await page.waitForFunction(() => !!window.__viewer?.pdf && document.body.classList.contains('reading') && !document.querySelector('#startupStatus'), { timeout: 25000 });
+    if (await page.$eval('body', n => n.classList.contains('no-left'))) await page.locator('#topbarLeftToggle').click();
     await page.evaluate(PROBE);
     await sleep(600);
     const afterReload = await page.evaluate(() => window.__L.snapshot());
@@ -336,10 +324,8 @@ try {
   try { if (server && server.exitCode === null) server.kill(); } catch { /* ignore */ }
   await sleep(300);
   try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ }
-  const after = sha(REAL_CONFIG);
   const pass = results.filter((r) => r.ok).length;
   console.log('\n══════════════════════════════════════════════════════════');
-  console.log(`真实 data/config.json 改动  : ${REAL_CONFIG_BEFORE === after ? '无（只读，符合预期）' : '**变了**'}`);
   console.log(`结果                        : ${pass}/${results.length} 通过`);
   const failed = results.filter((r) => !r.ok);
   if (failed.length) { console.log('\n失败明细：'); for (const f of failed) console.log(`  [XX] ${f.section} · ${f.name} — ${f.actual}`); }

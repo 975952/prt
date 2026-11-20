@@ -1,4 +1,5 @@
 /** Immersive spread and floating tools regression using isolated synthetic PDFs. */
+import { clickReaderTool, showReaderPanel } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -67,7 +68,7 @@ try {
   await page.goto(base + '/?open=Immersive.pdf&topbar=static', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId)
     .catch(error => { console.error('Browser errors:', errors); throw error; });
-  if (await page.$eval('#railLeft [data-rail="files"]', node => !node.classList.contains('active'))) await page.click('#railLeft [data-rail="files"]');
+  await showReaderPanel(page, 'files');
   const sidebar = await page.evaluate(() => ({
     search: document.querySelector('#fileFilter').getBoundingClientRect().height,
     import: document.querySelector('#readerImport').getBoundingClientRect().height,
@@ -91,7 +92,7 @@ try {
     window.releaseModeSwitchHold = () => { const hold = window.modeSwitchHold; window.modeSwitchHold = null; hold?.release?.(); };
   });
   await page.evaluate(() => window.armModeSwitchHold(true));
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => window.modeSwitchHold?.waiting);
   await page.evaluate(() => document.getElementById('immersiveBtn').click());
   await page.evaluate(() => window.releaseModeSwitchHold());
@@ -99,7 +100,7 @@ try {
   await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   console.log('PASS an exit requested during entry is queued and finishes in normal reading mode');
   await page.evaluate(() => window.armModeSwitchHold(true));
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => window.modeSwitchHold?.waiting && !document.getElementById('immersiveTransitionCover').hidden);
   assert.deepEqual(await page.evaluate(() => {
     const cover = document.getElementById('immersiveTransitionCover'), rect = cover.getBoundingClientRect();
@@ -296,7 +297,7 @@ try {
   await page.click('#fullscreenBtn');
   await page.waitForFunction(() => document.body.classList.contains('window-fullscreen'));
   assert.equal(await page.evaluate(() => __viewer.immersive), false, 'ordinary fullscreen must not enable book mode');
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => document.body.classList.contains('immersive-chrome-visible'));
   await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   await page.click('#immersiveExit');
@@ -306,7 +307,7 @@ try {
   await page.evaluate(() => __ctx.saveSessionNow());
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId);
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => document.body.classList.contains('immersive-chrome-visible'));
   await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   await page.click('#immersiveTranslate');

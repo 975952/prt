@@ -7,6 +7,7 @@
  *
  *   node test/files-batch.mjs
  */
+import { showReaderPanel } from './_reader-controls.mjs';
 import { spawn } from 'node:child_process';
 import fs from 'node:fs';
 import http from 'node:http';
@@ -69,6 +70,7 @@ try {
     defaultViewport: { width: 1500, height: 950 },
   });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   const pageErrors = [];
   page.on('pageerror', (e) => pageErrors.push(String(e)));
   page.on('console', (m) => { if (/PRT_MOVE/.test(m.text())) console.log('[page]', m.text()); });
@@ -77,7 +79,7 @@ try {
   await page.goto(`${BASE}/?topbar=static`, { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__ctx && window.__state && window.__state.papers.length >= 3, { timeout: 40000 });
   // 首页默认收起左栏：展开文件面板，让行有真实高度
-  await page.evaluate(() => document.querySelector('#railLeft .rail-btn[data-rail="files"]')?.click());
+  await showReaderPanel(page, 'files');
   await wait(700);
 
   const rows = () => page.evaluate(() => [...document.querySelectorAll('#fileList li[data-path]:not(.folder)')].map((li) => {
@@ -96,7 +98,7 @@ try {
   const order1 = await order();
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__ctx && window.__state?.papers.length >= 3, { timeout: 40000 });
-  await page.evaluate(() => document.querySelector('#railLeft .rail-btn[data-rail="files"]')?.click());
+  await showReaderPanel(page, 'files');
   await wait(700);
   const order2 = await order();
   check('刷新后文件顺序不变（不再自动排序）', JSON.stringify(order1) === JSON.stringify(order2), `${order1.join(',')} vs ${order2.join(',')}`);
@@ -184,7 +186,7 @@ try {
   check('创建批量移动目标文件夹', dir.ok, `HTTP ${dir.status}`);
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__ctx && window.__state?.papers.length >= 2, { timeout: 40000 });
-  await page.evaluate(() => document.querySelector('#railLeft .rail-btn[data-rail="files"]')?.click());
+  await showReaderPanel(page, 'files');
   await wait(800);
   await clickMod(0, { ctrl: true });
   await clickMod(1, { ctrl: true });

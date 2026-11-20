@@ -2904,7 +2904,7 @@ async function handle(req, res) {
         if (names.includes(fileFor(key, ''))) await describe(fileFor(key, ''), '', folderPath);
         const prefix = `session-${key}-`;
         for (const name of names) {
-          if (!name.startsWith(prefix) || !name.endsWith('.json')) continue;
+          if (!name.startsWith(prefix) || !name.endsWith('.json') || name.endsWith('-__translate.json')) continue;
           await describe(name, name.slice(prefix.length, -'.json'.length), folderPath);
         }
       }

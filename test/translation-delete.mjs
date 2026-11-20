@@ -73,6 +73,7 @@ try {
   let windowSequence = 0;
   const open = async () => {
     const p = await browser.newPage(); page ||= p; p.on('pageerror', e => errors.push(String(e)));
+    await p.evaluateOnNewDocument(() => localStorage.setItem('reader.agent.welcome.v1', 'acknowledged'));
     p.on('console', msg => { if (msg.type() === 'error') console.error('BROWSER', msg.text()); });
     p.on('dialog', async dialog => { dialogs.push(dialog.message()); await dialog.dismiss(); });
     await p.goto(`${base}/?open=translation-demo.pdf&readerWindow=deletion-${++windowSequence}`, { waitUntil: 'domcontentloaded' });

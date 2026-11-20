@@ -1,3 +1,4 @@
+import { clickReaderTool } from './_reader-controls.mjs';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, resolveDataDir } from './_env.mjs';
 import fs from 'node:fs';
@@ -563,7 +564,7 @@ console.log('\n-- 七、滚动之后再拖选');
 
 console.log('\n-- 八、放大后重新验证');
 await gotoPage(2);
-for (let i = 0; i < 3; i++) { await page.click('#footZoomIn'); await sleep(900); }
+for (let i = 0; i < 3; i++) { await clickReaderTool(page, '#footZoomIn'); await sleep(900); }
 await sleep(1200);
 {
   const scan = await page.evaluate(() => {

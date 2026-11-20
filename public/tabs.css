@@ -143,8 +143,7 @@
 .tab-menu-item.active { color: var(--fg); font-weight: 600; }
 .tab-menu-empty { padding: 8px; color: var(--fg-faint); font-size: var(--ui-fs-sm); }
 
-/* 有标签时正文高度要给标签条让 32px（#main 原本是 calc(100vh - 顶栏)） */
-body.tabs-open #main { height: calc(100vh - var(--topbar-h) - 32px); }
+/* The document strip shares the native title bar with the workspace tabs. */
 
 /* 全屏仍保留标签导航，与普通窗口使用相同的正文高度。 */
 /* 窄窗：标签更短，关闭按钮常显，避免点不到 */

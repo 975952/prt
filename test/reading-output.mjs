@@ -64,6 +64,7 @@ try {
   browser = await puppeteer.launch({ executablePath: CHROME, headless: 'shell', args: ['--no-sandbox', '--disable-gpu'],
     userDataDir: path.join(scratch, 'browser'), defaultViewport: { width: 1400, height: 940 } });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.agent.welcome.v1', 'acknowledged'));
   // This fixture asserts Chinese action labels; isolate its locale as well as data.
   await page.evaluateOnNewDocument(() => localStorage.setItem('reader.locale', 'zh-CN'));
   const errors = [];
@@ -234,11 +235,11 @@ try {
   assert.ok(sourceEnd.visible, 'the final words can be brought fully into view');
   assert.ok(sourceEnd.overflow <= 1, 'expanded original does not widen the application');
   await (await page.$('#rightSide')).screenshot({ path: path.join(scratch, 'reading-translation.png') });
-  await page.click('.ai-block[data-block="translate"] .msg .translation-original > summary');
+  await page.click('#translationOnly');
   await page.waitForFunction(() => document.querySelector('#translationCardOriginalToggle').getAttribute('aria-pressed') === 'false');
   assert.equal(await page.$eval('#translationCardOriginalToggle', node => node.getAttribute('aria-pressed')), 'false');
   assert.equal(await page.evaluate(() => localStorage.getItem('reader.translationOriginalOpen.v1')), '0');
-  await page.click('.ai-block[data-block="translate"] .msg .translation-original > summary');
+  await page.click('#translationBoth');
   await page.waitForFunction(() => document.querySelector('#translationCardOriginalToggle').getAttribute('aria-pressed') === 'true');
   assert.equal(await page.$eval('#translationCardOriginalToggle', node => node.getAttribute('aria-pressed')), 'true');
   assert.equal(await page.evaluate(() => localStorage.getItem('reader.translationOriginalOpen.v1')), '1');

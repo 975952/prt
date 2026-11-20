@@ -4,7 +4,10 @@ import http from 'node:http';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, ROOT, SANDBOX } from './_env.mjs';
+import { stageExe, spawnReader, stopChild } from './_exe.mjs';
 
+const desktop = process.argv.includes('--desktop');
+fs.mkdirSync(SANDBOX, { recursive: true });
 const scratch = fs.mkdtempSync(path.join(SANDBOX, 'tr-order-'));
 const DATA = path.join(scratch, 'data');
 const PAPERS = path.join(scratch, 'papers');
@@ -29,15 +32,20 @@ let browser;
 let server;
 try {
   const port = await findPort();
-  server = spawn(process.execPath, [path.join(ROOT, 'server.js')], {
-    env: { ...process.env, PORT: String(port), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS, NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1' },
-    stdio: 'ignore',
-  });
+  const env = { PORT: String(port), PRT_DATA_DIR: DATA, PRT_PAPERS_DIR: PAPERS, NO_OPEN: '1', PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1' };
+  server = desktop ? spawnReader(stageExe('translation-alignment').exe, { args: ['--port', String(port)], env })
+    : spawn(process.execPath, [path.join(ROOT, 'server.js')], { env: { ...process.env, ...env }, stdio: 'ignore', windowsHide: true });
   const BASE = `http://127.0.0.1:${port}`;
   let ready = false;
   for (let i = 0; i < 80 && !ready; i++) { await wait(100); try { ready = (await fetch(`${BASE}/api/health`)).ok; } catch { /* wait */ } }
   check('隔离服务启动', ready);
   if (!ready) throw new Error('服务没起来');
+  if (desktop) {
+    for (const asset of ['js/translation-alignment.js', 'translation-alignment.css', 'js/app.js']) {
+      const embedded = Buffer.from(await (await fetch(BASE + '/' + asset)).arrayBuffer());
+      check('嵌入资源匹配当前源码 ' + asset, embedded.equals(fs.readFileSync(path.join(ROOT, 'public', asset))));
+    }
+  }
   await fetch(`${BASE}/api/config`, {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ baseURL: 'http://127.0.0.1:1/v1', model: 'tr', apiKey: 'tr-key' }),
@@ -49,6 +57,7 @@ try {
     defaultViewport: { width: 1500, height: 950 },
   });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.agent.welcome.v1', 'acknowledged'));
   const errors = [];
   page.on('pageerror', (e) => errors.push(String(e)));
   page.on('console', (m) => { if (m.type() === 'error') errors.push(m.text()); });
@@ -57,7 +66,7 @@ try {
   await page.waitForSelector('.page[data-page="1"] canvas', { timeout: 30000 });
   await wait(600);
 
-  /* 造三条译文（新增的排最后，模拟「按时间堆」的入队顺序），并打开译文块 */
+  /* Open the translation sidebar before checking its visible order. */
   await page.evaluate(() => {
     // 必须同时把右栏展开：只 setPanelVisible 的话块虽然"可见"，
     // 但整条右栏还在收起的 body 状态里，元素在屏幕外 → 所有 getBoundingClientRect 都是 0
@@ -71,86 +80,78 @@ try {
     blockW: Math.round(document.querySelector('.ai-block[data-block="translate"]')?.getBoundingClientRect().width || 0),
   }));
   check('（前置）译文块真的显示在屏幕上', !shown.noRight && shown.blockW > 200, JSON.stringify(shown));
+  await page.waitForFunction(() => window.__state.viewerDocId === window.__state.doc?.docId);
   await page.evaluate(() => {
-    ['第一条译文：自注意力。', '第二条译文：多头注意力。', '第三条译文：位置编码。'].forEach((t, i) => {
-      const e = window.__ctx.addEntry({ block: 'translate', tag: 'translation', page: i + 1, quote: `原文片段 ${i + 1}` });
-      // 真实链路：doTranslate → streamTarget(entry.body) → target.done(clean) → finishEntry
-      window.__ctx.streamTarget(e.body).done(t);
-      window.__ctx.finishEntry(e, t, { page: i + 1 });
-    });
+    function add(id, page, retry) {
+      const entry = window.__ctx.addEntry({ id, block: 'translate', tag: 'translation', page, quote: id, retry });
+      window.__ctx.streamTarget(entry.body).done(id);
+      window.__ctx.finishEntry(entry, id, { page });
+    }
+    add('legacy', 2, null);
+    add('paste', null, { kind: 'translate-text', text: 'paste' });
+    // The right column begins higher on the page but follows the left column.
+    for (const [id, run, x, y] of [['right', 15, .55, .18], ['left', 3, .09, .26]]) {
+      add(id, 1, { kind: 'translate', text: id, page: 1,
+        readingStart: { page: 1, run, offset: 0 }, rectsByPage: { 1: [{ x, y, w: .25, h: .018 }] } });
+    }
   });
-  await wait(500);
-  const added = await page.evaluate(() => {
-    const block = document.querySelector('.ai-block[data-block="translate"]');
-    return {
-      block: !!block, inDoc: !!block?.isConnected,
-      parent: block?.parentElement?.className || block?.parentElement?.id || '',
-      msgs: block?.querySelectorAll('.msg').length ?? -1,
-    };
+  const rows = '.ai-block[data-block="translate"] .ai-body > .msg';
+  const order = await page.$$eval(rows, nodes => nodes.map(node => node.__sessionRecord.id));
+  check('按页和栏内阅读顺序排列，旧条目按页定位，粘贴文本排在后面', order.join(',') === 'left,right,legacy,paste', order.join(','));
+  const numbers = await page.$$eval(rows + ' .translation-number', nodes => nodes.map(n => n.textContent).join(','));
+  check('编号连续', numbers === '1,2,3,4', numbers);
+  await page.waitForSelector('.page[data-page="1"] .translation-pin');
+  check('只在有真实选区的位置显示页边标记', await page.$$eval('.translation-pin', nodes => nodes.every(n => ['left', 'right'].includes(n.dataset.translationId)) && nodes.length === 2));
+  await page.click('#translationOnly');
+  await page.$eval(rows + ' .translation-original summary', n => n.click());
+  const open = await page.$$eval(rows + ' .translation-original', nodes => nodes.map(n => n.open).join(','));
+  check('仅译文模式下可单独打开一条原文', open === 'true,false,false,false', open);
+  await page.click('#translationBoth');
+  check('切回对照会展开全部原文', await page.$$eval(rows + ' .translation-original', nodes => nodes.every(n => n.open)));
+  const pin = '.page[data-page="1"] .translation-pin[data-translation-id="left"]';
+  await page.hover(pin);
+  await page.waitForSelector('.translation-source-mark');
+  check('悬停页边编号同步高亮译文与对应原文', await page.$eval(rows + '.translation-linked', n => n.__sessionRecord.id === 'left'));
+  const source = await page.$eval('.page[data-page="1"]', n => {
+    const box = n.getBoundingClientRect();
+    return { x: box.left + box.width * .59, y: box.top + box.height * .185 };
   });
-  check('（前置）三条译文真的进了译文块', added.msgs === 3, JSON.stringify(added));
-
-  const state1 = await page.evaluate(() => {
-    const block = document.querySelector('.ai-block[data-block="translate"]');
-    const body = block.querySelector('.ai-body');
-    const msgs = [...body.querySelectorAll('.msg')];
-    // 视觉顺序：按屏幕 y 坐标排（column-reverse 下 DOM 顺序与视觉顺序相反）
-    const visual = msgs.map((m) => ({ text: (m.querySelector('.text')?.textContent || '').trim(), y: Math.round(m.getBoundingClientRect().y) }))
-      .sort((a, b) => a.y - b.y);
-    return {
-      flex: getComputedStyle(body).flexDirection,
-      domOrder: msgs.map((m) => (m.querySelector('.text')?.textContent || '').trim().slice(0, 4)),
-      visualOrder: visual.map((v) => v.text.slice(0, 4)),
-      scrollTop: Math.round(body.scrollTop),
-      newestVisible: visual.length ? visual[0].text.includes('第三条') : false,
-      newestNearTop: visual.length ? Math.abs(visual[0].y - body.getBoundingClientRect().y) < 40 : false,
-    };
+  await page.mouse.move(source.x, source.y);
+  await page.waitForFunction(() => document.querySelector('.translation-linked')?.__sessionRecord.id === 'right');
+  check('直接悬停已翻译的原文也能找到右侧译文', true);
+  await page.evaluate(() => { window.__ctx.setPanelVisible('chat', true); window.__ctx.applyPanels(); });
+  await page.click(pin);
+  await page.waitForFunction(() => document.querySelector('#rightSide').dataset.activePanel === 'translate' && document.activeElement.closest('.msg')?.__sessionRecord?.id === 'left');
+  check('点击页边编号可从问答切回对应译文', true);
+  await page.evaluate(async () => {
+    const viewer = window.__viewer;
+    viewer.setScale(viewer.scale * 1.3);
+    await viewer.refreshPage(1);
   });
-  check('译文块用的是「新→旧」的 DOM 顺序（最新的节点排在最前）', state1.flex === 'column', state1.flex);
-  check('最新一条翻译在**最上面**（视觉顺序 新→旧）',
-    state1.visualOrder[0].startsWith('第三条') && state1.visualOrder.at(-1).startsWith('第一条'),
-    state1.visualOrder.join(' → '));
-  check('最新那条贴着结果区上沿（不用滚动就能看见）', state1.newestVisible && state1.newestNearTop, `y差=${state1.newestNearTop}`);
-  check('DOM 顺序与视觉顺序一致（都是 新→旧），存档按 seq 重放仍然对得上',
-    state1.domOrder[0].startsWith('第三条') && state1.domOrder.at(-1).startsWith('第一条'),
-    state1.domOrder.join(' → '));
-
-  /* 新增一条：应当直接出现在最上面 */
+  await page.waitForSelector(pin);
+  const ratio = await page.$eval(pin, n => {
+    const bounds = n.closest('.page').getBoundingClientRect();
+    return (n.getBoundingClientRect().top - bounds.top) / bounds.height;
+  });
+  check('缩放和重新渲染后编号仍锚定原行', Math.abs(ratio - .26) < .025, String(ratio));
+  await page.evaluate(async () => {
+    await window.__viewer.goToPage(2);
+    [...document.querySelectorAll('.msg')].find(n => n.__sessionRecord?.id === 'left').querySelector('.translation-position').click();
+  });
+  await page.waitForFunction(() => window.__viewer.current === 1 && !!document.querySelector('.page[data-page="1"] .translation-source-mark'));
+  check('点击译文编号返回原页并高亮原段', true);
   await page.evaluate(() => {
-    const e = window.__ctx.addEntry({ block: 'translate', tag: 'translation', page: 4, quote: '原文片段 4' });
-    const target = window.__ctx.streamTarget(e.body);
-    target.done('第四条译文：残差连接。');
-    window.__ctx.finishEntry(e, '第四条译文：残差连接。', { page: 4 });
+    [...document.querySelectorAll('.msg')].find(n => n.__sessionRecord?.id === 'right').querySelector('.translation-delete').click();
   });
-  await wait(400);
-  const state2 = await page.evaluate(() => {
-    const body = document.querySelector('.ai-block[data-block="translate"] .ai-body');
-    const visual = [...body.querySelectorAll('.msg')]
-      .map((m) => ({ t: (m.querySelector('.text')?.textContent || '').trim(), y: Math.round(m.getBoundingClientRect().y) }))
-      .sort((a, b) => a.y - b.y);
-    return { top: visual[0]?.t || '', topY: visual[0]?.y, bodyY: Math.round(body.getBoundingClientRect().y), scrollTop: Math.round(body.scrollTop) };
+  await page.waitForFunction(() => !document.querySelector('.translation-pin[data-translation-id="right"]'));
+  check('删除后页边编号和译文编号同步', await page.$$eval(rows + ' .translation-number', nodes => nodes.map(n => n.textContent).join(',') === '1,2,3'));
+  const scopedSessions = await page.evaluate(async () => {
+    await window.__ctx.saveSessionNow();
+    return (await fetch('/api/sessions?doc=' + encodeURIComponent(window.__state.doc.docId))).json();
   });
-  check('再翻一条新译文，它直接出现在最上面',
-    state2.top.startsWith('第四条') && Math.abs(state2.topY - state2.bodyY) < 40,
-    `${state2.top.slice(0, 8)} y=${state2.topY} body=${state2.bodyY}`);
+  check('单篇会话历史不会列出文档级译文存储', scopedSessions.sessions.every(row => row.sid !== '__translate'));
 
-  /* 「最新那一端」的判据：重开面板后 scrollTop 应该是 0（不是 scrollHeight） */
-  const reopened = await page.evaluate(async () => {
-    window.__ctx.setPanelVisible('translate', false);
-    await new Promise((r) => setTimeout(r, 150));
-    window.__ctx.setPanelVisible('translate', true);
-    await new Promise((r) => setTimeout(r, 200));
-    const body = document.querySelector('.ai-block[data-block="translate"] .ai-body');
-    const visual = [...body.querySelectorAll('.msg')]
-      .map((m) => ({ t: (m.querySelector('.text')?.textContent || '').trim(), y: Math.round(m.getBoundingClientRect().y) }))
-      .sort((a, b) => a.y - b.y);
-    return { scrollTop: Math.round(body.scrollTop), top: visual[0]?.t || '', scrollHeight: body.scrollHeight, clientHeight: body.clientHeight };
-  });
-  check('重开译文块后停在「最新」那一端（scrollTop = 0，不是滚到底）',
-    reopened.scrollTop === 0 && reopened.top.startsWith('第四条'),
-    `scrollTop=${reopened.scrollTop} top=${reopened.top.slice(0, 6)}`);
-
-  /* 溢出提示：留在底边（反转后"下面"= 更早的译文） */
+  /* Keep the overflow hint at the bottom of the source-ordered list. */
   const fade = await page.evaluate(() => {
     const block = document.querySelector('.ai-block[data-block="translate"]');
     const cs = getComputedStyle(block, '::after');
@@ -158,7 +159,7 @@ try {
     return { bottom: cs.bottom, top: cs.top, bg: cs.backgroundImage, panelBg };
   });
   const stops = (fade.bg.match(/rgba?\([^)]*\)/g) || []);
-  check('溢出渐隐仍在底边，且方向是「往下渐显成面板底」（提示下面还有更早的译文）',
+  check('溢出渐隐仍在底边，提示下方还有译文',
     fade.bottom === '0px'
       && stops.length >= 2
       && /rgba\(0, 0, 0, 0\)/.test(stops[0])
@@ -166,11 +167,21 @@ try {
     `${fade.bottom} ${stops.join(' → ')}`);
 
   /* 问答流不受影响：仍是时间顺序 */
-  const chat = await page.evaluate(() => {
+  const chat = await page.evaluate(async () => {
+    await (await import('/js/sessions.js')).sessionsOpenLatestForOutput();
     window.__ctx.setPanelVisible('chat', true);
-    return new Promise((r) => setTimeout(() => r(getComputedStyle(document.querySelector('.ai-block[data-block="chat"] .ai-body')).flexDirection), 200));
+    await new Promise(resolve => setTimeout(resolve, 200));
+    return getComputedStyle(window.__state.blockMeta.chat.body).flexDirection;
   });
   check('问答流没有跟着反转（仍是最新在下面）', chat === 'column', chat);
+
+  await page.evaluate(() => window.__ctx.saveSessionNow());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId);
+  await page.waitForSelector(pin);
+  const restored = await page.evaluate(() => [...window.__state.blockMeta.translate.body.querySelectorAll('.msg')]
+    .map(row => row.__sessionRecord.id).join(','));
+  check('冷启动恢复原文锚点、已删除状态与编号顺序', restored === 'left,legacy,paste', restored);
 
   check('整页无 JS 报错', errors.length === 0, errors.slice(0, 2).join(' | '));
 
@@ -180,5 +191,5 @@ try {
   if (failed.length) { failed.forEach((c) => console.log(`  · ${c.n}`)); process.exitCode = 1; } else { console.log('全部通过。'); }
 } finally {
   await browser?.close().catch(() => {});
-  server?.kill();
+  if (desktop) await stopChild(server); else server?.kill();
 }

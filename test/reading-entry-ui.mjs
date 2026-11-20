@@ -46,7 +46,8 @@ try {
   await page.click(filesRail);
   assert.ok(await page.evaluate(() => document.body.classList.contains('no-left')));
   assert.equal(await page.$('#railLeft .active'), null);
-  await page.click(filesRail);
+  await page.click('#topbarLeftToggle');
+  if (await page.$eval(filesRail, n => !n.classList.contains('active'))) await page.click(filesRail);
   assert.ok(await page.$eval(filesRail, n => n.classList.contains('active')));
   assert.equal(await page.$('.panel-hide'), null);
   await page.locator('#homeBtn').click();
@@ -54,13 +55,20 @@ try {
   await page.evaluate(() => {
     const theme = document.querySelector('#uiTheme'); theme.value = 'dark';
     theme.dispatchEvent(new Event('input', { bubbles: true }));
+    const brightness = document.querySelector('#uiGlassBrightness'); brightness.value = '70';
+    brightness.dispatchEvent(new Event('input', { bubbles: true }));
   });
-  assert.equal(await page.$eval('.home-content', n => getComputedStyle(n).backgroundColor), 'rgb(0, 0, 0)');
+  assert.ok(await page.$eval('.home-content', n => {
+    const probe = document.createElement('span');
+    probe.style.background = 'var(--workspace-content)'; n.append(probe);
+    const expected = getComputedStyle(probe).backgroundColor; probe.remove();
+    return getComputedStyle(n).backgroundColor === expected && expected !== getComputedStyle(document.querySelector('.home-sidebar')).backgroundColor;
+  }), 'dark library content follows the shared theme and has its own surface');
   await page.screenshot({ path: path.join(scratch, 'library-dark.png') });
   assert.equal(await page.$eval('#homeReadingEntry span', n => n.textContent), '回到阅读区');
   await page.goto(base + '/?topbar=static', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__ctx && window.__state?.papers.length === 1);
-  assert.equal(await page.$eval('#homeReadingEntry span', n => n.textContent), '打开上次阅读区');
+  assert.equal(await page.$eval('#homeReadingEntry span', n => n.textContent), '继续阅读');
   assert.equal(await page.$eval('#homeReadingEntry', n => n.disabled), false);
   await page.screenshot({ path: path.join(scratch, 'library-entry.png') });
   await page.locator('#homeAgent').click();
@@ -81,7 +89,7 @@ try {
   for (const selector of ['#agentReadingEntry', '#agentNavNew']) {
     assert.ok(await page.$eval(selector, n => n.getBoundingClientRect().height > 30 && getComputedStyle(n).visibility !== 'hidden'));
   }
-  assert.equal(await page.$eval('#agentReadingEntry .agent-launch-title', n => n.textContent), '打开上次阅读区');
+  assert.equal(await page.$eval('#agentReadingEntry .agent-launch-title', n => n.textContent), '继续阅读');
   assert.equal(await page.$eval('#agentReadingEntry .agent-resume-name', n => n.textContent), 'Reading');
   await page.evaluate(() => {
     window.__readingEntryNode = document.querySelector('#agentReadingEntry');
@@ -127,9 +135,10 @@ try {
   const answerSelector = '#aiArea .ai-block[data-block="chat"] .msg.assistant';
   await page.waitForSelector(answerSelector, { visible: true });
   const answer = await box(answerSelector), y = answer.y + Math.min(answer.height / 2, 60);
-  await page.mouse.move(answer.x + answer.width, y); await pause(50);
+  const rightGripX = answer.x + answer.width + 12;
+  await page.mouse.move(rightGripX, y); await pause(50);
   assert.ok(await page.$eval('.text-edge-hint', n => n.classList.contains('on')), 'Alina exposes the existing answer edge grip');
-  await page.mouse.down(); await page.mouse.move(answer.x + answer.width - 80, y, { steps: 12 }); await page.mouse.up(); await pause(80);
+  await page.mouse.down(); await page.mouse.move(rightGripX - 80, y, { steps: 12 }); await page.mouse.up(); await pause(80);
   assert.ok(Math.abs((await box(answerSelector)).width - answer.width + 160) < 4, 'output width tracks a symmetric edge drag');
   await page.screenshot({ path: path.join(scratch, 'alina-adjustable-conversation.png') });
   await page.evaluate(() => document.documentElement.style.setProperty('--agent-scale', '1.6')); await pause(280);
@@ -137,9 +146,10 @@ try {
   await drag('.agent-resize-x', -64, 0);
   assert.ok(Math.abs((await box('#agentNav')).width - beforeSidebar.width + 64) < 4, 'sidebar drag accounts for 160% zoom');
   const zoomAnswer = await box(answerSelector), zoomY = zoomAnswer.y + 55;
-  await page.mouse.move(zoomAnswer.x + zoomAnswer.width, zoomY); await pause(70);
+  const zoomGripX = zoomAnswer.x + zoomAnswer.width + 12 * 1.6;
+  await page.mouse.move(zoomGripX, zoomY); await pause(70);
   const edge = await box('.text-edge-hint');
-  assert.ok(Math.abs(edge.x + edge.width / 2 - zoomAnswer.x - zoomAnswer.width) < 4, 'output grip stays on the text edge at 160% zoom');
+  assert.ok(Math.abs(edge.x + edge.width / 2 - zoomGripX) < 4, 'output grip stays outside the text edge at 160% zoom');
   await page.evaluate(() => document.documentElement.style.setProperty('--agent-scale', '1')); await pause(280);
   const savedWidth = await page.evaluate(() => Number(localStorage.getItem('reader.agent.sidebarWidth')));
   await page.locator('#agentSidebarToggle').click(); await pause(260);
@@ -173,10 +183,8 @@ try {
   await page.waitForFunction(() => !document.body.classList.contains('reading'));
   assert.equal(await page.$eval('#homeReadingEntry span', n => n.textContent), '回到阅读区');
   assert.equal(await page.$eval('#homeReadingEntry .home-reading-title', n => n.textContent), 'Reading');
-  assert.ok(await page.evaluate(() => ['#homeOrganize', '#homeOpen'].every(selector => {
-    const button = document.querySelector(selector);
-    return getComputedStyle(button).backgroundColor !== 'rgba(0, 0, 0, 0)';
-  })), 'Library organize and open actions use filled buttons');
+  assert.ok(await page.evaluate(() => getComputedStyle(document.querySelector('#homeOpen')).backgroundColor !==
+    getComputedStyle(document.querySelector('#homeOrganize')).backgroundColor), 'Import is distinct from the secondary organize action');
   await page.locator('#homeReadingEntry').click();
   await page.waitForFunction(() => document.body.classList.contains('reading'));
   assert.deepEqual(await page.evaluate(() => ({ scale: window.__viewer.scale, docId: window.__state.doc.docId })), before);

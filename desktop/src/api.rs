@@ -2668,7 +2668,7 @@ pub fn sessions(rq: Request, _method: &Method, raw_query: &str) {
             }
             let prefix = format!("session-{}-", key);
             for name in &names {
-                if !name.starts_with(&prefix) || !name.ends_with(".json") || seen.iter().any(|s| s == name) {
+                if !name.starts_with(&prefix) || !name.ends_with(".json") || name.ends_with("-__translate.json") || seen.iter().any(|s| s == name) {
                     continue;
                 }
                 seen.push(name.clone());

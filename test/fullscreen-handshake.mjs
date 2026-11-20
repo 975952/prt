@@ -1,6 +1,7 @@
 /** Native IPC acknowledgement ordering with isolated PDFs. No real window mutation.
  * node test/fullscreen-handshake.mjs [--desktop]
  */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -69,7 +70,7 @@ try {
     await pause(60);
     assert.equal(await page.evaluate(() => window.__modeCalls.length), count - 1, 'an unrelated window-state report cannot release the mode switch');
   };
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await pending(true, 1);
   await page.setViewport({ width: 1600, height: 1000 });
   await ack(true);
@@ -101,7 +102,7 @@ try {
   await page.waitForFunction(() => window.__nativeRequests.length === 3);
   await page.setViewport({ width: 1600, height: 1000 }); await ack(true);
   await page.waitForFunction(() => document.body.classList.contains('window-fullscreen'));
-  await page.click('#immersiveBtn'); await settled();
+  await clickReaderTool(page, '#immersiveBtn'); await settled();
   await page.waitForFunction(() => __viewer.immersive);
   await page.evaluate(() => document.getElementById('immersiveExit').click()); await settled();
   await page.waitForFunction(() => !__viewer.immersive);

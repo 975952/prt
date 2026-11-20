@@ -1,4 +1,5 @@
 /** Native Tao/WebView2 fullscreen bounds regression, with isolated data. */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -66,7 +67,8 @@ try {
   const frames = await page.evaluate(() => __nativeBounds);
   assert.ok(frames.every(r => r.width >= maximized.width - 20 && r.height >= maximized.height - 20), JSON.stringify(frames));
   console.log('PASS maximized fullscreen never passes through the smaller restored window');
-  await page.evaluate(() => { __nativeBounds.length = 0; document.getElementById('immersiveBtn').click(); });
+  await page.evaluate(() => { __nativeBounds.length = 0; });
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => __viewer.immersive && document.getElementById('immersiveTransitionCover').hidden, { timeout: 15000 });
   const bookSize = await fillsScreen('Book view covers the whole monitor');
   assert.ok(Math.abs(bookSize.viewerBottom - bookSize.height) <= 1, 'Book viewport reaches the screen bottom');

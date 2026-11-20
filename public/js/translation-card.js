@@ -1,5 +1,6 @@
 import { el, escapeHtml } from './util.js';
 import { iconEl } from './icons.js';
+import { translationGeometry } from './translation-alignment.js';
 import { t as tr } from './i18n.js';
 
 const ORIGINAL_OPEN_KEY = 'reader.translationOriginalOpen.v1';
@@ -134,6 +135,7 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
       endPage: Number(item.endPage || item.page) || null,
       pages: (Array.isArray(item.pages) ? item.pages : [item.page]).map(Number).filter(page => Number.isInteger(page) && page > 0),
       docId: String(item.docId || key),
+      ...translationGeometry(item),
     }));
     if (!additions.length) return false;
     const nextPassages = [...(draft.passages || []), ...additions];
@@ -321,9 +323,9 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     stop.hidden = !pending || !onStop; stop.disabled = busy;
     retry.hidden = pending;
     previous.disabled = index <= 0; next.disabled = index < 0 || index >= list.length - 1;
-    locate.disabled = !record?.page || !onLocate;
-    locate.hidden = !record?.page || !onLocate;
-    locate.title = record?.page ? tr('第{0}页', record.page) : tr('定位原文');
+    const sourcePage = record?.page || record?.retry?.segments?.find(part => part?.page)?.page;
+    locate.hidden = locate.disabled = !sourcePage || !onLocate;
+    locate.title = sourcePage ? tr('第{0}页', sourcePage) : tr('定位原文');
     originalToggle.disabled = !quote.textContent;
     originalToggle.setAttribute('aria-pressed', String(originalOpen));
     renderPassages(); renderAttachments();

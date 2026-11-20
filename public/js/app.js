@@ -2,6 +2,7 @@ import { t as tr, locale, localizeStaticDocument, localizedError, LOCALE_KEY, RE
 import { windowStorage as localStorage, storageKey, windowId, startWindows, finishWindowBoot, windowReady, openReaderWindow, canWrite, allowEdit, isWindowClosed, releaseDocument, notifySessionSaved } from './windows.js';
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
+import { initReaderToolbar, placeToolMenu } from './reader-toolbar.js';
 import { createImportQueue } from './import-queue.js';
 import { createImportPanel } from './import-panel.js';
 import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
@@ -18,6 +19,7 @@ import { showAgentWelcome } from './agent-settings.js';
 import { modelSetupReply, isModelSetupError } from './model-onboarding.js';
 import { createTranslationBatch, runTranslationBatch, stopTranslationBatch } from './translation-queue.js';
 import { createTranslationCard, getTranslationOriginalOpen, setTranslationOriginalOpen, TRANSLATION_ORIGINAL_OPEN_EVENT } from './translation-card.js';
+import { createTranslationAlignment, translationGeometry } from './translation-alignment.js';
 import { createImmersiveReading } from './immersive-reading.js';
 import { PdfViewer, clampZoomSpeed, ZOOM_SPEED_MIN, ZOOM_SPEED_MAX, readPdfPages, renderPdfPageImage, readPdfTitle, paperAccess } from './pdfview.js';
 import { disposePdfDocument } from './pdf-lifecycle.js';
@@ -58,7 +60,7 @@ import {
   sessionsOpenLatestForOutput,
   sessionsApplyMeta, sessionsGetEnterMode, sessionsSetEnterMode,
   sessionsGetHistoryMode, sessionsSetHistoryMode, sessionsGetList,
-  sessionsOpenWorkspace, sessionsCloseOverlays, sessionsConfirm,
+  sessionsOpenWorkspace, sessionsCloseOverlays, sessionsConfirm, sessionsMoveCurrent,
 } from './sessions.js';
 
 /** 两个布尔开关存在 localStorage 里，重启/换论文都保留 */
@@ -87,7 +89,6 @@ const AI_BLOCKS = [
   { id: 'translate', title: tr("译文"), hint: tr("翻译选文、粘贴的文字或截图") },
   { id: 'chat', title: tr("问答"), hint: tr("围绕论文提问，或选中一段文字深入讨论") },
 ];
-const translationOriginalSyncs = new WeakMap();
 
 
 /** 只许待在右栏的面板（= PANEL_DEFS 里 dock:'right' 的那两个） */
@@ -127,10 +128,9 @@ function applyBodyScroll(id) {
   const box = state.blockMeta[id]?.body;
   if (box && box.clientHeight > 0 && box.__prtScrollTop > 0) box.scrollTop = box.__prtScrollTop;
 }
-/** 右栏重新打开时从最新结果开始看；用户随后可以手动滑动查看旧结果。
- *  译文块是 column-reverse（最新在最上面），所以「最新」那一端是 scrollTop = 0 ——
- *  统一交给 scrollToNewest() 判断，别在这里写死 scrollHeight。 */
+/** Reopen chat at the latest message. The translation list keeps its paper position. */
 function scrollBodyToBottom(id) {
+  if (id === 'translate') return;
   const box = state.blockMeta[id]?.body;
   if (!box || box.clientHeight <= 0) return;
   scrollToNewest(box);
@@ -721,6 +721,7 @@ let composerRevision = 0;
 const translationBatches = new Map();
 let activeTranslationBatch = null;
 let agentWorkspace = null;
+let agentReadingCoverRequest = null;
 let agentSessionOverride = null;
 let agentFolderOverride = null;
 let agentPaperOverride = '';
@@ -1255,7 +1256,9 @@ function unparkDocView(docId) {
     meta.body.replaceChildren(...saved.nodes);
     const originalOpen = getTranslationOriginalOpen();
     for (const details of meta.body.querySelectorAll('.translation-original')) {
-      if (details.open !== originalOpen) { translationOriginalSyncs.set(details, originalOpen); details.open = originalOpen; }
+      if (details.dataset.defaultOpen !== String(originalOpen)) {
+        details.open = originalOpen; details.dataset.defaultOpen = String(originalOpen);
+      }
     }
     try { meta.body.scrollTop = saved.scrollTop || 0; } catch { /* ignore */ }
   }
@@ -1296,7 +1299,7 @@ function syncHomeBtnVisibility() {
   const home = $('#homeBtn');
   if (!home) return;
   home.classList.remove('hidden');
-  const label = 'Library';
+  const label = tr('书架');
   home.querySelector('span').textContent = label;
   home.title = label;
   home.setAttribute('aria-label', home.title);
@@ -1306,7 +1309,7 @@ function syncHomeBtnVisibility() {
 
 function tabsSyncBar() {
   windowReady();
-  if (tabsStore.bar) tabsStore.bar.render(tabsStore.tabs, document.body.classList.contains('reading') ? tabsStore.active : '');
+  if (tabsStore.bar) tabsStore.bar.render(tabsStore.tabs, document.body.classList.contains('reading') && agentWorkspaceView !== 'full' ? tabsStore.active : '');
   syncHomeBtnVisibility();
 }
 
@@ -1402,16 +1405,15 @@ function applyResponsiveLayout() {
   const innerW = window.innerWidth;
   const baseLeftW = sideBaseW.left;
   const baseRightW = sideBaseW.right;
-  const railW = cssPx('--rail-w', RAIL_W);
   const viewerMin = cssPx('--viewer-min', VIEWER_MIN);
   // 侧栏先「让宽」再「整条消失」（见下方 sideWanted 的注释）
   const SIDE_MIN = 220;
-  const SIDE_SQUEEZE_W = 160;
+
   const VIEWER_HARD_MIN = viewerMin;
 
   // 两侧栏占掉的横向空间（右栏恒为一栏，不再有第 2 栏那份账）
   const chromeOf = (noLeft, noRight, lw = baseLeftW, rw = baseRightW) =>
-    (noLeft ? railW : lw + SPLIT_W) + (noRight ? railW : rw + SPLIT_W);
+    (noLeft ? 0 : lw + SPLIT_W) + (noRight ? 0 : rw + SPLIT_W);
 
   let leftApplied = baseLeftW;
   let rightApplied = baseRightW;
@@ -1458,6 +1460,10 @@ function applyResponsiveLayout() {
     } else if (!noLeft && !sideIntent.pinned.left && !fits(noLeft, noRight)) noLeft = true;
   }
 
+  // At phone widths the docked conversation overlays the PDF. It consumes no
+  // horizontal space, so the two-column fit calculation must not dismiss it.
+  if (agentWorkspaceView === 'docked' && innerW <= 700) noRight = sideIntent.noRight;
+
   // 先把「让宽」的结果写到 CSS 变量上，再决定收不收 —— 顺序不能反：
   // fits() 是按实际宽度算的（cssPx 读的就是这两个变量），先写后判，判断才和屏幕上一致。
   const leftFinal = noLeft ? baseLeftW : leftApplied;
@@ -1468,27 +1474,6 @@ function applyResponsiveLayout() {
   if (Math.round(leftFinal) !== Math.round(cssPx('--left-w', baseLeftW))) setVar('--left-w', leftFinal);
   if (Math.round(rightFinal) !== Math.round(cssPx('--right-w', baseRightW))) setVar('--right-w', rightFinal);
 
-  let squeezed = false;
-  if (!noLeft && document.body.classList.contains('no-left') && leftFinal < 60) { setVar('--left-w', 60); squeezed = true; }
-  {
-    const hasRightContent = PANEL_IDS_RIGHT.some((id) => state.panels[id]?.visible);
-    const autoCollapsed = noRight && !sideIntent.noRight;
-    if (hasRightContent && !sideIntent.noRight && (autoCollapsed || rightFinal < SIDE_SQUEEZE_W)) {
-      setVar('--right-w', SIDE_SQUEEZE_W);
-      squeezed = true;
-      noRight = false;                       // 只压窄，不隐藏
-      state.autoCollapse = { ...(state.autoCollapse || {}), right: true };
-    }
-  }
-  const hasLeftContent = visiblePanelsOfDock('left').length > 0;
-  const autoCollapsedLeft = noLeft && !sideIntent.noLeft;
-  if (hasLeftContent && !sideIntent.noLeft && (autoCollapsedLeft || leftFinal < SIDE_SQUEEZE_W)) {
-    setVar('--left-w', SIDE_SQUEEZE_W);
-    squeezed = true;
-    noLeft = false;
-  }
-  // 正文允许横向滚动，而不是把侧栏藏起来
-  document.body.classList.toggle('side-squeezed', squeezed);
   // right-empty 只看「有没有内容」，不看栏宽 —— 否则窄窗下活动栏会一直显示、栏永远回不来
   document.body.classList.toggle('right-empty', visiblePanelsOfDock('right').length === 0);
 
@@ -1517,6 +1502,7 @@ function setSideCollapsed(side, collapsed, pin = false) {
   if (side === 'left') sideIntent.noLeft = !!collapsed;
   else sideIntent.noRight = !!collapsed;
   sideIntent.pinned[side] = !collapsed && !!pin;
+  if (!collapsed && pin) sideIntent.pinned[side === 'left' ? 'right' : 'left'] = false;
   const changed = applyResponsiveLayout();
   saveUi();
   // 收起 / 展开是 display 切换，宽度瞬间到位：立刻重排就不会出现「正文停在旧尺寸」
@@ -1623,10 +1609,7 @@ function initLayout() {
   sideIntent.noLeft = !!saved.noLeft;
   sideIntent.noRight = !!saved.noRight;
   const dockedRightVisible = PANEL_IDS_RIGHT.some((id) => state.panels[id]?.visible && state.panels[id].dock === 'right');
-  if (dockedRightVisible) {
-    sideIntent.noRight = false;
-    sideIntent.pinned.right = true;
-  }
+  if (dockedRightVisible && saved.noRight === undefined) sideIntent.noRight = false;
   applyResponsiveLayout();
 
   bindSideToggleButton('left', $('#topbarLeftToggle'));
@@ -1816,7 +1799,7 @@ function initWindowChrome() {
      按钮/输入框/链接自己在上面，其余整条可拖）。 */
   const bar = $('#topbar');
   const isChromeBlank = (t) => !(t instanceof Element)
-    || !t.closest('button, input, select, textarea, a, label, [contenteditable], [data-no-drag]');
+    || !t.closest('button, input, select, textarea, a, label, [role=tab], [contenteditable], [data-no-drag]');
   if (bar) {
     bar.addEventListener('mousedown', (e) => {
       if (e.button !== 0 || !isChromeBlank(e.target)) return;
@@ -1851,6 +1834,15 @@ function initTopbar() {
   if (!$('#topbar')) return;
   document.body.classList.remove('topbar-auto', 'topbar-near');
   document.body.classList.add('topbar-static');
+  initReaderToolbar();
+  $('#themeToggle').onclick = () => {
+    const theme = uiStyle.theme === 'dark' ? (uiStyle.lastLightTheme === 'light' ? 'light' : 'glass') : 'dark';
+    uiStyle = { ...uiStyle, theme };
+    applyUiStyle();
+    saveUi();
+    fillUiSettings();
+    viewer?.refreshPaper?.();
+  };
   const home = $('#homeBtn');
   if (home) home.onclick = () => {
     const intendedView = pendingMainView?.view || activeMainView;
@@ -2134,6 +2126,8 @@ function applyUiStyle() {
   }
   if (!['light', 'dark', 'glass'].includes(style.theme)) style.theme = 'glass';
   root.dataset.theme = style.theme;
+  if (style.theme !== 'dark') style.lastLightTheme = style.theme;
+  $('#themeToggle')?.setAttribute('aria-pressed', String(style.theme === 'dark'));
   document.body.dataset.density = ['compact', 'standard', 'comfortable'].includes(style.density) ? style.density : 'standard';
   root.style.setProperty('--ai-fs', `${clamp(Number(style.fontSize) || DEFAULT_UI_STYLE.fontSize, READ_FS_MIN, READ_FS_MAX)}px`);
   root.style.setProperty('--ai-lh', `${clamp(Number(style.lineHeight) || 1.72, 1.45, 2.05)}`);
@@ -2166,6 +2160,7 @@ function applyUiStyle() {
   $('#glassCardAppearanceControls')?.classList.toggle('hidden', style.theme !== 'glass');
   $('#glassCardRefractionField')?.classList.toggle('hidden', style.glassCardMode !== 'liquid');
   const backgroundLevel = glassValue('glassBrightness') / 100;
+  root.style.setProperty('--workspace-night-level', `${glassValue('glassBrightness')}%`);
   const lightLevel = .92 + backgroundLevel * .08;
   const glassColor = rgb => `rgb(${rgb.map(v => Math.round(v * lightLevel)).join(' ')})`;
   // 20 preserves the accepted subtly warm palette; zero is neutral white.
@@ -2669,7 +2664,7 @@ async function performReturnToReader() {
 function refreshReadingEntries() {
   const loaded = !!(viewer?.pdf && state.viewerDocId === state.doc?.docId);
   const paper = loaded ? state.doc : recentDocs()[0];
-  const label = loaded || homeReadingState ? tr('回到阅读区') : tr('打开上次阅读区');
+  const label = loaded || homeReadingState ? tr('回到阅读区') : tr('继续阅读');
   const paperName = paper ? paperTitles.label(paper) || paper.label || paper.name : tr('还没有阅读记录');
   const savedPosition = homeReadingState?.path === paper?.path ? homeReadingState : null;
   const page = loaded ? viewer.current : savedPosition?.page || paper?.page || 0;
@@ -2687,6 +2682,31 @@ function refreshReadingEntries() {
     button.setAttribute('aria-label', button.title);
     button.onclick = () => void returnToReader();
   }
+  updateAgentReadingCover(agentWorkspaceView === 'full' ? paper : null);
+}
+
+function updateAgentReadingCover(paper) {
+  const host = document.querySelector('#agentReadingEntry .agent-resume-icon');
+  if (!host) return;
+  const book = paper && (state.papers.find(p => p.url === paper.url) || paper);
+  const key = book?.url ? JSON.stringify([book.url, book.mtime, book.size]) : '';
+  if ((host.dataset.cover || '') === key) return;
+  host.dataset.cover = key;
+  agentReadingCoverRequest?.abort();
+  agentReadingCoverRequest = null;
+  host.querySelector('img')?.remove();
+  if (!key) return;
+  const cached = homeThumbnailCache.get(`${book.docId || book.path || book.name}:${book.mtime || ''}:${book.size || ''}`);
+  const show = dataUrl => {
+    if (host.dataset.cover === key) host.append(el('img', { src: dataUrl, alt: '', decoding: 'async' }));
+  };
+  if (cached?.dataUrl) { show(cached.dataUrl); return; }
+  const request = new AbortController();
+  agentReadingCoverRequest = request;
+  renderPdfPageImage(book.url, 1, { signal: request.signal, maxDim: 120, quality: .7 })
+    .then(({ dataUrl }) => { if (!request.signal.aborted) show(dataUrl); })
+    .catch(() => { /* The title and actual last page remain available. */ })
+    .finally(() => { if (agentReadingCoverRequest === request) agentReadingCoverRequest = null; });
 }
 
 function setAgentWorkspaceView(view) {
@@ -2699,7 +2719,7 @@ function setAgentWorkspaceView(view) {
   if (view !== 'full') setAgentLanding(false);
   agentWorkspace?.setView(view);
   refreshReadingEntries();
-  syncHomeBtnVisibility();
+  tabsSyncBar();
   if ($('#chatInput') && rightPanelInCol(1) !== 'translate') {
     $('#chatInput').placeholder = view === 'full' ? tr('描述想找的论文，或直接聊聊…') : tr('问点什么…');
   }
@@ -2719,7 +2739,8 @@ function setAgentLanding(on) {
   agentLandingActive = !!on;
   if (agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global') agentGlobalLanding = !!on;
   const recent = on ? latestAgentConversation() : null;
-  agentWorkspace?.setLanding(!!on, { hasRecent: !!recent, recentTitle: recent?.title || '' });
+  agentWorkspace?.setLanding(!!on, { hasRecent: !!recent, recentTitle: recent?.title || '',
+    recentDetail: recent ? tr('{0} 条消息 · {1}', recent.count, relTime(recent.updatedAt)) : '' });
 }
 function dismissAgentHandoff() {
   agentHandoff = null;
@@ -2777,6 +2798,7 @@ function initAgentWorkspace() {
       $('#chatInput').focus({ preventScroll: true });
     },
     onHistory: () => { $('#sessHist').click(); },
+    onMoveCurrent: sessionsMoveCurrent,
     onSessionSelect: async row => {
       if (!row || typeof row.sid !== 'string') return;
       if (agentSessionOverride !== 'global') await changeAgentScope('global');
@@ -2796,6 +2818,13 @@ function initAgentWorkspace() {
     onRestore: () => chooseAgentLocalConversation(false),
     onNew: () => chooseAgentLocalConversation(true),
     getPapers: () => state.papers.map(paper => ({ ...paper, label: paperTitles.label(paper) })),
+    describeSourcePaper: (record, name) => {
+      const matches = name ? matchingCitationPapers(name) : [];
+      const paper = name ? (matches.length === 1 ? matches[0] : null)
+        : record?.docId ? paperForSessionSource(record) : state.doc;
+      const key = paper?.path || name || record?.docPath || record?.docId;
+      return key ? { key, label: paper ? paperTitles.label(paper) : name || record.docTitle || key } : null;
+    },
     onProfileChange: value => {
       const saved = writeAgentProfile(value);
       agentName = agentDisplayName(saved);
@@ -2997,7 +3026,7 @@ function setView(view) {
     return;
   }
   // 首页由样式临时隐藏阅读侧栏，不把首页布局保存成用户的阅读偏好。
-  $('#docName').textContent = 'Library';
+  $('#docName').textContent = tr('书架');
   $('#docName').title = '';
   document.title = 'prt';
   state.homeReady = true;
@@ -3078,6 +3107,18 @@ let homeThumbnailActive = 0;
 const homeThumbnailControllers = new Set();
 const homeThumbnailCache = new Map();
 
+function showHomeThumbnail(target, thumbnail) {
+  target.querySelector('img').src = thumbnail.dataUrl;
+  target.classList.add('has-preview');
+  const page = Number(target.dataset.page);
+  if (!page || !thumbnail.numPages || page > thumbnail.numPages) return;
+  const status = target.closest('.home-item').querySelector('.hi-status');
+  status.textContent = `${page} / ${thumbnail.numPages}`;
+  status.title = tr('第 {0} 页，共 {1} 页', page, thumbnail.numPages);
+  target.style.setProperty('--read-position', `${100 * page / thumbnail.numPages}%`);
+  target.classList.add('has-progress');
+}
+
 function stopHomeThumbnailWork() {
   homeThumbnailGeneration++;
   homeThumbnailObserver?.disconnect();
@@ -3097,20 +3138,19 @@ function pumpHomeThumbnailQueue(generation) {
     if (cached && img) {
       homeThumbnailCache.delete(target.dataset.cacheKey);
       homeThumbnailCache.set(target.dataset.cacheKey, cached);
-      img.src = cached;
-      target.classList.add('has-preview');
+      showHomeThumbnail(target, cached);
       continue;
     }
     const controller = new AbortController();
     homeThumbnailControllers.add(controller);
     homeThumbnailActive++;
     renderPdfPageImage(target.dataset.url, 1, { signal: controller.signal, maxDim: 560, quality: .68 })
-      .then(({ dataUrl }) => {
+      .then(({ dataUrl, numPages }) => {
         if (generation !== homeThumbnailGeneration || !target.isConnected || !img) return;
-        homeThumbnailCache.set(target.dataset.cacheKey, dataUrl);
+        const thumbnail = { dataUrl, numPages };
+        homeThumbnailCache.set(target.dataset.cacheKey, thumbnail);
         while (homeThumbnailCache.size > 24) homeThumbnailCache.delete(homeThumbnailCache.keys().next().value);
-        img.src = dataUrl;
-        target.classList.add('has-preview');
+        showHomeThumbnail(target, thumbnail);
       })
       .catch(() => {
         if (generation === homeThumbnailGeneration && target.isConnected && !controller.signal.aborted) target.classList.add('preview-fallback');
@@ -3156,6 +3196,16 @@ function chooseHomeView(filter, folder = null) {
   $('#home .home-content')?.scrollTo({ top: 0 });
 }
 
+// Use the full path so equally named subfolders keep distinct identities.
+function homeFolderDot(folder) {
+  let hash = 0;
+  for (const ch of folder) hash = (Math.imul(hash, 31) + ch.codePointAt(0)) >>> 0;
+  return el('span', {
+    class: 'home-folder-dot', 'aria-hidden': 'true',
+    style: folder ? `--folder-color:hsl(${hash % 360} 42% 52%)` : '',
+  });
+}
+
 /** 书架来自磁盘文件，阅读状态来自 serverState；所有入口共用 openDoc。 */
 function renderHome({ navigation = true } = {}) {
   refreshReadingEntries();
@@ -3178,8 +3228,8 @@ function renderHome({ navigation = true } = {}) {
   if (homeView.folder !== null && !folders.some(f => f.path === homeView.folder)) homeView.folder = null;
   const heading = homeView.folder !== null ? folders.find(f => f.path === homeView.folder)?.name
     : homeView.filter === 'recent' ? tr("最近阅读") : homeView.filter === 'unread' ? tr("未读论文") : tr("全部论文");
-  if ($('#homeHeading')) $('#homeHeading').textContent = 'Library';
-  if (!document.body.classList.contains('reading') && $('#docName')) $('#docName').textContent = 'Library';
+  $('#homeHeading').textContent = heading;
+  if (!document.body.classList.contains('reading') && $('#docName')) $('#docName').textContent = tr('书架');
   if (recent) recent.setAttribute('aria-label', heading || 'Library');
   if ($('#docName') && !document.body.classList.contains('reading')) $('#docName').title = '';
   const readCount = allPapers.filter(p => recById.has(p.docId)).length;
@@ -3196,7 +3246,7 @@ function renderHome({ navigation = true } = {}) {
       const folderButton = el('button', {
         type: 'button', class: 'home-nav-btn', dataset: { homeFolder: folder.path }, title: folder.path || folder.name,
         style: `--depth:${depth}`, onclick: () => chooseHomeView('all', folder.path),
-      }, el('span', { class: 'home-nav-icon' }, iconEl('folder')),
+      }, homeFolderDot(folder.path),
       el('span', { text: folder.name }), el('span', { class: 'home-nav-count', text: String(count) }));
       const target = folder.path ? { kind: 'folder', path: folder.path, name: folder.name } : { kind: 'blank' };
       const actions = el('button', { type: 'button', class: 'home-folder-action', text: '…',
@@ -3216,7 +3266,7 @@ function renderHome({ navigation = true } = {}) {
   list.replaceChildren();
   list.classList.remove('home-card-list');
   const query = homeView.query.trim().toLocaleLowerCase();
-  let visible = allPapers.filter(p => {
+  const visible = allPapers.filter(p => {
     if (homeView.folder !== null && !inFolder(p, homeView.folder)) return false;
     if (homeView.filter === 'recent' && !recById.has(p.docId)) return false;
     if (homeView.filter === 'unread' && recById.has(p.docId)) return false;
@@ -3250,22 +3300,31 @@ function renderHome({ navigation = true } = {}) {
       allPapers.length ? el('button', { type: 'button', class: 'home-reset', text: tr("查看全部论文"), onclick: () => chooseHomeView('all') }) : null));
     return;
   }
-  if (homeView.filter === 'recent') {
-    visible.sort((a, b) => recById.get(b.docId).ts - recById.get(a.docId).ts);
-  }
+  const sort = $('#homeSort').value;
+  const collator = new Intl.Collator(locale, { numeric: true, sensitivity: 'base' });
+  if (sort !== 'library') visible.sort((a, b) => {
+    const newerFirst = sort === 'recent' ? (recById.get(b.docId)?.ts || 0) - (recById.get(a.docId)?.ts || 0)
+      : sort === 'modified' ? (b.mtime || 0) - (a.mtime || 0) : 0;
+    return newerFirst || collator.compare(paperTitles.label(a), paperTitles.label(b));
+  });
   for (const paper of visible) {
       const rec = recById.get(paper.docId);
       const page = rec ? Math.max(1, Number(rec.page) || 1) : 0;
       const title = paperTitles.label(paper);
-      const cacheKey = `${paper.docId || paper.path || paper.name}:${paper.mtime || ''}:${paper.size || ''}`;
+      const folder = paper.folder || '';
+      const folderLabel = folder.split('/').pop() || tr('未分组');
+      const position = rec ? tr('第 {0} 页', page) : tr('未读');
+      const cacheKey = `${paper.path || paper.name}:${paper.mtime || ''}:${paper.size || ''}`;
       const item = el('li', { class: 'home-item', dataset: { id: paper.docId, path: paper.path || paper.name } },
-        el('button', { type: 'button', class: 'home-item-go', title: `${paper.path || paper.name}${rec ? tr(" · 第 {0} 页", page) : ''}`, 'aria-label': title },
-          el('span', { class: 'hi-preview', dataset: { url: paper.url, cacheKey }, 'aria-hidden': 'true' },
+        el('button', { type: 'button', class: 'home-item-go', title: `${paper.path || paper.name}${rec ? tr(" · 第 {0} 页", page) : ''}`, 'aria-label': `${title} · ${folder || folderLabel} · ${position}` },
+          el('span', { class: 'hi-preview', dataset: { url: paper.url, cacheKey, page }, 'aria-hidden': 'true' },
             el('span', { class: 'hi-placeholder' }, iconEl('book', { size: 20 })),
             el('img', { class: 'hi-page', alt: '', decoding: 'async' })),
           el('span', { class: 'hi-main' },
             el('span', { class: 'hi-name', text: title }),
-            el('span', { class: `hi-status${rec ? '' : ' is-unread'}`, title: rec ? tr("第 {0} 页", page) : tr("未读"), 'aria-label': rec ? tr("第 {0} 页", page) : tr("未读") }))),
+            el('span', { class: 'hi-meta' },
+              homeFolderDot(folder), el('span', { class: 'hi-folder', text: folderLabel, title: folder || folderLabel }),
+              el('span', { class: `hi-status${rec ? '' : ' is-unread'}`, text: position, title: position })))),
         el('button', {
           type: 'button', class: 'home-item-x', 'aria-hidden': 'false',
           title: tr("删除「{0}」", paper.name),
@@ -3665,6 +3724,13 @@ function initFiles() {
 
   $('#homeOpen')?.addEventListener('click', () => $('#fileInput')?.click());
   $('#homeOrganize')?.addEventListener('click', () => { void openPaperOrganizer(); });
+  const homeSort = $('#homeSort');
+  const savedSort = localStorage.getItem('reader.library.sort');
+  if ([...homeSort.options].some(option => option.value === savedSort)) homeSort.value = savedSort;
+  homeSort.addEventListener('change', () => {
+    localStorage.setItem('reader.library.sort', homeSort.value);
+    renderHome({ navigation: false });
+  });
   for (const node of $$('#home [data-home-icon]')) node.append(iconEl(node.dataset.homeIcon));
   for (const button of $$('#home [data-home-filter]')) button.addEventListener('click', () => chooseHomeView(button.dataset.homeFilter));
   $('#homeSearch')?.addEventListener('input', (e) => {
@@ -3674,6 +3740,8 @@ function initFiles() {
   $('#homeSearch')?.addEventListener('keydown', (e) => {
     if (e.key === 'Escape') {
       e.stopPropagation();
+      e.preventDefault();
+      if (!e.target.value) { e.target.blur(); return; }
       e.target.value = homeView.query = '';
       renderHome({ navigation: false });
     }
@@ -4923,7 +4991,7 @@ async function goWelcome({ skipSave = false } = {}) {
   state.folderClosed = true;   // 这个文件夹已完全关闭：下次打开默认新会话
   cleanStaleLastDoc();
   setView('home');
-  $('#docName').textContent = 'Library';
+  $('#docName').textContent = tr('书架');
   $('#docName').title = '';
   document.title = 'prt';
   refreshReturnButton();
@@ -5222,7 +5290,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
     state.doc = null;
     state.viewerDocId = null;
     document.title = 'prt';
-    $('#docName').textContent = 'Library';
+    $('#docName').textContent = tr('书架');
     $('#docName').title = '';
     // 打开失败退回首页（不再是一个既不像欢迎页、又不像错误页的模糊容器）
     setView('home');
@@ -5338,6 +5406,7 @@ async function openDocColdSwitch({ name, url, docId, path }, { navigation = begi
     syncFootPage(viewer.current, viewer.numPages);
   }
   state.viewerDocId = docId;
+  translationAlignment.refresh();
   // 底栏控件到这一刻才真的可用（`syncFootEnabled` 要求 viewerDocId === doc.docId）
   syncFootEnabled(true);
   refreshReturnButton();
@@ -5944,9 +6013,9 @@ function onSelectionChanged({ deselect = false, down = null, up = null, retry = 
   const pending = state._pendingMerge;
   state._pendingMerge = null;
   if (pending && pending.docId === (state.doc?.docId || '')) {
-    const part = { text, page: info.page, endPage: info.endPage, pages: info.pages, rectsByPage: info.rectsByPage };
+    const part = { text, page: info.page, endPage: info.endPage, pages: info.pages, rectsByPage: info.rectsByPage, readingStart: info.readingStart };
     const parts = pending.parts || [{ text: pending.cleanText, page: pending.page,
-      endPage: pending.endPage, pages: pending.pages, rectsByPage: pending.rectsByPage }];
+      endPage: pending.endPage, pages: pending.pages, rectsByPage: pending.rectsByPage, readingStart: pending.readingStart }];
     if (!parts.some((p) => p.text === text && JSON.stringify(p.rectsByPage) === JSON.stringify(part.rectsByPage))) {
       info.parts = [...parts, part];
     } else info.parts = parts;
@@ -6058,17 +6127,37 @@ let translationCardVersion = 0;
 let translationCardStream = null;
 let translationCardUI = null;
 let immersiveReading = null;
+const translationAlignment = createTranslationAlignment({
+  getViewer: () => viewer, getBody: () => state.blockMeta.translate?.body, getDocId: () => state.doc?.docId,
+  isReady: () => !!viewer?.pdf && state.viewerDocId === state.doc?.docId,
+  jumpPage: jumpToPageWithHistory, fallback: navigateEntrySource,
+  showTranslation: row => {
+    if (immersiveReading?.active) { translationCardUI?.select(row.__sessionRecord); return; }
+    revealTranslatePanel();
+    requestAnimationFrame(() => {
+      if (!row.isConnected) return;
+      row.scrollIntoView({ block: 'nearest' });
+      row.querySelector('.translation-position')?.focus({ preventScroll: true });
+    });
+  },
+});
 function translationRoot(record) {
   return [...(state.blockMeta.translate?.body?.children || [])].find(node => node.__sessionRecord?.id === record.id);
 }
 function initReadingTools() {
   let layoutBeforeBook = null;
-  window.addEventListener(TRANSLATION_ORIGINAL_OPEN_EVENT, event => {
-    const open = !!event.detail;
-    document.querySelectorAll('.translation-original').forEach(details => {
-      if (details.open !== open) { translationOriginalSyncs.set(details, open); details.open = open; }
+  translationAlignment.bindSourceHover(viewer.container);
+  const setComparisonMode = open => {
+    $('#translationBoth').setAttribute('aria-pressed', String(open));
+    $('#translationOnly').setAttribute('aria-pressed', String(!open));
+    state.blockMeta.translate?.body.querySelectorAll('.translation-original').forEach(details => {
+      details.open = open; details.dataset.defaultOpen = String(open);
     });
-  });
+  };
+  $('#translationBoth').onclick = () => setTranslationOriginalOpen(true);
+  $('#translationOnly').onclick = () => setTranslationOriginalOpen(false);
+  setComparisonMode(getTranslationOriginalOpen());
+  window.addEventListener(TRANSLATION_ORIGINAL_OPEN_EVENT, event => setComparisonMode(!!event.detail));
   $('#readerImport').onclick = () => $('#fileInput').click();
   translationCardUI = createTranslationCard({
     getRecords: () => state.sessionEntries.filter(row => row.block === 'translate' && (!row.docId || row.docId === state.doc?.docId)),
@@ -6085,7 +6174,7 @@ function initReadingTools() {
     onDelete: record => { const root = translationRoot(record); if (root) deleteTranslationEntry(root); },
     onStop: record => translationRoot(record)?.__translationController?.abort('user'),
     onRetry: record => restoreRetryCallback(record, { root: translationRoot(record) })?.(),
-    onLocate: record => jumpToPageWithHistory(record.page),
+    onLocate: record => translationAlignment.locate(translationRoot(record)),
   });
   immersiveReading = createImmersiveReading({
     getViewer: () => viewer, isFullscreen: fullscreenActive,
@@ -6392,6 +6481,7 @@ function initTextEdgeHandle() {
 
 function clearAllBlocks() {
   for (const meta of Object.values(state.blockMeta)) meta.body.innerHTML = '';
+  translationAlignment.refresh();
   chatDomSig = '';
   refreshCounts();
 }
@@ -6400,6 +6490,7 @@ function clearAllBlocks() {
 function clearTranslateBlock() {
   const meta = state.blockMeta.translate;
   if (meta) meta.body.innerHTML = '';
+  translationAlignment.refresh();
   refreshCounts();
 }
 
@@ -6986,6 +7077,7 @@ function deleteTranslationEntry(root) {
     || root.previousElementSibling?.querySelector('.translation-delete');
   const hadFocus = root.contains(document.activeElement);
   root.remove();
+  translationAlignment.refresh();
   if (hadFocus) (nextButton || $('#chatInput'))?.focus({ preventScroll: true });
   refreshCounts();
   renderTranslationBatch();
@@ -7069,20 +7161,17 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
       const original = el('details', { class: 'translation-original' },
         el('summary', { title: tr("原文对照") }, el('span', { text: tr("原文") }), caption),
         el('div', { class: 'translation-source', text: sourceText }),
-        sourceSegments.length ? el('div', { class: 'translation-segment-sources' }, ...sourceSegments.filter((part) => part.page).map((part, index) =>
+        sourceSegments.length ? el('div', { class: 'translation-segment-sources' }, ...sourceSegments.map((part, index) => part.page &&
           el('button', { type: 'button', class: 'translation-locate', text: tr("选段 {0} · 第{1}页", index + 1, (part.pages.length ? part.pages : [part.page]).join('、')),
-            onclick: () => navigateEntrySource(root, part.page, part.text),
+            onclick: () => translationAlignment.locate(root, index),
           }))) : null,
         page && !sourceSegments.length ? el('button', {
           type: 'button', class: 'translation-locate', text: tr("第{0}页", page), title: tr("定位原文"),
-          onclick: () => navigateEntrySource(root, page, sourceText),
+          onclick: () => translationAlignment.locate(root),
         }) : null,
       );
       original.open = getTranslationOriginalOpen();
-      original.addEventListener('toggle', () => {
-        if (translationOriginalSyncs.get(original) === original.open) { translationOriginalSyncs.delete(original); return; }
-        setTranslationOriginalOpen(original.open);
-      });
+      original.dataset.defaultOpen = String(original.open);
       direction.append(original);
     } else {
       direction.append(caption);
@@ -7095,8 +7184,7 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
   // 全局序号：分块之后 DOM 顺序 ≠ 时间顺序，取「最新一条」要靠它
   state.msgSeq = (state.msgSeq || 0) + 1;
   root.dataset.seq = String(state.msgSeq);
-  if (block === 'translate') bodyEl.prepend(root);
-  else bodyEl.append(root);
+  if (!isTranslateEntry) bodyEl.append(root);
   const record = { id: id || newEntryId(), block, tag: tag || '', page: page || null, quote: quote || '', kind, text: text || '', screenshot: !!shots.length, sources: [], meta: '',
     // B 线 P3：消息带来源文档（问答会话全局共享，恢复时能看出每条是哪篇论文下问的）
     docId: String(docId || (block === 'chat' ? chatReadingPaper()?.docId : state.doc?.docId) || ''),
@@ -7104,6 +7192,7 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
     status: isUser ? 'user' : (text !== undefined ? 'complete' : 'pending'), retry: retry || null };
   root.__sessionRecord = record;
   if (isTranslateEntry) {
+    translationAlignment.insert(bodyEl, root);
     let header = root.querySelector('.translation-direction');
     if (!header) { header = el('div', { class: 'translation-direction' }); root.prepend(header); }
     header.append(el('button', { class: 'translation-delete', type: 'button', title: tr("删除这条翻译"),
@@ -7122,8 +7211,11 @@ function addEntry({ id = '', block = 'chat', tag, page, quote, imageSrc, thumbs,
       scheduleSessionSave();
     }
   }
-  // 新结果进入时把它放到结果区顶部，用户可以继续向上滚查看更早的结果。
-  scrollEntryToTop(bodyEl, root);
+  // Show a requested translation without disturbing the reader during history replay.
+  if (!isTranslateEntry) scrollEntryToTop(bodyEl, root);
+  else if (!restore && reveal) requestAnimationFrame(() => {
+    if (root.isConnected) root.scrollIntoView({ block: 'nearest' });
+  });
   refreshCounts();
   if (isTranslateEntry && !restore && reveal && immersiveReading?.active) translationCardUI?.select(record);
   return { root, body: textEl, acts, role };
@@ -7203,6 +7295,8 @@ function finishEntry(entry, fullText, { page, onAsk, onRetry, retryLabel = '', s
     }, iconEl('copy')),
     // 回答存笔记：与复制、回原文并排的小图标；已保存态变对勾
     bare ? null : answerNoteButton(entry),
+    !bare && entry.body.querySelector('.page-ref') ? el('button', { type: 'button', class: 'agent-answer-sources',
+      text: tr('本轮引用'), onclick: () => agentWorkspace?.showAnswerSources(entry.root) }) : null,
     !bare && page ? el('button', {
       class: 'act-icon', title: tr("回到第 {0} 页原文", page), 'aria-label': tr("回到第 {0} 页原文", page),
       onclick: () => navigateEntrySource(entry.root, page),
@@ -7304,6 +7398,7 @@ function serialiseRetryPayload(raw) {
   }
   if (kind === 'translate' || kind === 'explain') {
     return { kind, docId: String(raw.docId || '').slice(0, 240), text: String(raw.text || '').slice(0, 6000), page: raw.page || null,
+      ...(kind === 'translate' ? { ...translationGeometry(raw), ...(raw.segments?.length ? { segments: snapshotTranslationSegments(raw.segments) } : {}) } : {}),
       targetLang: raw.targetLang === 'English' ? 'English' : (raw.targetLang === '中文' ? '中文' : ''),
       source: raw.source === 'right' ? 'right' : '' };
   }
@@ -7605,6 +7700,8 @@ function readActiveSessions() {
   try { map = JSON.parse(localStorage.getItem(SESSION_KEY) || '{}'); } catch { map = {}; }
   if (!map || typeof map !== 'object' || Array.isArray(map)) map = {};
   for (const [key, sid] of activeSessionFallback) { if (sid === null) delete map[key]; else map[key] = sid; }
+  // Earlier scoped session lists could expose the document's translation store as a chat.
+  for (const key of Object.keys(map)) if (map[key] === TRANSLATE_SID) delete map[key];
   return map;
 }
 /** 活动会话 sid：跟着「会话归属方式」记一格（文件夹 / 每篇论文 / 全局） */
@@ -8260,7 +8357,7 @@ function restoreRetryCallback(row, entry, priorUser) {
       const sel = { page: payload.page || null, text: payload.text || '', cleanText: payload.text || '',
         source: payload.source === 'right' ? 'right' : '' };
       if (!sel.cleanText) { restoreComposerFallback(fallbackQuestion); return; }
-      if (payload.kind === 'translate') doTranslate(sel, { targetLang: payload.targetLang || '', force: true });
+      if (payload.kind === 'translate') doTranslate({ ...sel, ...translationGeometry(payload), parts: payload.segments }, { targetLang: payload.targetLang || '', force: true });
       else doExplain(sel);
       return;
     }
@@ -8405,10 +8502,18 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     // 只恢复问答时，译文 DOM 保留，记录对象也必须保持同一份，否则续译只更新旧 DOM。
     const keepTranslate = only === 'chat';
     const chatEntries = keepChat ? state.sessionEntries.filter((e) => e?.block !== 'translate')
-      : (Array.isArray(savedChat.entries) ? savedChat.entries : []);
+      : (Array.isArray(savedChat.entries) ? savedChat.entries.filter(row => row?.block !== 'translate') : []);
     const translateEntries = keepTranslate ? state.sessionEntries.filter((e) => e?.block === 'translate')
       : (Array.isArray(savedTranslate.entries) ? savedTranslate.entries : []);
-    const combined = [...chatEntries, ...translateEntries.filter(row => !translationDeletions.get(docId)?.has(row.id))];
+    // Older stores can contain repeated copies of the same ID after an
+    // accidental chat restore. The last version owns that translation.
+    const translationsById = new Map();
+    for (const row of translateEntries) {
+      if (row && (!row.block || row.block === 'translate') && !translationDeletions.get(docId)?.has(row.id)) {
+        translationsById.set(row.id || row, row);
+      }
+    }
+    const combined = [...chatEntries, ...translationsById.values()];
     // 远端同步先取齐附件，再一次性替换视图。附件加载期间可能开始新一轮发送。
     const remoteThumbs = new Map();
     {
@@ -9429,7 +9534,13 @@ function initOps() {
   btn.onclick = (e) => {
     e.stopPropagation();
     const hidden = menu.classList.contains('hidden');
-    if (hidden) { build(); menu.classList.remove('hidden'); } else { hideOpsMenu(); }
+    if (hidden) {
+      const overflow = btn.closest('#readerMoreMenu');
+      if (overflow) overflow.hidePopover();
+      build();
+      menu.classList.remove('hidden');
+      placeToolMenu(menu, overflow ? $('#readerMore') : btn);
+    } else hideOpsMenu();
   };
   document.addEventListener('click', (e) => {
     if (menu.classList.contains('hidden')) return;
@@ -10699,7 +10810,7 @@ function initExternalLinks() {
 /** 只在用户已经贴着「最新」时才自动跟随，往回翻旧结果时不抢滚动条。
  *  方向感知：译文块是 column-reverse（最新在 scrollTop = 0），问答流是普通列（最新在底部）。 */
 function scrollBody(node) {
-  if (!node) return;
+  if (!node || node === state.blockMeta.translate?.body) return;
   const reversed = node.dataset?.reversed === '1'
     || getComputedStyle(node).flexDirection === 'column-reverse';
   const near = reversed
@@ -11458,14 +11569,18 @@ function jumpAndHighlight(page, text) {
   else jumpToPageWithHistory(p, { smooth: true });
 }
 
-/** 点其它论文的页码标签：自动打开那篇论文（没打开过就先打开）→ 跳到第 N 页 → 有原文片段就高亮 */
-async function openOtherPaperRef(name, page, fragment) {
+function matchingCitationPapers(name) {
   const q = String(name || '').trim().replace(/^《|》$/g, '').toLowerCase();
+  if (!q) return [];
   const papers = Array.isArray(state.papers) ? state.papers : [];
   const exact = papers.filter(p => String(p.docId || '').toLowerCase() === q || String(p.path || '').toLowerCase() === q);
   const matches = exact.length ? exact : papers.filter(p => String(p.name || '').toLowerCase() === q);
-  const candidates = matches.length ? matches : papers.filter(p => String(p.name || '').toLowerCase().includes(q) || String(p.path || '').toLowerCase().includes(q));
-  const target = q && candidates.length === 1 ? candidates[0] : null;
+  return matches.length ? matches : papers.filter(p => String(p.name || '').toLowerCase().includes(q) || String(p.path || '').toLowerCase().includes(q));
+}
+/** 点其它论文的页码标签：打开原文并沿用同一套页码及引文定位。 */
+async function openOtherPaperRef(name, page, fragment) {
+  const candidates = matchingCitationPapers(name);
+  const target = candidates.length === 1 ? candidates[0] : null;
   if (candidates.length > 1) {
     toast(tr("找到多份匹配文件，请使用完整文件名或路径：{0}", candidates.map(p => p.path || p.name).join('；')), 'err', 6000);
     return;
@@ -12065,6 +12180,7 @@ function snapshotTranslationSegments(segments) {
     id: String(part.id || ''), kind: 'text', text: part.text,
     docId: String(part.docId || ''), page: Number(part.page) || null, endPage: Number(part.endPage || part.page) || null,
     pages: (Array.isArray(part.pages) ? part.pages : [part.page]).map(Number).filter((p) => Number.isInteger(p) && p > 0),
+    ...translationGeometry(part),
   }));
 }
 
@@ -12263,8 +12379,9 @@ async function doTranslate(sel, { targetLang = '', force = false, cardGuard = nu
   const cardBody = inCard && (!cardGuard || cardGuard()) ? showTranslationCard(sel) : null;
   if (!inCard) revealTranslatePanel();
 
+  const sourcePosition = sel.parts?.length ? { segments: snapshotTranslationSegments(sel.parts) } : translationGeometry(sel);
   const entry = addEntry({ block: 'translate', tag: 'translation', page: sel.page, quote: text,
-    retry: { kind: 'translate', docId: state.doc?.docId || null, text, page: sel.page || null, targetLang: lang }, reveal: !inCard });
+    retry: { kind: 'translate', docId: state.doc?.docId || null, text, page: sel.page || null, targetLang: lang, ...sourcePosition }, reveal: !inCard });
   const cardVersion = translationCardVersion;
   if (cardBody) {
     $('#translationCard').dataset.entryId = entry.root.__sessionRecord.id;
@@ -12286,7 +12403,9 @@ async function doTranslate(sel, { targetLang = '', force = false, cardGuard = nu
     const cached = force ? null : state.cache.get(key);
     if (cached) {
       const existing = state.sessionEntries.find(x => x !== entry.root.__sessionRecord && x?.block === 'translate'
-        && x?.tag === 'translation' && x?.status === 'complete' && x?.quote === text && x?.text === cached);
+        && x?.tag === 'translation' && x?.status === 'complete' && x?.quote === text && x?.text === cached
+        && x.page === (sel.page || null) && x.retry?.targetLang === lang
+        && JSON.stringify(x.retry?.segments || x.retry?.rectsByPage || {}) === JSON.stringify(sourcePosition.segments || sourcePosition.rectsByPage || {}));
       if (existing) {
         if (ownsCard()) {
           cardTarget.done(cached); $('#translationCard').dataset.entryId = existing.id;
@@ -15503,6 +15622,15 @@ function initShortcuts() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
+    if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k'
+      && !document.body.matches('.reading, .agent-full') && !e.defaultPrevented
+      && ![...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].some(dialog => dialog.getClientRects().length)) {
+      e.preventDefault();
+      const input = $('#homeSearch');
+      input.focus();
+      input.select();
+      return;
+    }
 
     if (e.key === 'Escape') {
       if (document.body.classList.contains('reading-capture-active')) { e.preventDefault(); state.stopRegion?.(); return; }

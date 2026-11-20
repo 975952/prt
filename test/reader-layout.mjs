@@ -40,6 +40,8 @@ try {
     headless: 'shell', args: ['--no-sandbox', '--disable-gpu'], defaultViewport: { width: 1500, height: 950 } });
   const page = await browser.newPage();
   const errors = [];
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.agent.welcome.v1', 'acknowledged'));
+  const toolbarAction = async (trigger, item) => { await page.click(trigger); await page.click(item); };
   page.on('pageerror', e => errors.push(String(e)));
   page.on('requestfailed', r => { if (!r.failure()?.errorText.includes('ERR_ABORTED')) errors.push(`${r.url()} ${r.failure()?.errorText}`); });
   await page.goto(`${base}/?open=layout.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
@@ -53,7 +55,7 @@ try {
       centerError: pr.left + pr.width / 2 - (cr.left + c.clientLeft + c.clientWidth / 2),
       width: c.clientWidth, pageWidth: p.offsetWidth, edgeLeft: pr.left - contentLeft,
       edgeRight: contentLeft + c.clientWidth - pr.right,
-      footerGap: document.querySelector('#viewerFoot').getBoundingClientRect().top - cr.bottom,
+      footerGap: cr.top - document.querySelector('#viewerFoot').getBoundingClientRect().bottom,
       layers: [...p.children].map(el => ({ cls: el.className, w: el.getBoundingClientRect().width, left: el.offsetLeft,
         tf: getComputedStyle(el).transform })).filter(el => el.w > p.offsetWidth + 1) };
   });
@@ -68,11 +70,11 @@ try {
   for (const width of [1500, 1051]) {
     await page.setViewport({ width, height: 950 });
     await wait(250);
-    await page.click('#footFitWidth');
+    await toolbarAction('#readerZoom', '#footFitWidth');
     await wait(500);
     const fit = await geometry();
     check(`fit leaves narrow balanced paper gutters at ${width}px`, fitsWithGutter(fit), fit);
-    check('scrollbar meets footer without an empty strip', Math.abs(fit.footerGap) <= 1, fit.footerGap);
+    check('reading canvas meets its toolbar without an empty strip', Math.abs(fit.footerGap) <= 1, fit.footerGap);
     await page.screenshot({ path: path.join(scratch, `fit-width-${width}.png`) });
     await page.evaluate(() => window.__viewer.setScale(window.__viewer.scale * 1.7));
     const zoom = await geometry();
@@ -83,7 +85,7 @@ try {
       && Math.abs(settled.left * 2 - settled.max) <= 2, settled);
     await page.screenshot({ path: path.join(scratch, `zoom-${width}.png`) });
     await page.evaluate(() => { window.__viewer.container.scrollLeft = 99999; });
-    await page.click('#footFitWidth');
+    await toolbarAction('#readerZoom', '#footFitWidth');
     const reset = await geometry();
     check('fit clears previous pan immediately and restores narrow gutters', fitsWithGutter(reset) && reset.left === 0, reset);
     await wait(550);
@@ -97,11 +99,11 @@ try {
     });
     const slider = await geometry();
     check('slider zoom also centers its horizontal travel', slider.max > 20 && Math.abs(slider.left * 2 - slider.max) <= 2, slider);
-    await page.click('#footFitWidth');
+    await toolbarAction('#readerZoom', '#footFitWidth');
   }
   await page.setViewport({ width: 1500, height: 950 });
   await wait(250);
-  await page.click('#footFitWidth');
+  await toolbarAction('#readerZoom', '#footFitWidth');
   await wait(500);
   for (const [side, button] of [['right', '#topbarRightToggle'], ['left', '#topbarLeftToggle']]) {
     const initiallyClosed = await page.evaluate(side => document.body.classList.contains(`no-${side}`), side);
@@ -123,15 +125,16 @@ try {
       check(`${side} sidebar toggle preserves manual zoom ${step + 1}`, !resized.fitMode && Math.abs(resized.scale - manual.scale) < 1e-8, resized);
     }
     await page.evaluate(() => { window.__viewer.container.scrollLeft = 99999; });
-    await page.click('#footFitWidth');
+    await toolbarAction('#readerZoom', '#footFitWidth');
     await wait(550);
     const restored = await geometry();
     check(`fit clears pan after ${side} sidebar manual-zoom changes`, fitsWithGutter(restored) && restored.left === 0, restored);
   }
-  await page.setViewport({ width: 1050, height: 950 });
+  // Exercise an odd PDF viewport outside the responsive sidebars' 420px floor.
+  await page.setViewport({ width: 1500, height: 950 });
   await wait(250);
-  await page.click('#footFitWidth');
-  await page.click('#footTwoUp');
+  await toolbarAction('#readerZoom', '#footFitWidth');
+  await toolbarAction('#readerMore', '#footTwoUp');
   await wait(300);
   const spread = await page.evaluate(() => {
     const v = window.__viewer, c = v.container, a = v.pageEls[1].getBoundingClientRect(), b = v.pageEls[2].getBoundingClientRect();
@@ -145,7 +148,7 @@ try {
     && Math.abs(spread.center) <= 1 && spread.unused >= 16 && spread.unused <= 22
     && spread.edgeLeft >= 8 && spread.edgeLeft <= 11 && spread.edgeRight >= 8 && spread.edgeRight <= 11, spread);
   await page.screenshot({ path: path.join(scratch, 'fit-width-two-page.png') });
-  await page.click('#footTwoUp');
+  await toolbarAction('#readerMore', '#footTwoUp');
   await wait(250);
   const numbers = await page.evaluate(() => {
     const v = window.__viewer, first = v.pageEls[1].getBoundingClientRect(), next = v.pageEls[2].getBoundingClientRect();
@@ -211,14 +214,12 @@ try {
   assert.equal(await page.evaluate(() => window.__viewer.current), 3, 'select keyboard navigation must not turn PDF pages');
   const targetLayout = await page.evaluate(() => {
     const rect = selector => document.querySelector(selector).getBoundingClientRect();
-    const box = rect('#composer .composer-row'), target = rect('.translate-target-control'), send = rect('#sendBtn'), clip = rect('#clipBtn');
-    return { inside: target.left >= box.left && target.right <= box.right && target.bottom <= box.bottom,
-      baseline: target.top + target.height / 2 - send.top - send.height / 2,
-      separated: target.right + 4 <= clip.left, overflow: document.querySelector('#rightSide').scrollWidth - document.querySelector('#rightSide').clientWidth,
-      extraRow: getComputedStyle(document.querySelector('.composer-opts')).display };
+    const box = rect('.translation-view-controls'), target = rect('.translate-target-control'), modes = rect('.translation-view-mode');
+    return { inside: target.width > 0 && target.left >= box.left && target.right <= box.right && target.bottom <= box.bottom,
+      separated: target.right <= modes.left || modes.right <= target.left || target.bottom <= modes.top || modes.bottom <= target.top,
+      overflow: document.querySelector('#rightSide').scrollWidth - document.querySelector('#rightSide').clientWidth };
   });
-  check('translation language belongs to the composer action row at 300px', targetLayout.inside && Math.abs(targetLayout.baseline) <= 1
-    && targetLayout.separated && targetLayout.overflow <= 1 && targetLayout.extraRow === 'none', targetLayout);
+  check('language and comparison controls fit the translation panel at 300px', targetLayout.inside && targetLayout.separated && targetLayout.overflow <= 1, targetLayout);
   await page.screenshot({ path: path.join(scratch, 'translation-language.png') });
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.numPages > 0 && window.__state?.viewerDocId === window.__state?.doc?.docId
@@ -226,7 +227,7 @@ try {
   await page.locator('.aibar-btn[data-block="translate"]').click();
   assert.equal(await page.$eval('#translateTargetLang', el => el.value), 'English', 'language selection survives reload');
   await page.locator('.aibar-btn[data-block="chat"]').click();
-  assert.equal(await page.$eval('.translate-target-control', el => getComputedStyle(el).display), 'none', 'chat mode hides the translation-only control');
+  assert.equal(await page.$eval('.translate-target-control', el => el.getClientRects().length), 0, 'chat mode hides the translation-only control');
   await page.screenshot({ path: path.join(scratch, 'reader-layout.png') });
   assert.deepEqual(errors, []);
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop' : 'node', checks, errors }, null, 2), 'utf8');

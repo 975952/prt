@@ -355,6 +355,7 @@ try {
   {
     const before = await tabs();
     const activeBefore = await page.evaluate(() => window.__ctx.activeTab);
+    await page.evaluate(() => localStorage.setItem('reader.startupPage', 'resume'));
     await page.reload({ waitUntil: 'domcontentloaded' });
     await page.waitForFunction(() => window.__ctx?.tabs?.length > 0 && window.__viewer?.numPages > 0, { timeout: 60000 });
     await settle();
@@ -554,7 +555,10 @@ try {
     await page.waitForFunction(id => window.__state?.viewerDocId === id && window.__ctx?.activeTab === id,
       { timeout: 60000 }, paperByName('paper-a.pdf').docId);
     // The explicit startup target only makes fixture setup deterministic; refresh must test the saved active tab.
-    await page.evaluate(() => history.replaceState(null, '', '/?topbar=static'));
+    await page.evaluate(() => {
+      localStorage.setItem('reader.startupPage', 'resume');
+      history.replaceState(null, '', '/?topbar=static');
+    });
     await settle();
     for (const tab of await tabs()) {
       await page.evaluate(docId => __ctx.closeTab(docId), tab.docId);
@@ -603,17 +607,16 @@ try {
         check(`${mode}首页切回${['首个', '中间', '最后'][index]}跨文件夹标签保留整个工作区`, keeps(actual, ids) && current(actual, ids[index]), JSON.stringify(actual));
       }
       const readingContext = await page.evaluate(() => ({ doc: __state.doc.docId, folder: __ctx.currentFolder, sid: __ctx.activeSession }));
-      await page.click('#folderSwitch');
-      check(`${mode}左栏文件夹菜单可以打开`, await page.evaluate(() => !document.querySelector('#folderSwitchMenu').classList.contains('hidden')));
-      await page.click('#folderSwitchMenu .folder-switch-item[title="papers/sub/"]');
+      await page.click('#homeBtn');
       await page.waitForFunction(() => !document.body.classList.contains('reading'));
+      await page.click('#homeFolders [data-home-folder="sub"]');
       const filtered = await page.evaluate(() => ({
         selected: document.querySelector('#homeFolders [data-home-folder][aria-pressed="true"]')?.dataset.homeFolder,
         files: [...document.querySelectorAll('#homeList .home-item')].map(item => item.dataset.id),
         menuHidden: document.querySelector('#folderSwitchMenu').classList.contains('hidden'),
         doc: __state.doc?.docId, folder: __ctx.currentFolder, sid: __ctx.activeSession,
       }));
-      check(`${mode}左栏选另一文件夹只筛选首页并保留标签及原阅读会话`, keeps(await workspace(), ids)
+      check(`${mode}书架选另一文件夹只筛选首页并保留标签及原阅读会话`, keeps(await workspace(), ids)
         && filtered.selected === 'sub' && JSON.stringify(filtered.files) === JSON.stringify([ids[1]]) && filtered.menuHidden
         && filtered.doc === readingContext.doc && filtered.folder === readingContext.folder && filtered.sid === readingContext.sid, JSON.stringify(filtered));
       await page.screenshot({ path: path.join(scratch, fullscreen ? 'cross-folder-browse-home-fullscreen.png' : 'cross-folder-browse-home.png') });
@@ -632,7 +635,10 @@ try {
     await page.click(`#tabStrip .doc-tab[data-doc="${ids[1]}"] .tab-close`); await settle();
     const closed = await workspace();
     check('关闭中间非活动标签只删除这一项', keeps(closed, [ids[0], ids[2]]) && current(closed, ids[2]), JSON.stringify(closed));
-    await page.click(`#tabStrip .doc-tab[data-doc="${ids[2]}"] .tab-close`); await settle();
+    await page.click(`#tabStrip .doc-tab[data-doc="${ids[2]}"] .tab-close`);
+    await page.waitForFunction(id => __state.viewerDocId === id && __ctx.tabs.length === 1
+      && JSON.parse(localStorage.getItem('reader.workspace.v1')).tabs.length === 1, {}, ids[0]);
+    await settle();
     const closedActive = await workspace();
     check('关闭活动标签只删除这一项并激活保留的跨文件夹标签', keeps(closedActive, [ids[0]]) && current(closedActive, ids[0]), JSON.stringify(closedActive));
     await page.screenshot({ path: path.join(scratch, 'cross-folder-close-only-target.png') });

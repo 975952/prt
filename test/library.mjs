@@ -1,3 +1,4 @@
+import { showReaderPanel } from './_reader-controls.mjs';
 import fs from 'node:fs';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
@@ -123,7 +124,7 @@ try {
 
   /* ── L4 拖拽排序：把 B 拖到最后一行之后 ── */
   // 首页默认收起左栏，行高度是 0，合成拖拽的坐标会全变成 0 —— 先把文件面板展开
-  await page.evaluate(() => document.querySelector('#railLeft .rail-btn[data-rail="files"]')?.click());
+  await showReaderPanel(page, 'files');
   await sleep(600);
   const listVisible = await page.evaluate(() => document.querySelector('#fileList li[data-name]')?.getBoundingClientRect().height > 0);
   check('L4 文件面板已展开（行有真实高度，拖拽坐标才有意义）', listVisible);

@@ -1,4 +1,5 @@
 /** Slide presentation and book regression, using only synthetic isolated PDFs. */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -72,9 +73,8 @@ try {
     await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId);
     await page.evaluate(async () => { __viewer.setTwoUp(true); await __viewer.goToPage(2); });
     const original = await page.evaluate(() => ({ scale: __viewer.scale, twoUp: __viewer._twoUp }));
-    // Switching documents and two-up mode can still move the toolbar; invoke
-    // its real handler without racing the ordinary reader's layout animation.
-    await page.$eval('#immersiveBtn', button => button.click());
+    // Wait for the visible toolbar controls to settle after switching documents.
+    await clickReaderTool(page, '#immersiveBtn');
     await settled().catch(async error => {
       console.error(name, errors, await page.evaluate(() => ({ active: __ctx.immersiveReading.active, immersive: __viewer.immersive,
         classes: document.body.className, cover: document.getElementById('immersiveTransitionCover').hidden })));

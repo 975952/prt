@@ -48,6 +48,7 @@ try {
     return request.continue();
   });
   await page.evaluateOnNewDocument(() => {
+    localStorage.setItem('reader.agent.welcome.v1', 'acknowledged');
     localStorage.setItem('reader.locale', 'en');
     localStorage.setItem('reader.session.scopeMode', 'paper');
     localStorage.setItem('reader.session.onEnter', 'latest');
@@ -129,6 +130,10 @@ try {
     await page.setViewport({ width: 1440, height: 940 });
   }
   await inspect('library');
+  const originalTheme = await page.$eval('html', root => root.dataset.theme);
+  await page.click('#themeToggle'); await page.waitForFunction(() => document.documentElement.dataset.theme === 'dark');
+  await page.click('#themeToggle');
+  check('theme switch restores the previous light material', originalTheme === await page.$eval('html', root => root.dataset.theme));
   await page.locator('#homeBtn').click();
   check('Library without reading history remains usable', await page.$eval('#home', node => !!node.getClientRects().length));
   const rapidNavigation = await page.evaluate(() => {
@@ -156,6 +161,84 @@ try {
   await page.waitForFunction(() => window.__viewer?.numPages > 0 && document.body.classList.contains('reading'));
   await inspect('reader');
   await settled();
+  const midpoint = selector => page.$eval(selector, node => {
+    const r = node.getBoundingClientRect(); return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+  });
+  const source = await midpoint('#searchBtn');
+  await page.mouse.move(source.x, source.y); await page.mouse.down();
+  await page.waitForFunction(() => document.querySelector('#readerToolEditor').matches(':popover-open'));
+  const tray = await midpoint('#readerToolChoices');
+  await page.mouse.move(tray.x, tray.y, { steps: 12 }); await page.mouse.up();
+  check('long press moves Find from the reading toolbar to More',
+    await page.$eval('#readerExtraTools', node => !!node.querySelector('#searchBtn')));
+  const two = await midpoint('[data-choice="two"] > span');
+  const insert = await midpoint('#readerZoom');
+  await page.mouse.move(two.x, two.y); await page.mouse.down();
+  await page.mouse.move(insert.x - 4, insert.y, { steps: 12 }); await page.mouse.up();
+  check('dragging Two-page to the toolbar inserts it in the chosen position',
+    await page.$eval('#viewerFoot', node => node.querySelector('[data-tool="zoom"]').previousElementSibling?.dataset.tool === 'two'));
+  await page.keyboard.press('Escape');
+  check('Escape exits customization and keeps the layout',
+    await page.$eval('#readerToolEditor', node => !node.matches(':popover-open'))
+    && await page.evaluate(() => JSON.parse(localStorage.getItem('prt.readingToolbar.v1')).includes('two')));
+  await page.click('#footTwoUp'); await page.waitForFunction(() => document.querySelector('#footTwoUp').getAttribute('aria-pressed') === 'true');
+  await page.click('#footTwoUp');
+  await page.click('#readerMore'); await page.click('#editReaderTools'); await page.click('#readerToolsReset'); await page.click('#readerToolsDone');
+  check('restoring defaults returns Find to its original toolbar', await page.$eval('#viewerFoot', node => !!node.querySelector('#searchBtn')));
+  const touch = await page.createCDPSession();
+  await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
+  const sendTouch = (type, point) => touch.send('Input.dispatchTouchEvent', { type, touchPoints: point ? [point] : [] });
+  async function swipeTo(start, end) {
+    for (let step = 1; step <= 10; step++) {
+      await sendTouch('touchMove', { x: start.x + (end.x - start.x) * step / 10, y: start.y + (end.y - start.y) * step / 10 });
+      await wait(15);
+    }
+    await sendTouch('touchEnd');
+  }
+  async function holdTool(selector) {
+    const start = await midpoint(selector);
+    await sendTouch('touchStart', start);
+    await page.waitForSelector('#viewerFoot.tool-dragging');
+    return start;
+  }
+  const touchFind = await holdTool('#searchBtn'), touchZoom = await midpoint('#readerZoom');
+  await swipeTo(touchFind, { x: touchZoom.x - 4, y: touchZoom.y });
+  check('touch long-press reorders Find horizontally before Zoom', await page.$eval('#viewerFoot [data-tool="zoom"]',
+    node => node.previousElementSibling?.dataset.tool === 'search'));
+  await page.keyboard.press('Escape');
+  const reorderedFind = await holdTool('#searchBtn');
+  await swipeTo(reorderedFind, await midpoint('#readerToolChoices'));
+  check('touch long-press moves Find from the toolbar back to the tray', await page.$eval('#readerExtraTools', node => !!node.querySelector('#searchBtn')));
+  await page.click('#readerToolsReset');
+  await page.click('[data-choice="two"] [data-action="pin"]');
+  await page.click('[data-choice="immersive"] [data-action="pin"]');
+  await page.click('#readerToolsDone');
+  await page.setViewport({ width: 320, height: 550 });
+  await page.waitForFunction(() => {
+    const bar = document.querySelector('#viewerFoot');
+    return bar.clientWidth === document.documentElement.clientWidth && bar.scrollWidth > bar.clientWidth;
+  });
+  const overflow = await page.$eval('#viewerFoot', node => {
+    node.scrollLeft = 0;
+    return node.scrollWidth - node.clientWidth;
+  });
+  const swipeStart = await midpoint('#readerZoom');
+  await sendTouch('touchStart', swipeStart);
+  await swipeTo(swipeStart, { x: Math.max(1, swipeStart.x - overflow - 32), y: swipeStart.y });
+  await page.waitForFunction(() => {
+    const bar = document.querySelector('#viewerFoot'), last = bar.lastElementChild.getBoundingClientRect();
+    return bar.scrollLeft > 0 && last.right <= bar.getBoundingClientRect().right + 1;
+  });
+  check('a quick touch swipe reveals the last tool in an overflowing narrow toolbar',
+    await page.$eval('#readerToolEditor', node => !node.matches(':popover-open')));
+  await touch.send('Emulation.setTouchEmulationEnabled', { enabled: false });
+  await touch.detach();
+  await page.setViewport({ width: 1440, height: 940 });
+  await page.click('#readerMore'); await page.click('#editReaderTools'); await page.click('#readerToolsReset'); await page.click('#readerToolsDone');
+  await page.setViewport({ width: 560, height: 400 });
+  await page.waitForFunction(() => document.querySelector('#viewer').clientWidth >= 410);
+  check('minimum desktop window keeps a readable PDF canvas', await page.$eval('#viewer', node => node.clientHeight >= 300));
+  await page.setViewport({ width: 1440, height: 940 }); await wait(300);
   await page.evaluate(async () => {
     const viewer = window.__viewer;
     window.__navPdf = viewer.pdf;

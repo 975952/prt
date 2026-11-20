@@ -98,7 +98,8 @@ try {
   await page.$eval('#rightSide', node => { node.style.removeProperty('zoom'); });
   console.log('PASS CSS zoom preserves rail coordinates and drag distance');
 
-  await page.click('#immersiveBtn');
+  await page.click('#readerMore');
+  await page.click('#readerMoreMenu #immersiveBtn');
   await page.waitForFunction(() => __viewer.immersive);
   await page.evaluate(() => __ctx.immersiveReading.showChat(true));
   await page.$eval('#rightSide', node => { node.style.width = '660px'; node.style.minWidth = '320px'; node.style.maxWidth = 'calc(100vw - 16px)'; });

@@ -15,6 +15,7 @@ import { writeTitlePdf } from './fixtures/make-title-pdf.mjs';
 const desktop = process.argv.includes('--desktop');
 const moveReview = process.argv.includes('--move-review');
 const landingReview = process.argv.includes('--landing-review');
+const sourcesReview = process.argv.includes('--sources-review');
 const executablePath = [process.env.CHROME, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe']
   .find(file => file && fs.existsSync(file));
@@ -186,11 +187,64 @@ async function history() {
   if (!await visible('#sessHistory')) await page.click(await visible('#agentHistory') ? '#agentHistory' : '#sessHist');
   await page.waitForSelector('#sessHistory .sess-hrow', { visible: true });
 }
+async function openSessionMove(sourceSid) {
+  if (!sourceSid && await visible('#agentChatMove')) {
+    await page.click('#agentChatMove');
+  } else {
+    const id = sourceSid || await sid();
+    await history();
+    await page.locator(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(id)}] .sess-hmore`).click();
+    await page.locator('.sess-row-menu .sess-hact.move').click();
+  }
+}
 async function chooseGlobal() {
   await history();
   await page.click('#sessHistory .sess-hrow[data-sid="global-primary"] .sess-hgo');
   await page.waitForFunction(() => window.__ctx.activeSession === 'global-primary'
     && document.querySelector('#aiArea').textContent.includes('GLOBAL_PRIMARY_ONLY'));
+}
+async function reviewSources(paperA, paperB) {
+  const url = sessionUrl('default', 'global-primary');
+  const saved = await json(url);
+  saved.entries[1].docId = paperA.docId;
+  saved.entries[1].docTitle = paperA.name;
+  saved.entries[1].docPath = paperA.path;
+  saved.entries[1].text += ' 〔p.1〕 〔《vision/alpha.pdf》p.1〕 〔《vision/beta.pdf》p.1‖Synthetic beta research〕';
+  saved.entries.push({ ...saved.entries[1], id: 'no-citations', text: 'A later uncited answer.' });
+  await json(url, saved);
+  page = await newPage('paper'); await full(); await chooseGlobal();
+  await page.waitForSelector('#agentSources .agent-sources-empty', { visible: true });
+  const welcomeSkip = await page.$('#agentWelcomeSkip');
+  if (welcomeSkip) await welcomeSkip.click();
+  check('most recent uncited answer has an empty source panel', !await page.$('#agentSources .agent-source-paper'));
+  await page.click('#aiArea .msg.assistant .agent-answer-sources');
+  await page.waitForFunction(() => document.querySelectorAll('#agentSources .agent-source-paper').length === 2);
+  assert.deepEqual(await page.$$eval('#agentSources .agent-source-page strong', nodes => nodes.map(node => node.textContent)), ['p.1', 'p.1']);
+  pass('source rail merges duplicate citations to the same paper and preserves equal page numbers across papers');
+  await page.screenshot({ path: path.join(scratch, 'sources-wide.png') });
+  await page.setViewport({ width: 850, height: 800 });
+  await page.waitForSelector('#agentSources', { hidden: true });
+  await page.click('#agentSourcesToggle');
+  await page.waitForSelector('#agentSources', { visible: true });
+  await page.keyboard.press('Escape');
+  assert.equal(await page.$eval('#agentSourcesToggle', el => el === document.activeElement && el.getAttribute('aria-expanded') === 'false'), true);
+  await page.click('#agentSourcesToggle');
+  await page.click('#agentSourceList .agent-source-paper:nth-child(2) .agent-source-page');
+  await page.waitForFunction(doc => document.body.classList.contains('agent-docked') && window.__state.viewerDocId === doc, {}, paperB.docId);
+  await page.waitForFunction(() => window.__viewer.rendered.get(1)?.quoteLayer?.firstElementChild);
+  check('source opens the correct PDF in the reader, retaining the global conversation', await sid() === 'global-primary'
+    && !await visible('#agentSources') && (await chatText()).includes('GLOBAL_PRIMARY_ONLY'));
+  await page.setViewport({ width: 1400, height: 900 });
+  await full(); await history();
+  await page.click('#sessHistory .sess-hrow[data-sid="global-secondary"] .sess-hgo');
+  await page.waitForFunction(() => window.__ctx.activeSession === 'global-secondary'
+    && document.querySelector('#aiArea').textContent.includes('GLOBAL_SECONDARY_ONLY') && !document.querySelector('#sessHistory').getClientRects().length);
+  await settled();
+  await page.waitForSelector('#agentSources .agent-sources-empty', { visible: true });
+  check('switching conversations clears the previous answer citations', !await page.$('#agentSources .agent-source-page'));
+  await typeDraft('FIRST_NAME_DISMISS_QUESTION'); await page.focus('#chatInput'); await page.keyboard.press('Enter');
+  await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('SYNTHETIC_NAME_DISMISS_REPLY') && !window.__state.busy);
+  check('finished uncited streaming answer leaves the rail empty', await visible('#agentSources .agent-sources-empty'));
 }
 async function pick(paper) {
   await page.click('#agentPapersToggle');
@@ -250,16 +304,7 @@ async function reviewMoveCases({ paperA, paperB }) {
     await settled();
   };
   const openMove = async (targetPaper, sourceSid = '') => {
-    if (sourceSid) {
-      await history();
-      await page.waitForSelector(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(sourceSid)}] .sess-hmore`, { visible: true });
-      await page.locator(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(sourceSid)}] .sess-hmore`).click();
-      await page.waitForSelector('.sess-row-menu .sess-hact.move', { visible: true });
-      await page.click('.sess-row-menu .sess-hact.move');
-    } else {
-      await page.click('#sessBtn'); await page.waitForSelector('#sessQuickMore', { visible: true }); await page.click('#sessQuickMore');
-      await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
-    }
+    await openSessionMove(sourceSid);
     await page.waitForSelector('#sessMovePanel', { visible: true });
     await page.waitForFunction(() => !document.querySelector('#sessMoveMode').disabled);
     await page.select('#sessMoveMode', 'paper'); await page.select('#sessMoveTarget', targetPaper.docId);
@@ -436,7 +481,8 @@ try {
   await seed(visionScope, 'folder-old', 'Folder private discussion', 'FOLDER_PRIVATE_ONLY', paperA);
   browser = await puppeteer.launch({ executablePath, headless: true, pipe: true,
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: path.join(scratch, 'browser') });
-  if (moveReview) await reviewMoveCases({ paperA, paperB });
+  if (sourcesReview) await reviewSources(paperA, paperB);
+  else if (moveReview) await reviewMoveCases({ paperA, paperB });
   else {
   if (!landingReview) {
   page = await newPage('paper');
@@ -481,6 +527,8 @@ try {
   await page.keyboard.press('Escape');
   await page.click('#settingsBtn'); await page.waitForSelector('#settingsModal', { visible: true });
   await page.click('#settingsNavAgent');
+  await page.click('#agentCustomize');
+  await page.click('#agentWriteCard');
   check('the name and persona editor is available only in Settings', await visible('#agentNameInput')
     && await page.$eval('#agentNameDisplay', node => node.tagName) === 'SPAN' && !await visible('#saveSettings'));
   await page.$eval('#agentNameInput', input => { input.value = 'Research companion'; input.dispatchEvent(new Event('input', { bubbles: true })); });
@@ -488,6 +536,7 @@ try {
   await page.waitForFunction(() => document.querySelector('#agentIdentity').textContent.includes('Research companion'));
   await settled();
   check('assistant name changes through Settings', await page.$eval('#agentLandingName', node => node.textContent.includes('Research companion')));
+  await page.click('#agentViewCard');
   await page.$eval('#agentPersonalityInput', input => { input.value = 'Clear, patient, concise'; input.dispatchEvent(new Event('input', { bubbles: true })); });
   await page.select('#agentGenderSelect', '女');
   await page.$eval('#agentHabitsInput', input => { input.value = 'Start with intuition'; input.dispatchEvent(new Event('input', { bubbles: true })); });
@@ -502,6 +551,7 @@ try {
   check('returning to Alina shows the landing without a naming overlay', await visible('#agentLanding')
     && await page.$('#agentNameForm') === null);
   await page.click('#settingsBtn'); await page.waitForSelector('#settingsModal', { visible: true }); await page.click('#settingsNavAgent');
+  await page.click('#agentViewCard');
   check('optional personality fields survive a reload', await page.evaluate(() =>
     document.querySelector('#agentPersonalityInput').value === 'Clear, patient, concise'
     && document.querySelector('#agentGenderSelect').value === '女'
@@ -647,13 +697,11 @@ try {
   check('full workspace does not silently reuse the previous PDF for a general question',
     !genericContext.docId && !genericContext.sourceDoc && !genericContext.page && !genericContext.screenPage);
   const movesBeforeBusy = apiRequests.filter(request => request.path === '/api/sessions/move').length;
-  await page.click('#sessBtn');
-  await page.waitForSelector('#sessQuickMore', { visible: true }); await page.click('#sessQuickMore');
-  await page.waitForSelector('#sessQuickMove', { visible: true });
-  await page.click('#sessQuickMove');
+  await openSessionMove();
   check('a generating conversation cannot open the ownership editor or send a move request',
     !await visible('#sessMoveLayer') && await sid() === 'global-primary' && await scope() === 'default'
     && apiRequests.filter(request => request.path === '/api/sessions/move').length === movesBeforeBusy);
+  if (await visible('#sessHistory')) await page.click('.sess-hist-back');
   heldGeneric.writeHead(200, { 'Content-Type': 'text/event-stream' });
   heldGeneric.end(`data: ${JSON.stringify({ choices: [{ delta: { content: 'SYNTHETIC_GENERIC_REPLY' } }] })}\n\ndata: [DONE]\n\n`);
   heldGeneric = null;
@@ -770,16 +818,7 @@ try {
   const originalDraftState = await draftState();
   assert.equal(originalDraftState.attachments.length, 1);
   async function openMove(mode, target = null, fromHistory = false) {
-    if (fromHistory) {
-      const currentSid = await sid(); await history();
-      await page.click(`#sessHistory .sess-hrow[data-sid=${JSON.stringify(currentSid)}] .sess-hmore`);
-      await page.waitForSelector('.sess-row-menu .sess-hact.move', { visible: true });
-      await page.click('.sess-row-menu .sess-hact.move');
-    } else {
-      await page.click('#sessBtn');
-      await page.waitForSelector('#sessQuickMore', { visible: true }); await page.click('#sessQuickMore');
-      await page.waitForSelector('#sessQuickMove', { visible: true }); await page.click('#sessQuickMove');
-    }
+    await openSessionMove(fromHistory ? await sid() : '');
     await page.waitForSelector('#sessMovePanel', { visible: true });
     await page.waitForFunction(() => !document.querySelector('#sessMoveMode').disabled);
     assert.equal(await page.$eval('#sessMoveSubmit', node => node.disabled), true, 'same ownership cannot be submitted');

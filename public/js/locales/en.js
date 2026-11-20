@@ -1,6 +1,16 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "阅读侧栏": "Reading sidebar",
+  "深色模式": "Dark mode",
+  "阅读工具": "Reading tools", "更多阅读工具": "More reading tools", "自定义工具栏": "Customize toolbar",
+  "读懂论文": "Explore paper", "文献": "Refs", "工具左移": "Move tool left", "工具右移": "Move tool right",
+  "固定到工具栏": "Pin to toolbar", "移到更多工具": "Move to more tools", "恢复默认": "Restore defaults",
+  "完成": "Done", "左栏": "Left sidebar", "查找": "Find",
+  "引用来源": "Sources", "本轮引用": "Cited in this answer", "收起引用来源": "Close sources",
+  "回答完成后显示本轮引用。": "Citations will appear when the answer is complete.",
+  "这条回答没有引用论文页码。": "This answer has no paper citations.", "本周": "This week",
+  "对照": "Bilingual", "仅译文": "Translation only", "查看译文 {0}": "View translation {0}",
   "停止": "Stop",
   "温和、敏锐、表达清楚": "Warm, perceptive and clear",
   "先直接回答，再按需要展开；不确定时说明，引用论文时给出依据。": "Answer directly, then expand as needed. Acknowledge uncertainty and cite evidence when discussing papers.",
@@ -201,6 +211,9 @@ export const en = {
   "本地文献库": "Local library", "阅读与思考，从这里继续": "A place to read and think",
   "整理你的论文，接着上次的进度阅读。": "Your papers, organized. Pick up where you left off.",
   "搜索论文或文件夹": "Search papers or folders", "文献名称": "Document name",
+  "筛选书架里的论文": "Filter library papers", "论文排序": "Sort papers", "最近阅读优先": "Last opened",
+  "按标题": "Title", "最近修改": "Last modified", "文件列表顺序": "File list order",
+  "导入": "Import", "AI 整理": "AI organize", "第 {0} 页，共 {1} 页": "Page {0} of {1}",
   "文件夹中的论文": "Papers in this folder", "按最近阅读排序": "Last read, newest first", "尚未开始阅读": "Ready to read",
   "导入后在这里整理": "Your folders will appear here", "找到 {0} 篇论文": "{0} matching papers", "{0} 篇论文": "{0} papers",
   "没有找到匹配的论文": "No matching papers", "还没有阅读记录": "No reading history yet",

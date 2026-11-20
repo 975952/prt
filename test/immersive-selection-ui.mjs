@@ -1,4 +1,5 @@
 /** Short real mouse drags on freshly rendered and prefetched book pages. */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -33,7 +34,7 @@ try {
   });
   await page.goto(base + '/?open=Reading.pdf&topbar=static', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => window.__viewer?.pdf && __state.viewerDocId === __state.doc?.docId);
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => __viewer.immersive && !__viewer._immersiveNavigation);
   await page.evaluate(async () => {
     document.documentElement.dataset.motion = 'off';

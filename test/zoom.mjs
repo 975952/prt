@@ -1,3 +1,4 @@
+import { clickReaderTool } from './_reader-controls.mjs';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, resolveDataDir } from './_env.mjs';
 import fs from 'node:fs';
@@ -171,7 +172,7 @@ console.log('\n-- 按钮与快捷键缩放');
 await startWatch();
 for (const sel of ['#footZoomIn', '#footZoomIn', '#footZoomOut', '#footFitWidth', '#footZoomIn']) {
   // eslint-disable-next-line no-await-in-loop
-  await page.click(sel);
+  await clickReaderTool(page, sel);
   // eslint-disable-next-line no-await-in-loop
   await sleep(160);
 }
@@ -179,7 +180,7 @@ const z2 = await stopWatch();
 check('点缩放按钮 / 适应宽度都不闪灰条', z2.greyFrames === 0 && z2.blankFrames === 0,
   `灰条帧 ${z2.greyFrames}，空白帧 ${z2.blankFrames}`);
 
-console.log('\n-- 拖底栏缩放滑块');
+console.log('\n-- 拖缩放菜单中的滑块');
 await page.evaluate(() => window.__viewer.fitWidth());
 await sleep(700);
 const centerPage = () => page.evaluate(() => {

@@ -40,6 +40,12 @@ try {
     if (!localStorage.getItem('reader.locale')) localStorage.setItem('reader.locale', 'zh-CN');
   });
   page.on('pageerror', e => errors.push(String(e)));
+  page.on('console', async msg => {
+    if (msg.type() === 'error' && msg.text().startsWith('[startup]')) {
+      const error = msg.args()[1];
+      errors.push(error ? await error.evaluate(e => e?.stack || String(e)).catch(() => msg.text()) : msg.text());
+    }
+  });
   await page.goto(base, { waitUntil: 'networkidle0' });
   const visible = selector => page.$eval(selector, n => !!n.getClientRects().length);
   const count = () => page.$$eval('#homeList .home-item', nodes => nodes.length);
@@ -52,10 +58,10 @@ try {
   check('empty library guides readers to their first PDF or a conversation', await visible('#homeStartPdf')
     && await visible('#homeStartChat') && !await visible('#homeReadingEntry') && !await visible('#homeOrganize'));
   if (await page.$('#agentWelcomeSkip')) await page.click('#agentWelcomeSkip');
-  check('Library is the single top-level name', await page.$eval('#homeHeading', n => n.textContent === 'Library')
-    && await page.$eval('#homeBtn', n => n.textContent.includes('Library'))
-    && await page.$eval('#docName', n => n.textContent === 'Library'));
-  check('reading toolbar is hidden on home', !(await visible('.viewer-foot')) && !(await visible('#opsBtn')));
+  check('library tab and current collection have distinct names', await page.$eval('#homeHeading', n => n.textContent === '全部论文')
+    && await page.$eval('#homeBtn', n => n.textContent.includes('书架')));
+  check('the single library filter lives in the title bar', await page.$$eval('#homeSearch', nodes => nodes.length === 1 && !!nodes[0].closest('#topbar')));
+  check('reading toolbar is hidden on home', !(await visible('#viewerFoot')) && !(await visible('#opsBtn')));
   await page.screenshot({ path: path.join(scratch, 'empty.png') });
   const fixtureNames = [
     'Transformer 阅读笔记与问题整理.pdf',
@@ -89,13 +95,28 @@ try {
     && !document.querySelector('.home-continue') && document.querySelector('#homeResultCount').hidden
     && getComputedStyle(document.querySelector('#homeList')).display === 'grid'
     && document.querySelector('#homeList .hi-name')?.getClientRects().length
-    && !document.querySelector('#homeList .hi-meta') && document.querySelector('#homeList .hi-status')?.getClientRects().length));
+    && document.querySelector('#homeList .hi-folder')?.getClientRects().length && document.querySelector('#homeList .hi-status')?.getClientRects().length));
   await page.waitForFunction(() => [...document.querySelectorAll('.hi-preview img')].some(img => img.naturalWidth > 0), { timeout: 20000 });
   const loadedBeforeScroll = await page.$$eval('.hi-preview img', nodes => nodes.filter(img => img.naturalWidth > 0).length);
   check('visible paper cards render real first-page PDF thumbnails', loadedBeforeScroll > 0 && loadedBeforeScroll <= papers.length);
   await page.$eval('.home-content', node => node.scrollTo({ top: node.scrollHeight, behavior: 'instant' }));
   await page.waitForFunction(() => [...document.querySelectorAll('.hi-preview img')].every(img => img.naturalWidth > 0), { timeout: 20000 });
   check('scrolling through the grid loads the remaining thumbnails', await page.$$eval('.hi-preview img', nodes => nodes.length === nodes.filter(img => img.naturalWidth > 0).length));
+  check('cards show true reading positions and match sidebar folder colors', await page.evaluate(p => {
+    const card = [...document.querySelectorAll('#homeList .home-item')].find(n => n.dataset.path === p.path);
+    const sidebar = [...document.querySelectorAll('[data-home-folder]')].find(n => n.dataset.homeFolder === p.folder);
+    const color = n => getComputedStyle(n.querySelector('.home-folder-dot')).backgroundColor;
+    const [pageNum, total] = card.querySelector('.hi-status').textContent.split('/').map(Number);
+    return color(card) === color(sidebar) && pageNum === 5 && total > 5 && card.querySelector('.hi-preview').classList.contains('has-progress');
+  }, last));
+  await page.select('#homeSort', 'title');
+  check('title sorting orders the filtered collection', await page.$$eval('#homeList .hi-name', nodes => {
+    const names = nodes.map(n => n.textContent), sorted = [...names].sort(new Intl.Collator('zh-CN', { numeric: true, sensitivity: 'base' }).compare);
+    return names.every((name, i) => name === sorted[i]);
+  }));
+  await page.reload({ waitUntil: 'networkidle0' });
+  check('shelf sort preference is restored on launch', await page.$eval('#homeSort', n => n.value === 'title'));
+  await page.select('#homeSort', 'recent');
   await page.setViewport({ width: 1440, height: 960 });
   await page.$eval('.home-content', node => node.scrollTo({ top: 0, behavior: 'instant' }));
   await page.screenshot({ path: path.join(scratch, 'home-desktop.png') });
@@ -105,7 +126,7 @@ try {
   check('unread filter excludes started papers', await count() === papers.length - readCount && !(await ids()).includes(last.docId));
   check('unread filter has no unrelated continue card', await page.$('.home-continue') === null);
   await page.click('[data-home-folder="计算机视觉"]');
-  check('folder view includes nested folders', await count() === 3);
+  check('folder view identifies its scope and includes nested folders', await count() === 3 && await page.$eval('#homeHeading', n => n.textContent === '计算机视觉'));
   await page.click('[data-home-folder="计算机视觉/子目录"]');
   assert.deepEqual(await ids(), [duplicate.docId]); checks++; console.log('PASS nested folder isolates same-name paper');
   check('folder button keeps keyboard focus', await page.evaluate(() => document.activeElement.dataset.homeFolder === '计算机视觉/子目录'));
@@ -120,7 +141,9 @@ try {
   check('no matches has a reset action', await page.$('.home-reset') !== null && await count() === 0);
   await page.click('.home-reset');
   check('reset restores all papers and clears query', await count() === 6 && await page.$eval('#homeSearch', n => n.value) === '');
-  await page.focus('#homeSearch'); await page.type('#homeSearch', 'Tokens');
+  await zoomKey('k');
+  check('Ctrl+K focuses the library search', await page.evaluate(() => document.activeElement.id === 'homeSearch'));
+  await page.type('#homeSearch', 'Tokens');
   check('typing retains input focus', await page.evaluate(() => document.activeElement.id === 'homeSearch'));
   await page.keyboard.press('Escape');
   check('Escape clears search', await count() === 6);
@@ -153,6 +176,7 @@ try {
   await chooser.cancel();
   for (const theme of ['glass', 'light', 'dark']) {
     await page.evaluate(value => { const select = document.querySelector('#uiTheme'); select.value = value; select.dispatchEvent(new Event('input', { bubbles: true })); }, theme);
+    if (theme === 'dark') await page.$eval('#uiGlassBrightness', n => { n.value = '70'; n.dispatchEvent(new Event('input', { bubbles: true })); });
     check(`${theme} theme applies`, await page.evaluate(() => document.documentElement.dataset.theme) === theme);
     await page.focus('#homeSearch');
     check(`${theme} focused search has no extra frame`, await page.$eval('#homeSearch', input => {
@@ -166,6 +190,13 @@ try {
     await page.setViewport({ width, height: 850 });
     check(`home fits at ${width}px`, await page.evaluate(() => ['#home', '.home-content', '.home-workspace', '.home-list'].every(s => { const n = document.querySelector(s); return n.scrollWidth <= n.clientWidth + 1; })));
     check(`sidebar and main remain usable at ${width}px`, await page.$eval('#homeOpen', n => { const r = n.getBoundingClientRect(); return r.width > 0 && r.right <= innerWidth; }));
+    if (width === 480) {
+      await page.evaluate(() => document.activeElement.blur());
+      await page.click('#topbarWorkspaceSearch .home-search');
+      check('compact search expands from its icon', await page.$eval('#homeSearch', el => document.activeElement === el && el.getBoundingClientRect().width > 100));
+      await page.keyboard.press('Escape');
+      check('empty Escape returns the compact title bar', await page.$eval('#topbarWorkspaceSearch .home-search', el => el.getBoundingClientRect().width <= 40));
+    }
     if (width === 480 || width === 900) await page.screenshot({ path: path.join(scratch, `home-${width}.png`) });
   }
   await page.setViewport({ width: 1440, height: 960 });
@@ -175,7 +206,7 @@ try {
   await page.click(`#homeList [data-id="${last.docId}"] .home-item-go`);
   await page.waitForFunction(() => window.__viewer?.numPages > 0 && window.__state?.viewerDocId === window.__state.doc?.docId);
   check('clicking a recent paper card resumes its saved path and page', await page.evaluate(p => window.__state.doc.docId === p.docId && window.__state.doc.path === p.path && window.__viewer.current === 5, last));
-  check('reading toolbar returns in reader', await visible('.viewer-foot') && await visible('#opsBtn'));
+  check('reading toolbar returns in reader', await visible('#viewerFoot') && await visible('#opsBtn'));
   await page.screenshot({ path: path.join(scratch, 'reader-regression.png') });
   await page.click('.doc-tab.active .tab-close');
   await page.waitForFunction(() => !document.body.classList.contains('reading'));
@@ -200,13 +231,13 @@ try {
   check('removing absent history is harmless', await page.evaluate(() => fetch('/api/state?doc=absent-fixture', { method: 'DELETE' }).then(r => r.json()).then(r => r.ok && r.removed === false)));
   await page.evaluate(() => localStorage.setItem('reader.locale', 'en'));
   await page.reload({ waitUntil: 'networkidle0' });
-  check('English homepage is localized', await page.$eval('#homeHeading', n => n.textContent) === 'Library');
+  check('English homepage is localized', await page.$eval('#homeHeading', n => n.textContent) === 'All papers');
   check('deleted paper stays absent after reload', await page.$(`#homeList [data-path="${last.path}"]`) === null);
   const untranslated = await page.evaluate(() => {
     const out = [], walker = document.createTreeWalker(document.querySelector('#home'), NodeFilter.SHOW_TEXT);
     while (walker.nextNode()) {
       const n = walker.currentNode;
-      if (n.parentElement.closest('.hi-name,.hc-name,.hf-name,[data-home-folder]')) continue;
+      if (n.parentElement.closest('.hi-name,.hi-folder,.hc-name,.hf-name,[data-home-folder],.home-reading-title')) continue;
       if (/[\u3400-\u9fff]/.test(n.textContent) && n.parentElement.getClientRects().length) out.push(n.textContent.trim());
     }
     return out;
@@ -228,8 +259,8 @@ try {
 } catch (error) {
   if (page && !page.isClosed()) {
     await page.screenshot({ path: path.join(scratch, 'failure.png') }).catch(() => {});
-    console.error(await page.evaluate(async () => ({ home: document.querySelector('#home').innerText, toast: document.querySelector('#toastWrap')?.innerText,
-      state: await fetch('/api/state').then(r => r.json()), errors: [] })).catch(() => ({})));
+    console.error(await page.evaluate(async errors => ({ home: document.querySelector('#home').innerText, toast: document.querySelector('#toastWrap')?.innerText,
+      startup: document.querySelector('#startupMessage')?.innerText, state: await fetch('/api/state').then(r => r.json()), errors }), errors).catch(() => ({})));
   }
   console.error('Artifacts:', scratch);
   throw error;

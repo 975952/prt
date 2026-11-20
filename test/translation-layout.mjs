@@ -1,12 +1,14 @@
-/** Real embedded exe: closed sidebar translation card, open sidebar result, and PDF horizontal reach. */
+/** Embedded reader (or --node): translation card, sidebar, and PDF zoom/panning. */
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import puppeteer from 'puppeteer-core';
 
 const root = path.resolve(import.meta.dirname, '..');
+const desktop = !process.argv.includes('--node');
 const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'prt-translation-layout-'));
 const data = path.join(temp, 'data');
 const papers = path.join(temp, 'papers');
@@ -15,26 +17,23 @@ fs.mkdirSync(data);
 fs.mkdirSync(papers);
 fs.copyFileSync(path.join(import.meta.dirname, 'fixtures', 'multipage-sample.pdf'), path.join(papers, sampleName));
 const exe = path.join(temp, 'reader.exe');
-fs.copyFileSync(path.join(root, 'prt.exe'), exe);
-const child = spawn(exe, ['--background'], { windowsHide: true, stdio: 'ignore', env: {
-  ...process.env, PRT_DATA_DIR: data, PRT_PAPERS_DIR: papers, PRT_REQUIRE_TOKEN: '0',
+if (desktop) fs.copyFileSync(path.join(root, 'prt.exe'), exe);
+const probe = http.createServer();
+await new Promise(resolve => probe.listen(0, '127.0.0.1', resolve));
+const port = probe.address().port;
+await new Promise(resolve => probe.close(resolve));
+const child = spawn(desktop ? exe : process.execPath, desktop ? ['--background', '--port', String(port)] : [path.join(root, 'server.js')], { windowsHide: true, stdio: 'ignore', env: {
+  ...process.env, PORT: String(port), NO_OPEN: '1', PRT_DATA_DIR: data, PRT_PAPERS_DIR: papers, PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1',
 } });
 let browser;
 try {
-  let base;
-  // 只认「自己的」服务：papers 里必须有本测试的临时 fixture（Rust 版 /api/papers 不返回 dir 字段，
-  // 所以不能拿目录路径比对）；端口从 8760 起扫，避免用户正在用的实例（8787）被误当成测试服务。
-  for (let i = 0; i < 80 && !base; i++) {
+  const base = `http://127.0.0.1:${port}`;
+  let ready = false;
+  for (let i = 0; i < 80 && !ready; i++) {
     await new Promise((r) => setTimeout(r, 250));
-    for (let port = 8760; port < 8860; port++) {
-      try {
-        const url = `http://127.0.0.1:${port}`;
-        const listing = await fetch(`${url}/api/papers`, { signal: AbortSignal.timeout(150) }).then((r) => r.json());
-        if ((listing.papers || []).some((paper) => paper.name === sampleName)) { base = url; break; }
-      } catch {}
-    }
+    try { ready = (await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(300) })).ok; } catch {}
   }
-  assert.ok(base, 'isolated exe started');
+  assert.ok(ready, 'isolated exe started');
   const embedded = await fetch(`${base}/js/app.js`).then((r) => r.text());
   assert.equal(embedded, fs.readFileSync(path.join(root, 'public/js/app.js'), 'utf8'), 'exe embeds current frontend');
   const configResponse = await fetch(`${base}/api/config`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({
@@ -48,6 +47,7 @@ try {
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: path.join(temp, 'profile'),
     defaultViewport: { width: 1250, height: 850 } });
   const page = await browser.newPage();
+  await page.evaluateOnNewDocument(() => localStorage.setItem('reader.agent.welcome.v1', 'acknowledged'));
   const errors = [];
   let chatCount = 0;
   page.on('pageerror', (e) => errors.push(String(e)));
@@ -61,10 +61,8 @@ try {
       `data: ${JSON.stringify({ choices: [{ delta: { content: piece } }] })}\n\n`).join('') + 'data: [DONE]\n\n';
     return req.respond({ status: 200, contentType: 'text/event-stream; charset=utf-8', body: sse });
   });
-  await page.goto(base, { waitUntil: 'domcontentloaded' });
-  await page.waitForSelector('#fileList li');
-  await page.evaluate(() => document.querySelector('#fileList li').click());
-  await page.waitForFunction(() => window.__viewer?.pdf && document.querySelector('.page .textLayer span')
+  await page.goto(`${base}/?open=${encodeURIComponent(sampleName)}`, { waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => !document.documentElement.hasAttribute('data-startup') && window.__viewer?.pdf && document.querySelector('.page .textLayer span')
     && window.__state.viewerDocId === window.__state.doc?.docId && document.body.classList.contains('reading'));
   // Establish this case's closed-sidebar precondition instead of relying on a product default.
   if (await page.$eval('#rightCols', el => el.getBoundingClientRect().width > 0)) {
@@ -72,6 +70,18 @@ try {
     await page.waitForFunction(() => document.querySelector('#rightCols').getBoundingClientRect().width === 0);
   }
   const select = async (start, end, action = 'translate') => {
+    // Let sidebar animation and PDF fit-width finish before taking a DOM range:
+    // the render pass replaces text spans and invalidates an earlier selection.
+    await page.evaluate(() => { window.__selectionLayout = null; });
+    await page.waitForFunction(() => {
+      const viewer = window.__viewer, box = viewer.pageEls[1].getBoundingClientRect();
+      const key = [box.x, box.y, box.width, box.height, viewer.scale].join(',');
+      if (viewer.renderTasks.size || viewer._viewportResizing || window.__selectionLayout?.key !== key) {
+        window.__selectionLayout = { key, since: performance.now() };
+        return false;
+      }
+      return performance.now() - window.__selectionLayout.since > 350;
+    });
     await page.evaluate((a, b) => {
       const spans = [...document.querySelectorAll('.page[data-page="1"] .textLayer span')]
         .filter((s) => s.firstChild?.nodeType === Node.TEXT_NODE && s.textContent.trim().length > 3);
@@ -83,7 +93,7 @@ try {
       selection.addRange(range);
       document.querySelector('#viewer').dispatchEvent(new MouseEvent('mouseup', { bubbles: true }));
     }, start, end);
-    await page.waitForSelector('#bubble:not(.hidden)');
+    await page.waitForSelector(`#bubble:not(.hidden) [data-act="${action}"]`, { visible: true });
     await page.click(`#bubble [data-act="${action}"]`);
   };
   const widthBefore = await page.$eval('#viewer', (el) => el.clientWidth);
@@ -139,7 +149,7 @@ try {
   assert.ok(enlarged.width > beforeResize.width + 100 && enlarged.height > beforeResize.height + 130);
   console.log('PASS translation card: corner drag changes width and height');
   await page.$eval('#translationCardText', el => { el.textContent = 'Long translated content. '.repeat(600); });
-  assert.ok(await page.$eval('#translationCardText', el => el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === 'auto'));
+  assert.ok(await page.$eval('#translationCard .reading-card-body', el => el.scrollHeight > el.clientHeight && getComputedStyle(el).overflowY === 'auto'));
   console.log('PASS long translations scroll within the resized card');
   await page.focus('#translationCardResize');
   await page.keyboard.press('ArrowLeft'); await page.keyboard.press('ArrowUp');
@@ -246,7 +256,8 @@ try {
   console.log('PASS rapid pinch events: coalesced into smooth display frames');
   const savedSize = await page.evaluate(() => JSON.parse(localStorage.getItem('reader.translationCardSize.v1')));
   await page.goto(`${base}/?open=${encodeURIComponent(sampleName)}`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.__viewer?.pdf && document.querySelector('.page[data-page="1"] .textLayer span') && document.body.classList.contains('reading'));
+  await page.waitForFunction(() => !document.documentElement.hasAttribute('data-startup') && window.__viewer?.pdf
+    && document.querySelector('.page[data-page="1"] .textLayer span') && document.body.classList.contains('reading'));
   if (await page.$eval('#rightCols', el => el.getBoundingClientRect().width > 0)) await page.click('#topbarRightToggle');
   await page.waitForFunction(() => document.querySelector('#rightCols').getBoundingClientRect().width === 0);
   await select(1, 3);

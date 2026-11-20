@@ -1,4 +1,5 @@
 /** Clicking the spread dismisses visible cards one at a time before turning. */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -53,7 +54,7 @@ try {
     __viewer.setTwoUp(true);
     await __viewer.goToPage(3);
   });
-  await page.click('#immersiveBtn');
+  await clickReaderTool(page, '#immersiveBtn');
   await page.waitForFunction(() => __viewer.immersive && document.body.classList.contains('immersive-reading'));
   const openTool = async selector => {
     await page.mouse.move(750, 2);

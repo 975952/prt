@@ -1,4 +1,5 @@
 /** Global background brightness through real controls; isolated files and no model calls. */
+import { clickReaderTool } from './_reader-controls.mjs';
 import assert from 'node:assert/strict';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -104,7 +105,7 @@ try {
   assert.deepEqual(await blankPixel(), [34, 36, 38, 255], 'normal PDF canvas follows background brightness');
   assert.equal(await page.$eval('#rightSide', node => getComputedStyle(node).color), inkColor, 'background brightness does not dim text');
   await set('uiGlassBrightness', '0'); await renderedPaper('#000000');
-  await page.click('#immersiveBtn'); await page.waitForFunction(() => __viewer.immersive);
+  await clickReaderTool(page, '#immersiveBtn'); await page.waitForFunction(() => __viewer.immersive);
   await renderedPaper('#000000');
   assert.equal(await page.$eval('#viewer', node => getComputedStyle(node).backgroundColor), 'rgb(0, 0, 0)');
   assert.deepEqual(await blankPixel(), [0, 0, 0, 255], 'book canvas is pure black');
@@ -123,7 +124,8 @@ try {
 
   await set('uiGlassBrightness', '40'); await renderedPaper('#0e0e0f');
   await page.reload({ waitUntil: 'domcontentloaded' }); await renderedPaper('#0e0e0f');
-  await page.click('#settingsBtn'); await page.click('#settingsNavAppearance');
+  await page.waitForFunction(() => !document.querySelector('#startupStatus'));
+  await page.locator('#settingsBtn').click(); await page.locator('#settingsNavAppearance').click();
   assert.equal(await page.$eval('#uiGlassBrightness', node => node.value), '40');
   assert.equal(await page.$eval('#uiGlassBrightnessValue', node => node.textContent.trim()), '40%');
   assert.equal(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.appearanceVersion), 4);
@@ -135,7 +137,7 @@ try {
   await set('uiGlassBrightness', '100');
   const lightHigh = await pixel('#viewer', 'top');
   assert.ok(lightLow.every(v => v > 190) && lightHigh.some((v, i) => v > lightLow[i]), 'light theme stays readable throughout the normalized range');
-  await page.click('#immersiveBtn'); await page.waitForFunction(() => __viewer.immersive && !__viewer.renderTasks.size);
+  await clickReaderTool(page, '#immersiveBtn'); await page.waitForFunction(() => __viewer.immersive && !__viewer.renderTasks.size);
   const bookSurface = () => page.evaluate(() => ({
     viewport: getComputedStyle(__viewer.container).backgroundColor,
     page: getComputedStyle(__viewer.pageEls[__viewer.current]).backgroundColor,

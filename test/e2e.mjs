@@ -1,3 +1,4 @@
+import { clickReaderTool } from './_reader-controls.mjs';
 import puppeteer from 'puppeteer-core';
 import { assertIsolatedDataDir, resolveDataDir } from './_env.mjs';
 import fs from 'node:fs';
@@ -307,6 +308,7 @@ const minDensity = (dpr) => 0.9 * Math.min(dpr, 2);
 const fit = await sharp();
 check('适应宽度下像素密度跟得上屏幕（≥ 0.9×dpr）',
   fit && fit.density >= minDensity(fit.dpr) - 1e-6, JSON.stringify(fit));
+await page.click('#readerZoom');
 await page.evaluate(() => { for (let i = 0; i < 8; i++) document.getElementById('footZoomIn').click(); });
 await sleep(2500);
 const zoomed = await sharp();
@@ -318,7 +320,7 @@ check('高倍下限制单页 canvas 面积（走切片）', zoomed && zoomed.mp 
 
 await page.evaluate(() => { document.getElementById('footZoomIn').click(); document.getElementById('footZoomOut').click(); });
 await sleep(200);
-await page.click('#footFitWidth');
+await clickReaderTool(page, '#footFitWidth');
 await sleep(2500);
 const raceOk = await page.evaluate(() => {
   const vr = document.getElementById('viewer').getBoundingClientRect();
@@ -328,6 +330,7 @@ const raceOk = await page.evaluate(() => {
 check('渲染中缩放不会留下空白页', raceOk.has && raceOk.n > 0, `可见页 canvas=${raceOk.has}`);
 
 console.log('\n▶ 独立的大小调节…');
+await page.click('#readerZoom');
 await page.evaluate(() => {
   const r = document.getElementById('zoomRange');
   r.value = '250';
@@ -337,7 +340,7 @@ await sleep(1800);
 const slider = await page.evaluate(() => ({ label: document.getElementById('zoomLabel').textContent, scale: Math.round(window.__viewer.scale * 100), max: Number(document.getElementById('zoomRange').max) }));
 check('拖动滑块能改 PDF 大小', slider.scale === 250, `label=${slider.label}`);
 check('滑块上限够用', slider.max >= 300, `${slider.max}%`);
-await page.click('#footFitWidth');
+await clickReaderTool(page, '#footFitWidth');
 await sleep(1500);
 
 console.log('\n▶ 划词与选区…');
@@ -888,12 +891,9 @@ const resetApplied = await page.evaluate(() => {
 check('「恢复默认设置」一个按钮把主题与阅读字号拨回默认',
   resetApplied.select === 'system' && resetApplied.theme === '(跟随系统)' && !!resetApplied.range,
   JSON.stringify(resetApplied));
-const topbarCore = new Set(['prevPage', 'pageInput', 'nextPage', 'returnPosition', 'zoomOut', 'zoomRange', 'zoomIn', 'fitWidth', 'homeBtn', 'opsBtn', 'regionBtn', 'searchBtn', 'settingsBtn',
-  'topbarLeftToggle', 'topbarRightToggle', 'windowMinimize', 'windowMaximize', 'windowClose']);
-check('顶栏只剩核心控件 + 标题栏按钮，且删掉的入口没有回来',
-  ui.topbar.includes('returnPosition')
-    && ui.topbar.every((id) => topbarCore.has(id))
-    && !ui.topbar.some((id) => ['scanBtn', 'panelBtn', 'exportBtn', 'dockBtn'].includes(id)),
+check('标题栏包含工作区、书架筛选和窗口操作，阅读控件位于画布',
+  ['homeBtn', 'homeAgent', 'homeSearch', 'settingsBtn', 'fullscreenBtn', 'windowClose'].every(id => ui.topbar.includes(id))
+    && !ui.topbar.some((id) => ['pageInput', 'zoomRange', 'opsBtn', 'searchBtn', 'scanBtn', 'panelBtn', 'exportBtn', 'dockBtn'].includes(id)),
   ui.topbar.join(' '));
 await page.evaluate(() => { document.getElementById('cfgModel').value = 'deepseek-chat'; });
 await page.click('#saveSettings');
@@ -1071,7 +1071,7 @@ check('用户/助手消息区分清晰（用户圆标+气泡，助手无圆标�
   `用户 ava=${look.userHasAva} 气泡=${look.userHasBubble} ｜ 助手 无圆标=${look.assistantNoAva} 有动作条=${look.assistantHasActs}`);
 check('用户消息有独立底色气泡', look.userHasBubble, look.userBg);
 
-await page.evaluate(() => document.getElementById('footFitWidth').click());
+await clickReaderTool(page, '#footFitWidth');
 await sleep(1500);
 await page.screenshot({ path: path.join(OUT, 'reader-light.png') });
 await page.emulateMediaFeatures([{ name: 'prefers-color-scheme', value: 'dark' }]);

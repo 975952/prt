@@ -6,11 +6,12 @@ import { createAgentSettings } from './agent-settings.js';
 import { createAgentMotion } from './agent-motion.js';
 import { windowStorage } from './window-storage.js';
 import { initAgentResize } from './agent-resize.js';
+import { createAgentSources } from './agent-sources.js';
 
 /** UI only: the caller owns conversation scope, persistence, and document navigation. */
 export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, onOpenPapers,
-  onContinue, onRestore, onNew, onStartSearch, onResume, onHistory, onLanding, onSessionSelect, onSettings,
-  getPapers = () => [], onNameChange, onProfileChange, onConfigureModel } = {}) {
+  onContinue, onRestore, onNew, onStartSearch, onResume, onHistory, onMoveCurrent, onLanding, onSessionSelect, onSettings,
+  getPapers = () => [], describeSourcePaper, onNameChange, onProfileChange, onConfigureModel } = {}) {
   const byId = id => document.getElementById(id);
   const ui = Object.fromEntries(['agentBtn', 'homeAgent', 'agentIdentity', 'agentNameDisplay', 'agentExpand', 'agentPapersToggle', 'agentLandingBack',
     'agentLanding', 'agentLaunchActions', 'agentStartSearch', 'agentResume', 'agentHistory', 'agentRecentTitle', 'chatInput',
@@ -23,6 +24,9 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   const readingEntry = byId('agentReadingEntry');
   const readingFoot = readingEntry.parentElement;
   initAgentResize(byId('agentNav'), readingFoot);
+  const sources = createAgentSources({ area: ui.aiArea, side: ui.rightSide,
+    heading: byId('agentChatHeading'), panel: byId('agentSources'), describePaper: describeSourcePaper });
+  byId('agentChatMove').addEventListener('click', event => onMoveCurrent?.(event.currentTarget));
   let entryAnimation = null;
   const sidebarKey = 'reader.agent.sidebarCollapsed';
   let sidebarCollapsed = false;
@@ -124,8 +128,11 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
       ui.agentRecentTitle.textContent = title || tr('还没有历史会话');
       ui.agentRecentTitle.title = title;
       ui.agentRecentTitle.hidden = false;
+      const detail = ui.agentResume.querySelector('.agent-resume-detail');
+      detail.textContent = options.recentDetail || '';
     }
     document.body.classList.toggle('agent-landing', landing);
+    sources.setActive(view === 'full' && !landing);
     ui.agentNavNew.setAttribute('aria-current', landing ? 'page' : 'false');
     ui.agentLanding.hidden = !landing; ui.agentLaunchActions.hidden = !landing;
     const entryHome = landing ? ui.agentLaunchActions : readingFoot;
@@ -208,6 +215,7 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
     ui.agentBtn.setAttribute('aria-current', next === 'full' ? 'page' : 'false');
     ui.homeAgent.setAttribute('aria-current', next === 'full' ? 'page' : 'false');
     if (next !== 'full') setLanding(false);
+    sources.setActive(next === 'full' && !landing);
     if (next !== 'full') closePapers();
     closeName();
     if (next === 'closed') hideHandoff();
@@ -222,12 +230,22 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   function setRecentConversations(rows = [], selectedSid = '') {
     const list = rows.filter(row => !row.archived && row.count > 0)
       .sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0)).slice(0, 7);
-    ui.agentNavRecent.replaceChildren(...(list.length ? list.map(row => el('button', {
-      type: 'button', class: 'agent-nav-session', text: row.title || tr('新会话'),
-      title: row.title || tr('新会话'), dataset: { agentSession: row.sid },
-      'aria-current': !landing && row.sid === selectedSid ? 'page' : 'false',
-      onclick: () => act(onSessionSelect, row),
-    })) : [el('p', { class: 'agent-nav-empty', text: tr('对话会出现在这里') })]));
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const week = new Date(today); week.setDate(week.getDate() - (week.getDay() + 6) % 7);
+    const children = [];
+    let lastGroup = '';
+    for (const row of list) {
+      const stamp = Number(row.updatedAt) || 0;
+      const group = stamp >= today ? tr('今天') : stamp >= week ? tr('本周') : tr('更早');
+      if (group !== lastGroup) children.push(el('h3', { class: 'agent-recent-group', text: group }));
+      lastGroup = group;
+      const label = row.title || tr('新会话');
+      children.push(el('button', { type: 'button', class: 'agent-nav-session', title: label,
+        dataset: { agentSession: row.sid }, 'aria-current': !landing && row.sid === selectedSid ? 'page' : 'false',
+        onclick: () => act(onSessionSelect, row) }, iconEl('chat', { size: 15 }), el('span', { text: label })));
+    }
+    ui.agentNavRecent.replaceChildren(...(children.length ? children :
+      [el('p', { class: 'agent-nav-empty', text: tr('对话会出现在这里') })]));
     ui.agentNavRecent.parentElement.hidden = false;
     disabled();
   }
@@ -397,5 +415,6 @@ export function createAgentWorkspace({ onOpen, onBack, onExpand, onOpenPaper, on
   return { setView, setName, setProfile, setLanding, setTransitioning, showHandoff, hideHandoff, showNameSetup,
     hasProfileDraft: settings.isDirty, resetProfileDraft: settings.reset,
     closeNameSetup: () => closeName(), closePapers, refreshPapers, captureRect, animateFrom, setRecentConversations,
+    showAnswerSources: sources.showAnswer,
     beginPaperMotion: node => motion.begin(node), endPaperMotion: motion.end, revealReader: motion.revealReader, transitionLayout };
 }
