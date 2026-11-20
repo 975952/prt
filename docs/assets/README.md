@@ -4,7 +4,9 @@
 
 [中文项目海报](prt-overview-zh.png) 用正态分布曲线举例说明截图提问与页码引用。下方为实际界面截图。
 
-中英文项目首页的三张截图取自 2026-11-20 的桌面构建，分别展示书架（`library-*`）、Alina 独立工作区（`alina-*`）和阅读区（`reader-*`）。书架使用独立演示数据，阅读区展示公开论文与预先编写的图解。
+中英文首页均使用桌面程序的深色主题。书架缩略图取自六篇公开论文的 PDF 首页；Alina 输入框展示对两篇视觉 Transformer 论文的示例提问；阅读区展示《Attention Is All You Need》第 3 页的 Figure 1，旁边是预先编写的图解。
+
+截图书架中的论文可从 arXiv 获取：[Attention Is All You Need](https://arxiv.org/abs/1706.03762)、[ViT](https://arxiv.org/abs/2010.11929)、[Tokens-to-Token ViT](https://arxiv.org/abs/2101.11986)、[ResNet](https://arxiv.org/abs/1512.03385)、[Squeeze-and-Excitation Networks](https://arxiv.org/abs/1709.01507)、[BERT](https://arxiv.org/abs/1810.04805)。
 
 以下为 v1.2.5 的界面与主题截图。
 

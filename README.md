@@ -42,7 +42,7 @@ PPT/PPTX 导入通过 **Windows 本机已安装的 Microsoft PowerPoint 转换�
 
 ![书架首页：继续阅读、文件夹与搜索](docs/assets/library-zh.png)
 
-<sub>书架使用演示资料。[截图说明](docs/assets/README.md)</sub>
+<sub>深色主题下的书架，封面来自 ViT、ResNet 等六篇公开论文的原始 PDF。[论文来源与截图说明](docs/assets/README.md)</sub>
 
 ## Library、Alina 与阅读区
 

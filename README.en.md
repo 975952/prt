@@ -36,7 +36,7 @@ PPT/PPTX import requires **Microsoft PowerPoint installed locally on Windows** t
 
 ![Library with folders, search, and recently read papers](docs/assets/library-en.png)
 
-<sub>The library uses demonstration data. [Screenshot details](docs/assets/README.md).</sub>
+<sub>The library in dark mode, with first-page previews from six public papers including ViT and ResNet. [Papers and screenshot details](docs/assets/README.md).</sub>
 
 ## Library, Alina, and the reader
 
