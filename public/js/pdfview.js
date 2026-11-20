@@ -980,7 +980,7 @@ export class PdfViewer {
   stepPage(delta) {
     // Resolve relative navigation only after the preceding turn has landed.
     // Several clicks in one render frame must not all target the same spread.
-    if (this._immersive) return this._queueImmersiveNavigation(() => this._rowStartOf(this.current) + delta * 2);
+    if (this._immersive) return this._queueImmersiveNavigation(() => this._rowStartOf(this.current) + delta * this.immersivePageCount);
     const cur = this.current || 1;
     if (!this._twoUp) return this.goToPage(cur + delta);
     const start = this._rowStartOf(cur);
@@ -988,6 +988,8 @@ export class PdfViewer {
   }
 
   get immersive() { return this._immersive; }
+  get immersivePresentation() { return this._immersive && !!this._immersivePresentation; }
+  get immersivePageCount() { return this.immersivePresentation ? 1 : 2; }
 
   _clearImmersiveOverlays() {
     this._immersiveFlip?.();
@@ -1003,6 +1005,7 @@ export class PdfViewer {
     if (this._immersiveRestore) this._twoUp = this._immersiveRestore.twoUp;
     this._immersiveRestore = null;
     this._immersive = false;
+    this._immersivePresentation = false;
     this.container.classList.remove('immersive-viewport');
     this.pagesEl?.classList.remove('immersive-spread', 'immersive-last-single');
     for (const page of this.pageEls) page?.classList.remove('immersive-hidden');
@@ -1034,7 +1037,11 @@ export class PdfViewer {
         page: this.current, anchor: this._captureAnchor(), scrollTop: this.container.scrollTop, scrollLeft: this.container.scrollLeft,
         width: this.container.clientWidth, height: this.container.clientHeight };
       this._immersive = true;
-      this._twoUp = true;
+      // Use PDF viewport dimensions (including rotation), not the filename or
+      // window shape. Keep this choice for the session even with mixed sizes.
+      const size = await this._measurePageSize(this.current || 1);
+      this._immersivePresentation = !!size && size.width / size.height >= 1.2;
+      this._twoUp = !this._immersivePresentation;
       this._applyTwoUpClass();
       this.container.classList.add('immersive-viewport');
       this.pagesEl.classList.add('immersive-spread');
@@ -1063,10 +1070,11 @@ export class PdfViewer {
 
   fitImmersive() {
     if (!this._immersive || !this.pdf || !this.pagesEl || !this.container.clientWidth || !this.container.clientHeight) return;
-    const start = this._rowStartOf(this.current), end = Math.min(start + 1, this.numPages);
+    const start = this._rowStartOf(this.current), end = Math.min(start + this.immersivePageCount - 1, this.numPages);
     const first = this._sizeOf(start), second = this._sizeOf(end);
     const width = this.container.clientWidth, height = this.container.clientHeight;
-    const nextScale = Math.max(.025, Math.min((width - 12) / (first.width + second.width), (height - 8) / Math.max(first.height, second.height), 6));
+    const contentWidth = this.immersivePresentation ? first.width : first.width + second.width;
+    const nextScale = Math.max(.025, Math.min((width - 12) / contentWidth, (height - 8) / Math.max(first.height, second.height), 6));
     const changed = Math.abs(this.scale - nextScale) > .001;
     this.scale = nextScale;
     this._fitMode = true;
@@ -1118,16 +1126,19 @@ export class PdfViewer {
     const valid = () => revision === this._immersiveRevision && gen === this._gen && this._immersive;
     const motionSetting = document.documentElement.dataset.motion;
     const motion = motionSetting === 'on' || (motionSetting !== 'off' && !window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-    const turning = animate && motion && start !== oldStart;
+    const turning = !this.immersivePresentation && animate && motion && start !== oldStart;
     const forward = start > oldStart;
     const staticPage = turning ? this._snapshotImmersivePage(oldStart + (forward ? 0 : 1)) : null;
     const leaf = turning ? this._snapshotImmersivePage(oldStart + (forward ? 1 : 0)) : null;
+    // Slides switch as a whole; hold the previous bitmap until the next page
+    // finishes rendering, without creating a book curl or a second leaf.
+    if (this.immersivePresentation && start !== oldStart) this._snapshotImmersivePage(oldStart);
     try {
       await this._ensureSizesAround(target, 2);
       if (!valid()) return;
       this.current = target;
       this.fitImmersive();
-      const end = Math.min(start + 1, this.numPages);
+      const end = Math.min(start + this.immersivePageCount - 1, this.numPages);
       await Promise.all(Array.from({ length: end - start + 1 }, async (_, index) => {
         const pageNumber = start + index;
         await this.renderTasks.get(pageNumber);
@@ -1214,7 +1225,7 @@ export class PdfViewer {
     const visible = this.container.clientWidth > 0 && this.container.clientHeight > 0;
     const anchor = keepAnchor && visible && !this._immersive ? this._captureAnchor() : null;
     const spreadStart = this._rowStartOf(this.current);
-    const lastSingle = this._immersive && spreadStart === this.numPages && this.numPages % 2 === 1;
+    const lastSingle = this._immersive && !this.immersivePresentation && spreadStart === this.numPages && this.numPages % 2 === 1;
     this.pagesEl.classList.toggle('immersive-last-single', lastSingle);
     if (lastSingle) {
       const size = this._sizeOf(spreadStart);
@@ -1225,7 +1236,7 @@ export class PdfViewer {
       const { width, height } = this._sizeOf(i);
       const page = this.pageEls[i];
       if (!page) continue;
-      page.classList.toggle('immersive-hidden', this._immersive && (i < spreadStart || i > spreadStart + 1));
+      page.classList.toggle('immersive-hidden', this._immersive && (i < spreadStart || i >= spreadStart + this.immersivePageCount));
       page.style.width = `${Math.round(width * this.scale)}px`;
       page.style.height = `${Math.round(height * this.scale)}px`;
       page.style.setProperty('--total-scale-factor', String(this.scale));
@@ -1883,7 +1894,7 @@ export class PdfViewer {
   /* ------------------------------------------------- 虚拟化渲染 */
 
   _visibleRange() {
-    if (this._immersive) { const start = this._rowStartOf(this.current); return [start, Math.min(start + 1, this.numPages)]; }
+    if (this._immersive) { const start = this._rowStartOf(this.current); return [start, Math.min(start + this.immersivePageCount - 1, this.numPages)]; }
     const top = this.container.scrollTop;
     const viewH = this.container.clientHeight;
     const bottom = top + viewH;
@@ -3043,7 +3054,7 @@ export class PdfViewer {
     const highPage = endpoints.length === 2 ? Math.max(...endpoints) : this.numPages;
     const spread = this._immersive ? this._rowStartOf(this.current) : null;
     const runs = [...this.rendered.keys()].filter((page) => page >= lowPage && page <= highPage
-      && (spread === null || page >= spread && page <= spread + 1)).sort((a, b) => a - b)
+      && (spread === null || page >= spread && page < spread + this.immersivePageCount)).sort((a, b) => a - b)
       .flatMap((page) => this._selectionRunsForPage(page));
     const indices = new Map(runs.map((run, index) => [run.node, index]));
     const point = (node, offset) => indices.has(node) ? { index: indices.get(node), offset } : null;
