@@ -2,11 +2,11 @@
 
 # prt
 
-**Read the paper. Understand the ideas.**
+**From exam revision to research papers, ask beside the source.**
 
 [简体中文](README.md) · **English**
 
-A local PDF reader for Windows: organize papers and books in Library, find material and ask cross-file questions with Alina, then return to the original for page references, translation, and notes. Available as an installer or portable app, with your files stored locally.
+A study and reading workspace for Windows. Organize PDF handouts, PowerPoint slides, books, and research papers; translate, ask questions, and take notes while reading. Alina helps find material, explain concepts, and answer questions across files, with page references that lead back to the source.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
@@ -14,6 +14,25 @@ A local PDF reader for Windows: organize papers and books in Library, find mater
 [Download installer](https://github.com/975952/prt/releases/latest/download/prt-setup.exe) · [Portable app](https://github.com/975952/prt/releases/latest/download/prt.exe) · [Quick start](docs/quick-start.en.md) · [Report an issue](https://github.com/975952/prt/issues/new/choose)
 
 </div>
+
+When a paper or slide is hard to follow, you often copy text or take a screenshot, switch to an AI app, then return to find your place. Exam revision adds another round of searching through handouts and slide decks. prt brings reading, AI questions, and document organization into one workspace, keeping the source beside the discussion.
+
+> **Version note:** The features below describe the current `main` source branch. The published installer is [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0) and does not include later additions such as PowerPoint import and Book view. [Build from source](docs/开发指南.md) to try the latest code; use each Release's notes to check its packaged features.
+
+## Main features
+
+| Use case | In prt |
+| --- | --- |
+| **Exam revision** | Import PDF handouts and PPT/PPTX slides, ask AI to organize concepts and explain difficult passages, and discuss several documents together |
+| **Document organization** | Keep course material, books, and papers in one library; preview and adjust AI classification before moving files, with organization history you can roll back |
+| **Research reading** | Translate selections, explain passages, and ask whole-document questions; select screenshots or long captures to discuss equations, figures, and scanned pages |
+| **Cross-file search and comparison** | Search a document, folder, or the whole library; ask cross-file questions with separate page references, jump to the source, and compare documents in tabs or tiled windows |
+| **Paper and reference lookup** | Find local papers by title, research topic, or a description; search online, browse references, and manually import online results that have an available PDF link |
+| **Notes and conversations** | Highlight, take notes, save translations, and organize conversations per document, folder, or globally, with saved drafts and reading positions |
+| **A personal AI assistant** | Chat with Alina outside the reader, use learning memory to adapt explanations, and optionally customize the assistant's name, personality, and communication style |
+| **Reading comfort** | Continuous reading, two-page Book view, and single-page landscape slides; Glass, Rice paper, and Dark themes, Chinese/English UI, and separate answer and translation languages |
+
+PPT/PPTX import requires **Microsoft PowerPoint installed locally on Windows** to convert slides to PDF for reading; it does not provide native slide editing. AI features use your configured model service. Figures, screenshots, and scanned-page questions require a vision-capable model.
 
 ![prt library home with search, folders, and continue reading](docs/assets/home-english.png)
 
@@ -25,28 +44,15 @@ Start in Library by default, or choose the reader or Alina in settings. Alina pl
 
 PDF organization uses filenames first, then first-page text or images when needed. It proposes flat topic folders, groups similar documents, and preserves existing organization where appropriate. Each classification replaces previous suggestions; files move only after preview and confirmation. Library has a resizable sidebar and shares Alina's dark background.
 
-Saving model changes tests the connection immediately; saving unchanged settings closes the dialog. Source citations show the full document title and page number, with a link back to the original.
+Source citations show the full document title and page number, with a link back to the original. Chat with Alina in its own workspace or beside the document, and continue discussions per document, folder, or globally.
 
-The separate **Book view** mode shows a fixed two-page spread fullscreen with a realistic page fold. Click the left or right half to turn pages; toolbars hide automatically. Translation and chat use movable floating cards, with saved translation history, source comparison, copying, and notes. Ordinary F11 fullscreen keeps the continuous reading layout.
+The separate **Book view** mode uses a two-page spread with a realistic page fold for portrait documents and a single page for landscape slides. Toolbars hide automatically. Translation and chat use movable floating cards, with saved translation history, source comparison, copying, and notes. Ordinary F11 fullscreen keeps the continuous reading layout.
 
 Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach. During reading, use the top-bar Home button to browse the library, then select a tab to return with its reading position, zoom, and background generation preserved.
 
 ![prt reading workspace with a paper and an illustrative answer](docs/assets/reading-english.png)
 
 <sub>Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762). The answer is illustrative.</sub>
-
-## A workspace for reading
-
-| Task | In prt |
-| --- | --- |
-| Find your next paper | Library search, recent and unread filters, folders, and continue reading |
-| Compare papers | Tabs across folders, separate windows, window tiling, saved reading positions, and restored tab order after reload |
-| Understand a passage | Selection translation, explanations, source comparison, direct deletion of individual results, and clickable citations |
-| Discuss figures | Screenshot selection, long captures, vision-model questions, equations, and tables |
-| Continue a discussion | Per-paper, shared folder, or global conversations; background generation, cross-window sync, and saved drafts |
-| Keep your bearings | Full-text search, outlines, highlights, notes, and reference lookup |
-| Read comfortably | Fit width fills the reading area, fullscreen keeps navigation visible, and Glass, Rice paper, and Dark themes offer adjustable materials |
-| Choose your language | Simplified Chinese and English throughout the interface; separate answer and translation languages |
 
 ## Get started
 
@@ -57,7 +63,7 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 
 Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required; the installer checks for the runtime. Node.js is not needed. For an app that runs without installation, download **prt.exe** into a writable folder. You supply your own model service; provider charges may apply.
 
-**Current release:** [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0). Adds a Windows setup wizard, Start menu and desktop shortcuts, upgrades, and an uninstaller. The installed app keeps program files separate from papers and conversation data. Upgrades preserve your files, and uninstalling keeps personal data. During first installation, you can select a portable copy to copy its papers, settings, and conversations; the original folder remains intact.
+**Published release:** [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0). Provides a Windows setup wizard, Start menu and desktop shortcuts, upgrades, and an uninstaller. The installed app keeps program files separate from papers and conversation data. Upgrades preserve your files, and uninstalling keeps personal data. During first installation, you can select a portable copy to copy its papers, settings, and conversations; the original folder remains intact. New source features are not automatically included in an already published installer.
 
 Switching between folders keeps open tabs, and reloading restores their order. Fullscreen keeps the tab bar and Home button visible, and generation continues while you browse Home. **Fit width** fills the available reading area and adapts when sidebars or window size change.
 

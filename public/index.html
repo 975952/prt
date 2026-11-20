@@ -559,32 +559,64 @@
         </section>
         <section class="settings-pane hidden" id="settingsPaneAgent" data-pane="agent" role="tabpanel" aria-labelledby="settingsNavAgent">
           <div class="settings-pane-title">智能体</div>
-          <div class="settings-pane-sub">名字与交流方式，在所有对话中共用。</div>
+          <div class="settings-pane-sub">为每一次对话，添一点你喜欢的个性。</div>
           <form id="agentProfileForm" class="agent-settings-form">
-            <label class="agent-role-toggle"><input id="agentRoleEnabled" type="checkbox" /><span>启用角色模式</span></label>
-            <p class="modal-note">关闭时直接正常提问；开启并保存后，在所有对话中使用这张角色卡。关闭不会删除设定。</p>
-            <details class="agent-card-builder" id="agentCardBuilder">
-              <summary>让 AI 帮我设定</summary>
-              <p class="modal-note">先一步步聊聊你的偏好，最后把整段对话一起交给 AI 生成角色卡。也可以直接粘贴已有对话，或随时提前生成。</p>
-              <div id="agentCardConversation" class="agent-card-conversation" role="log" aria-label="角色设定对话" aria-live="polite"></div>
-              <label class="field" for="agentCardInput"><span>你的偏好</span><textarea id="agentCardInput" maxlength="6000" rows="3" placeholder="例如：我想要一个温柔但不一味附和的女性助手，回答简洁，像学习搭档"></textarea></label>
-              <div class="agent-settings-actions">
-                <button type="button" class="model-profile-button" id="agentCardAsk">让 AI 询问我</button>
-                <button type="button" class="model-profile-button" id="agentCardSend">发送</button>
-                <button type="button" class="model-profile-button" id="agentCardGenerate">生成角色卡</button>
-                <button type="button" class="model-profile-button" id="agentCardStop" hidden>停止</button>
-                <button type="button" class="model-profile-button" id="agentCardClear">清空设定对话</button>
+            <label class="agent-mode-card" id="agentModeCard">
+              <span class="agent-mode-symbol" aria-hidden="true">✦</span>
+              <span class="agent-mode-copy"><strong id="agentModeLabel">AI 人格模式</strong><span id="agentModeHint">开启并保存，让角色的性格与说话风格融入所有对话。关闭后仍保留角色卡。</span></span>
+              <input id="agentRoleEnabled" type="checkbox" role="switch" aria-labelledby="agentModeLabel" aria-describedby="agentModeHint" />
+              <span class="agent-mode-switch" aria-hidden="true"></span>
+            </label>
+            <section id="agentCardOverview" class="agent-card-overview">
+              <button type="button" id="agentCustomize" class="agent-customize-card">
+                <span class="agent-customize-art" aria-hidden="true">✧</span>
+                <strong>定制你的 AI 助手</strong>
+                <span>从性格到语气，一起塑造你喜欢的相处方式。</span>
+                <span class="agent-customize-link">开始定制 <span aria-hidden="true">↗</span></span>
+              </button>
+              <div id="agentExistingCard" hidden>
+                <div class="agent-profile-preview"><span id="agentPreviewMonogram" class="agent-monogram" aria-hidden="true"></span><div><strong id="agentPreviewName"></strong><p id="agentPreviewPersonality"></p><span id="agentPreviewState" class="agent-state-badge"></span></div></div>
+                <div class="agent-overview-actions">
+                  <button type="button" class="agent-action-card" id="agentDesign"><span aria-hidden="true">✧</span><strong>让 AI 帮我设定</strong><small>一步步聊聊，重新设计喜欢的个性。</small></button>
+                  <button type="button" class="agent-action-card" id="agentViewCard"><span aria-hidden="true">▤</span><strong>查看当前角色卡</strong><small>查看名字、性格与背景，随时直接修改。</small></button>
+                </div>
               </div>
+            </section>
+            <section class="agent-card-builder agent-detail-card" id="agentCardBuilder" hidden>
+              <div class="agent-card-topline"><button type="button" class="agent-text-button" id="agentBuilderBack">返回概览</button><span id="agentCardProgress"></span></div>
+              <div class="agent-progress-track" aria-hidden="true"><span id="agentCardProgressBar"></span></div>
+              <div id="agentQuestionPanel">
+                <p class="agent-card-eyebrow">一点点，认识你喜欢的我</p>
+                <h2 id="agentCardQuestion" tabindex="-1"></h2>
+                <p class="agent-card-help">选一个最接近的，也可以用自己的话说。不确定就跳过。</p>
+                <div id="agentCardChoices" class="agent-card-choices" role="group" aria-labelledby="agentCardQuestion"></div>
+              </div>
+              <div id="agentCardReview" hidden><h2 tabindex="-1" id="agentReviewTitle">你的偏好，准备好了</h2><p class="agent-card-help">确认后一起交给 AI，生成可编辑的角色卡。</p><div id="agentReviewAnswers"></div></div>
+              <label class="field agent-answer-field" for="agentCardInput"><span id="agentCardInputLabel">或用自己的话说</span><textarea id="agentCardInput" maxlength="2000" rows="2" placeholder="可以补充细节，也可以直接粘贴你的设定或对话"></textarea></label>
+              <div class="agent-question-actions">
+                <button type="button" class="agent-text-button" id="agentCardPrevious">上一题</button>
+                <button type="button" class="agent-text-button" id="agentCardSkip">跳过这题</button>
+                <button type="button" class="model-profile-button agent-primary" id="agentCardNext">下一题</button>
+              </div>
+              <div class="agent-generation-actions"><button type="button" class="agent-text-button" id="agentCardClear">重新开始</button><button type="button" class="model-profile-button" id="agentCardGenerate">生成角色卡</button><button type="button" class="model-profile-button" id="agentCardStop" hidden>停止</button></div>
+              <button type="button" class="agent-text-button agent-manual-link" id="agentWriteCard">也可以直接填写角色卡</button>
+              <div id="agentCardConversation" class="agent-card-conversation" role="log" aria-label="角色设定对话" aria-live="polite"></div>
               <p id="agentCardStatus" class="agent-settings-status" role="status" aria-live="polite"></p>
-            </details>
-            <label class="field" for="agentNameInput"><span>助手的名字</span><input id="agentNameInput" type="text" maxlength="32" autocomplete="off" /></label>
+            </section>
+            <section class="agent-detail-card agent-card-editor" id="agentCardEditor" hidden>
+              <div class="agent-card-topline"><button type="button" class="agent-text-button" id="agentEditorBack">返回概览</button><span class="agent-state-badge">可直接编辑</span></div>
+              <h2>我的角色卡</h2><p class="agent-card-help">写下你喜欢的人物设定，保存后用于所有对话。</p>
+              <div class="agent-editor-identity">
+            <label class="field" for="agentNameInput"><span>助手的名字</span><textarea id="agentNameInput" rows="1" maxlength="32" autocomplete="off"></textarea></label>
             <p class="modal-note" id="agentNameAlias" hidden>中文称呼：Alina</p>
-            <label class="field" for="agentPersonalityInput"><span>性格</span><input id="agentPersonalityInput" type="text" maxlength="180" autocomplete="off" placeholder="例如：温和、敏锐、表达清楚" /></label>
             <label class="field" for="agentGenderSelect"><span>性别（可选）</span><select id="agentGenderSelect"><option value="">不设定</option><option value="女">女</option><option value="男">男</option><option value="custom">自定义</option></select></label>
-            <label class="field" id="agentGenderCustomField" for="agentGenderCustom" hidden><span>自定义性别</span><input id="agentGenderCustom" type="text" maxlength="40" autocomplete="off" /></label>
+              </div>
+            <label class="field" id="agentGenderCustomField" for="agentGenderCustom" hidden><span>自定义性别</span><textarea id="agentGenderCustom" rows="1" maxlength="40" autocomplete="off"></textarea></label>
+            <label class="field" for="agentPersonalityInput"><span>性格</span><textarea id="agentPersonalityInput" rows="1" maxlength="180" autocomplete="off" placeholder="例如：温和、敏锐、表达清楚"></textarea></label>
             <label class="field" for="agentHabitsInput"><span>交流习惯</span><textarea id="agentHabitsInput" maxlength="600" rows="3" placeholder="例如：先直接回答，再按需要展开"></textarea></label>
             <label class="field" for="agentDescriptionInput"><span>角色背景与关系</span><textarea id="agentDescriptionInput" maxlength="1600" rows="3" placeholder="例如：耐心的学习搭档，陪我阅读论文，会适时追问我的理解"></textarea></label>
             <label class="field" for="agentExamplesInput"><span>示例对话（可选）</span><textarea id="agentExamplesInput" maxlength="1600" rows="3" placeholder="写一小段你喜欢的问答风格"></textarea></label>
+            </section>
           </form>
         </section>
         <section class="settings-pane hidden" id="settingsPaneAppearance" data-pane="appearance" role="tabpanel" aria-labelledby="settingsNavAppearance">

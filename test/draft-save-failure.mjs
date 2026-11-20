@@ -130,6 +130,8 @@ try {
   };
   await page.goto(`${base}/?open=draft-failure.pdf&topbar=static`, { waitUntil: 'domcontentloaded' });
   await readyPage();
+  await page.waitForSelector('#agentWelcomeSkip');
+  await page.click('#agentWelcomeSkip');
   const setDraft = async (text) => {
     await page.click('#chatInput');
     await page.evaluate((text) => {

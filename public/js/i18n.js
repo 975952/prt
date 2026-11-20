@@ -18,8 +18,8 @@ export function responseLanguage() {
   try { choice = globalThis.localStorage?.getItem(RESPONSE_LANGUAGE_KEY); } catch { /* use interface language */ }
   return choice === 'en' || choice === 'zh-CN' ? choice : locale;
 }
-export function responseLanguageRule() {
-  const lang = responseLanguage() === 'en' ? 'English' : 'Simplified Chinese';
+export function responseLanguageRule(language = responseLanguage()) {
+  const lang = language === 'en' ? 'English' : 'Simplified Chinese';
   return `Response language: ${lang}. Use this language for answers, explanations, headings, suggested follow-ups, and generated conversation titles. This overrides earlier default-language examples. Follow an explicit language request in the user's current question. Preserve original quotations, technical names, citation markers, and machine-readable keys. Translation tasks must use their explicitly requested target language. Internal structured extraction must keep its required schema.`;
 }
 

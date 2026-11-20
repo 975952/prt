@@ -6218,7 +6218,8 @@ function initAiArea() {
   window.addEventListener('resize', debounce(() => fitBlockSizes(), 150));
 }
 
-const TEXT_EDGE_HIT = 10;        // 离边沿多近算"放到那个栏上"（px）
+const TEXT_EDGE_HIT = 5;         // Narrow hit area outside the text column.
+const TEXT_EDGE_GAP = 12;        // Keep the resize rail clear of text and bubbles.
 const TEXT_EDGE_BAR_H = 110;     // 悬停提示条的高度（只要一小段，不要整栏）
 
 function initTextEdgeHandle() {
@@ -6258,12 +6259,19 @@ function initTextEdgeHandle() {
     };
   };
 
+  const railX = (m, edge, width = (m.right - m.left) / m.scale) => {
+    const direction = edge === 'left' ? -1 : 1;
+    return clamp(m.center + direction * (width / 2 + TEXT_EDGE_GAP) * m.scale,
+      m.sr.left + 6 * m.scale, m.sr.right - 6 * m.scale);
+  };
+
   /** 光标贴在哪条边沿上（不在 .ai-body 的纵向范围内就不算） */
   const edgeAt = (m, x, y) => {
     if (y < m.br.top || y > m.br.bottom) return null;
-    const dl = Math.abs(x - m.left);
-    const dr = Math.abs(x - m.right);
-    if (Math.min(dl, dr) > TEXT_EDGE_HIT) return null;
+    if (x >= m.left && x <= m.right) return null;
+    const dl = Math.abs(x - railX(m, 'left'));
+    const dr = Math.abs(x - railX(m, 'right'));
+    if (Math.min(dl, dr) > TEXT_EDGE_HIT * m.scale) return null;
     return dl <= dr ? 'left' : 'right';
   };
 
@@ -6290,24 +6298,23 @@ function initTextEdgeHandle() {
     const m = geo();
     if (!m) { hideBar(); return; }
     if (drag) {
-      // 宽度 = 2 × 光标到列中心的距离；夹在 [下限, min(内容宽, 上限)] 之间
-      const half = (drag.edge === 'right' ? (lastX - m.center) : (m.center - lastX)) / m.scale;
+      // Resize from the grab position so the outside gap never causes a jump.
+      const delta = (lastX - drag.startX) / m.scale * (drag.edge === 'right' ? 1 : -1);
       const lo = Math.min(TEXT_COL_MIN, m.contentW);
       const hi = Math.max(lo, Math.min(m.contentW, TEXT_COL_MAX));
-      drag.width = Math.round(clamp(2 * half, lo, hi));
+      drag.width = Math.round(clamp(drag.startWidth + 2 * delta, lo, hi));
       if (drag.moved) {
         // 拖动途中直接写 CSS 变量（不走 applyUiStyle，避免每帧重算整套样式）；
         // 松手时再落到 uiStyle.maxWidth / localStorage。
         document.documentElement.style.setProperty('--ai-max-width', `${drag.width}px`);
       }
-      const edgeX = drag.edge === 'right' ? m.center + drag.width * m.scale / 2 : m.center - drag.width * m.scale / 2;
-      placeBar(edgeX, lastY, { on: true, dragging: true });
+      placeBar(railX(m, drag.edge, drag.width), lastY, { on: true, dragging: true });
       return;
     }
     const edge = edgeAt(m, lastX, lastY);
     if (!edge) { hideBar(); return; }
     side.classList.add('text-edge-hot');
-    placeBar(edge === 'left' ? m.left : m.right, lastY);
+    placeBar(railX(m, edge), lastY);
   };
   const schedule = () => { if (!raf) raf = requestAnimationFrame(paint); };
 
@@ -6352,7 +6359,8 @@ function initTextEdgeHandle() {
     e.stopPropagation();
     lastX = e.clientX;
     lastY = e.clientY;
-    drag = { edge, width: Math.round((m.right - m.left) / m.scale), startX: e.clientX, moved: false };
+    const startWidth = (m.right - m.left) / m.scale;
+    drag = { edge, width: Math.round(startWidth), startWidth, startX: e.clientX, moved: false };
     document.body.classList.add('text-edge-dragging');
     side.classList.add('text-edge-dragging');
     window.addEventListener('pointermove', moveDuringDrag);
@@ -6661,9 +6669,10 @@ function renderDraftStorage() {
   const info = composerDraftState(composerOwner);
   const status = info.error ? 'error' : info.loading ? 'loading' : info.dirty || info.saving ? 'saving' : 'saved';
   row.dataset.status = status;
-  row.classList.toggle('hidden', status === 'saved');
+  // Autosave stays silent during typing and hydration. Only failures need action.
+  row.classList.toggle('hidden', status !== 'error');
   $('#draftStorageText').textContent = info.error === 'load' ? tr("上次草稿未能读取，当前输入已保留")
-    : info.error ? tr("草稿尚未保存，关闭前请重试") : status === 'loading' ? tr("正在恢复草稿…") : tr("正在保存草稿…");
+    : info.error ? tr("草稿尚未保存，关闭前请重试") : '';
   const retry = $('#draftStorageRetry');
   retry.classList.toggle('hidden', !info.error);
   retry.onclick = () => {

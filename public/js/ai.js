@@ -113,11 +113,12 @@ export async function streamChat(opts) {
     tools,
     rawResponse = false,
     useAgentProfile = true,
+    outputLanguage,
   } = opts;
   // Read shared preferences on every request, including tool follow-ups. Keep
   // task-specific rules in their original system message and never mutate callers.
   const profilePrompt = useAgentProfile ? buildAgentProfilePrompt() : '';
-  const languageRule = responseLanguageRule();
+  const languageRule = responseLanguageRule(['en', 'zh-CN'].includes(outputLanguage) ? outputLanguage : undefined);
   let hasSystem = false;
   const messages = originalMessages.map((message) => {
     if (message.role !== 'system') return message;

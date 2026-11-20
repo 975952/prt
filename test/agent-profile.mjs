@@ -35,9 +35,9 @@ try {
   values.set(AGENT_PROFILE_KEY, '{broken');
   assert.equal(readAgentProfile().name, '旧名字');
   values.set(AGENT_PROFILE_KEY, JSON.stringify({ habits: '简短回答', unknown: 'discard me' }));
-  assert.deepEqual(readAgentProfile(), { ...DEFAULT_AGENT_PROFILE, name: '旧名字', habits: '简短回答' });
+  assert.deepEqual(readAgentProfile(), { ...DEFAULT_AGENT_PROFILE, customized: true, name: '旧名字', habits: '简短回答' });
   const saved = writeAgentProfile({ name: ' 新名字 ', personality: '认真', gender: '女' });
-  assert.deepEqual(saved, { ...DEFAULT_AGENT_PROFILE, name: '新名字', personality: '认真', gender: '女', habits: '简短回答' });
+  assert.deepEqual(saved, { ...DEFAULT_AGENT_PROFILE, customized: true, name: '新名字', personality: '认真', gender: '女', habits: '简短回答' });
   assert.deepEqual(JSON.parse(values.get(AGENT_PROFILE_KEY)), saved);
   assert.equal(values.get('reader.agent.name'), '新名字');
   const normalized = writeAgentProfile({ name: '😀'.repeat(40), habits: '', gender: 123, unknown: 'ignored' });

@@ -8,6 +8,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
   let active = false, busy = false, ownedFullscreen = false, hideTimer = 0, hideDeadline = 0, turnTimer = 0, down = null;
   let pendingActive = null, activeTransition = null;
   let wheelAt = 0, wheelDistance = 0, wheelTurned = false;
+  let noticeTimer = 0;
   const body = document.body, viewerElement = document.getElementById('viewer');
   const button = (id, label, icon, action) => el('button', { id, type: 'button', class: 'immersive-control',
     title: label, 'aria-label': label, onclick: event => { action(event); if (event.detail) event.currentTarget.blur(); } }, iconEl(icon), el('span', { text: label }));
@@ -21,8 +22,9 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
   const page = el('input', { id: 'immersivePage', type: 'number', min: '1', 'aria-label': tr('页码') });
   const total = el('span', { id: 'immersiveTotal' });
   const bottom = el('nav', { id: 'immersiveFooter', class: 'immersive-chrome', 'aria-label': tr('翻页') }, prev, page, total, next);
+  const notice = el('div', { id: 'immersivePageNotice', role: 'status', 'aria-live': 'polite', hidden: true });
   const transitionCover = el('div', { id: 'immersiveTransitionCover', hidden: true, 'aria-hidden': 'true' });
-  body.append(top, bottom);
+  body.append(top, bottom, notice);
   viewerElement.closest('.viewer-wrap')?.append(transitionCover);
   viewerElement.tabIndex = -1;
   const side = document.getElementById('rightSide');
@@ -70,10 +72,29 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     page.value = String(viewer?.current || 1); page.max = String(viewer?.numPages || 1);
     total.textContent = `/ ${viewer?.numPages || 0}`;
     prev.disabled = (viewer?.current || 1) <= (presentation ? 1 : 2);
-    next.disabled = (viewer?.current || 1) + (!presentation && (viewer?.current || 1) % 2 ? 1 : 0) >= (viewer?.numPages || 0);
+    next.setAttribute('aria-disabled', String(atLastPage(viewer)));
+    if (!active || !atLastPage(viewer)) hideNotice();
+  }
+  function atLastPage(viewer) {
+    const current = viewer?.current || 1;
+    return current + (!viewer?.immersivePresentation && current % 2 ? 1 : 0) >= (viewer?.numPages || 0);
+  }
+  function hideNotice() {
+    clearTimeout(noticeTimer);
+    notice.hidden = true;
+    notice.textContent = '';
   }
   async function turn(direction) {
     if (!active || busy) return;
+    const viewer = getViewer();
+    if (direction > 0 && atLastPage(viewer)) {
+      clearTimeout(noticeTimer);
+      notice.textContent = tr('已经是最后一页了');
+      notice.hidden = false;
+      noticeTimer = setTimeout(hideNotice, 1800);
+      return;
+    }
+    hideNotice();
     try { await getViewer()?.stepPage(direction); }
     catch (error) { onError?.(error); }
     finally { sync(); }
@@ -164,6 +185,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
         await getViewer().setImmersive(true);
         sync(); reveal(); viewerElement.focus({ preventScroll: true });
       } else {
+        hideNotice();
         active = false; clearTimeout(hideTimer); hideTimer = 0; clearTimeout(turnTimer);
         body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible');
         delete body.dataset.immersiveCard;
@@ -177,6 +199,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
         onExit?.();
       }
     } catch (error) {
+      hideNotice();
       active = false; clearTimeout(hideTimer); hideTimer = 0; clearTimeout(turnTimer);
       body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible');
       delete body.dataset.immersiveCard;

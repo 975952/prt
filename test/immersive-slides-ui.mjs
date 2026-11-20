@@ -64,7 +64,7 @@ try {
       fits: pages.every(n => { const r = n.getBoundingClientRect(); return r.left >= box.left && r.right <= box.right + 1 && r.top >= box.top && r.bottom <= box.bottom + 1; }),
       fullViewport: box.top === 0 && box.bottom === innerHeight && box.left === 0 && box.right === innerWidth,
       barsVisible: [top, bottom].every(n => getComputedStyle(n).opacity === '1' && getComputedStyle(n).pointerEvents === 'auto'),
-      previousDisabled: document.getElementById('immersivePrev').disabled, nextDisabled: document.getElementById('immersiveNext').disabled,
+      previousDisabled: document.getElementById('immersivePrev').disabled, nextDisabled: document.getElementById('immersiveNext').getAttribute('aria-disabled') === 'true',
       blankLeaf: v.pagesEl.classList.contains('immersive-last-single') };
   });
   for (const name of ['Wide', 'Classic', 'Rotated', 'Portrait']) {
@@ -84,6 +84,19 @@ try {
     assert.equal(s.presentation, name !== 'Portrait');
     assert.deepEqual(s.visible, name === 'Portrait' ? [1, 2] : [2]);
     assert.ok(s.fits);
+    await page.evaluate(() => __viewer.goToPage(__viewer.numPages));
+    await page.evaluate(() => document.getElementById('viewer').focus());
+    await page.keyboard.press('ArrowRight');
+    await page.waitForSelector('#immersivePageNotice:not([hidden])');
+    assert.equal(await page.$eval('#immersivePageNotice', n => n.textContent), '已经是最后一页了');
+    assert.equal((await state()).current, 3, 'end-of-document hint keeps the last page');
+    await page.waitForSelector('#immersivePageNotice[hidden]');
+    await page.mouse.move(750, 958);
+    await page.waitForFunction(() => getComputedStyle(document.getElementById('immersiveFooter')).opacity === '1');
+    await page.click('#immersiveNext');
+    await page.waitForSelector('#immersivePageNotice:not([hidden])');
+    await page.evaluate(() => __viewer.goToPage(2));
+    assert.equal(await page.$eval('#immersivePageNotice', n => n.hidden), true, 'leaving the last spread clears the hint');
     if (name !== 'Portrait') {
       assert.ok(s.fullViewport); assert.equal(s.previousDisabled, false); assert.equal(s.nextDisabled, false);
       await page.mouse.move(750, 480);

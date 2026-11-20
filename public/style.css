@@ -778,7 +778,7 @@ body.dragging .viewer { pointer-events: none; }
 .ai-body::-webkit-scrollbar,
 .side::-webkit-scrollbar,
 .modal-box::-webkit-scrollbar,
-.sess-menu::-webkit-scrollbar { width: 16px; height: 16px; }
+.sess-menu::-webkit-scrollbar { width: 10px; height: 10px; }
 .viewer::-webkit-scrollbar-track,
 .ai::-webkit-scrollbar-track,
 .ai-body::-webkit-scrollbar-track,
@@ -791,8 +791,8 @@ body.dragging .viewer { pointer-events: none; }
 .side::-webkit-scrollbar-thumb,
 .modal-box::-webkit-scrollbar-thumb,
 .sess-menu::-webkit-scrollbar-thumb {
-  background: var(--scroll-thumb);
-  border: 2px solid transparent;
+  background: color-mix(in srgb, var(--scroll-thumb) 55%, transparent);
+  border: 3px solid transparent;
   background-clip: content-box;
   border-radius: 8px;
   min-height: 40px;
@@ -802,13 +802,16 @@ body.dragging .viewer { pointer-events: none; }
 .ai-body::-webkit-scrollbar-thumb:hover,
 .side::-webkit-scrollbar-thumb:hover,
 .modal-box::-webkit-scrollbar-thumb:hover,
-.sess-menu::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); background-clip: content-box; }
+.sess-menu::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); border-width: 2px; background-clip: content-box; }
 .viewer::-webkit-scrollbar-corner,
 .ai::-webkit-scrollbar-corner,
 .ai-body::-webkit-scrollbar-corner,
 .side::-webkit-scrollbar-corner { background: transparent; }
 /* Firefox（应用壳是 WebView2/Chromium，这条是给浏览器模式兜底的） */
-.viewer, .ai, .ai-body, .side, .modal-box, .sess-menu { scrollbar-width: auto; scrollbar-color: var(--scroll-thumb) transparent; }
+.viewer, .ai, .ai-body, .side, .modal-box, .sess-menu { scrollbar-width: auto; scrollbar-color: auto; }
+@supports not selector(::-webkit-scrollbar) {
+  .viewer, .ai, .ai-body, .side, .modal-box, .sess-menu { scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--scroll-thumb) 55%, transparent) transparent; }
+}
 
 .page {
   position: relative; background: var(--paper);
@@ -1295,13 +1298,20 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 /* 消息的上下内边距 / 段间距由「结果密度」令牌决定；正文本身的字号仍然是 --ai-fs（阅读字号） */
 .msg { display: flex; flex-direction: column; gap: var(--ctl-gap); padding: var(--gap-msg) var(--ai-pad); max-width: var(--ai-max-width); opacity: var(--ai-opacity); }
 .ai-body > .msg { width: 100%; margin-inline: auto; }
+/* Questions and answers share the same centered, adjustable reading column. */
+.ai-body {
+  padding-inline: 18px;
+  --message-column-padding: 14px;
+  --message-column-margin: calc(max(0px, (100% - var(--ai-max-width)) / 2) + var(--message-column-padding));
+  --message-column-width: calc(min(100%, var(--ai-max-width)) - 2 * var(--message-column-padding));
+}
 #rightSide { position: relative; }
 .text-edge-hint {
-  position: absolute; z-index: 40; width: 10px; height: 110px;
+  position: absolute; z-index: 40; width: 3px; height: 110px;
   border-radius: 999px;
-  border: 1.5px solid var(--border-strong);
-  background: transparent;
-  box-shadow: 0 1px 6px color-mix(in srgb, var(--fg) 14%, transparent);
+  border: 0;
+  background: color-mix(in srgb, var(--fg-faint) 65%, transparent);
+  box-shadow: none;
   pointer-events: none; opacity: 0;
   transform: translateX(-50%);
   /* 上下两端渐变淡出：「那种渐变」仍然保留，只是整条（含描边）一起淡出 */
@@ -1311,9 +1321,8 @@ body.row-dragging { cursor: row-resize; user-select: none; }
 }
 .text-edge-hint.on { opacity: 1; }
 .text-edge-hint.dragging {
-  width: 12px;
-  border-color: var(--fg-faint);
-  box-shadow: 0 1px 9px color-mix(in srgb, var(--fg) 22%, transparent);
+  width: 4px;
+  background: var(--fg-faint);
 }
 #rightSide.text-edge-hot #aiArea,
 #rightSide.text-edge-hot #aiArea *,
@@ -1662,29 +1671,37 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 
 /* 设置：左列竖排分类 + 右侧对应面板（替代原来一长条滚动的字段表）。
    窄窗口自动变成「上排分类横滑 + 下面内容」。 */
-.settings-box { display: flex; flex-direction: column; width: min(760px, 94vw); height: min(700px, 86vh); height: min(700px, 86dvh); overflow: hidden; padding-bottom: 12px; }
+.settings-box {
+  --ui-fs: 16px; --ui-fs-lg: 15px; --ui-fs-md: 15px; --ui-fs-sm: 14px; --ui-fs-xs: 13px; --ui-fs-2xs: 12px;
+  display: flex; flex-direction: column; width: min(1000px, 94vw);
+  height: min(820px, 90vh); height: min(820px, 90dvh); max-height: calc(100dvh - 24px);
+  overflow: hidden; padding: 22px 24px 16px; border-radius: 20px; font-size: var(--ui-fs);
+}
+.settings-box .field :is(input:not([type="range"]), select, textarea) { font-size: 15px; line-height: 1.5; }
+.settings-box .modal-foot :is(button, .primary) { font-size: 14px; }
+.settings-box .modal-head { font-size: 18px; margin-bottom: 20px; }
 .settings-box .modal-head { flex: 0 0 auto; }
 .settings-body { display: flex; align-items: stretch; flex: 1 1 auto; min-height: 0; overflow: hidden; }
 @media (max-height: 600px) {
   #settingsModal .settings-body { min-height: 0; }
 }
 .settings-nav {
-  flex: 0 0 140px; display: flex; flex-direction: column; gap: 2px;
+  flex: 0 0 170px; display: flex; flex-direction: column; gap: 5px;
   overflow-y: auto;
   padding: 1px 10px 12px 0; border-right: 1px solid var(--border);
 }
 .settings-nav-item {
   display: flex; align-items: center; width: 100%; text-align: left;
-  padding: 7px 10px; border: 1px solid transparent; border-radius: 8px;
+  padding: 10px 12px; border: 1px solid transparent; border-radius: 10px;
   background: transparent; color: var(--fg-dim); cursor: pointer;
   font: inherit; font-size: var(--ui-fs-sm); line-height: 1.4;
 }
 .settings-nav-item:hover { background: var(--accent-soft); color: var(--accent); }
 .settings-nav-item.on { background: var(--accent-soft); border-color: var(--border); color: var(--accent); font-weight: 600; }
 .settings-nav-item:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-.settings-panes { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 2px 2px 16px 16px; }
-.settings-pane-title { color: var(--fg); font-size: var(--ui-fs-md); font-weight: 650; margin-bottom: 3px; }
-.settings-pane-sub { color: var(--fg-faint); font-size: var(--ui-fs-xs); line-height: 1.55; margin-bottom: 13px; }
+.settings-panes { flex: 1 1 auto; min-width: 0; min-height: 0; overflow-y: auto; scrollbar-gutter: stable; padding: 2px 4px 16px 24px; }
+.settings-pane-title { color: var(--fg); font-size: 21px; font-weight: 650; margin-bottom: 6px; }
+.settings-pane-sub { color: var(--fg-dim); font-size: var(--ui-fs-sm); line-height: 1.65; margin-bottom: 22px; }
 .settings-pane > .field { margin-bottom: 13px; }
 .settings-pane > .field:last-child { margin-bottom: 0; }
 .model-profile-toolbar { display: flex; align-items: flex-end; gap: 8px; margin-bottom: 6px; }
@@ -1721,6 +1738,7 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
   font-size: calc(12.5px * var(--ctl-scale)); font-weight: 600;
 }
 @media (max-width: 640px) {
+  .settings-box { padding: 16px 14px 12px; }
   .settings-body { flex: 1 1 auto; flex-direction: column; min-height: 0; max-height: none; overflow: hidden; }
   .settings-nav {
     flex: 0 0 auto; flex-direction: row; overflow-x: auto; gap: 4px;
@@ -1889,8 +1907,8 @@ body.text-edge-dragging { user-select: none; -webkit-user-select: none; }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }
 ::-webkit-scrollbar-track { background: transparent; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
-::-webkit-scrollbar-thumb:hover { background: var(--fg-faint); background-clip: content-box; }
+::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--scroll-thumb) 55%, transparent); border-radius: 6px; border: 3px solid transparent; background-clip: content-box; }
+::-webkit-scrollbar-thumb:hover { background: var(--scroll-thumb-hover); border-width: 2px; background-clip: content-box; }
 
 /* 内容密度三档：standard 就是 :root 里的默认值（这里不重复声明），
    下面两档只覆盖数值 —— 消费方（.filelist li / .outline li / .notes li / .rel-item /
@@ -3239,10 +3257,11 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body > .msg { flex-shrink: 0; min-width: 0; padding: 10px 14px; gap: 7px; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .msg + .msg { border-top: 0; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body > .msg.user {
-  width: fit-content; max-width: min(86%, var(--ai-max-width)); margin: 10px 14px 14px auto; padding: 11px 15px;
-  border: 1px solid rgba(var(--surface-rgb), .44);
-  border-radius: 16px 16px 5px 16px;
-  background: rgba(var(--surface-rgb), .30); opacity: 1;
+  align-self: flex-end; width: max-content; min-width: 0; max-width: var(--message-column-width);
+  margin: 10px var(--message-column-margin) 14px auto; padding: 10px 16px;
+  border: 0; border-radius: 19px 19px 7px 19px;
+  background: color-mix(in srgb, var(--accent) 9%, var(--bg-elev)); color: var(--fg); opacity: 1;
+  box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 7%, transparent);
 }
 /* One conversation rhythm for streaming and restored messages: questions to
    the right, answers in the readable column, with space between turns. */
@@ -3251,6 +3270,7 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 .ai-block[data-block="chat"] .msg.user > .role { justify-content: flex-end; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body .msg .text { line-height: 1.85; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body .msg.user .text { padding: 0; background: transparent; border-radius: 0; }
+:root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body .msg.user .text { line-height: 1.65; white-space: normal; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .msg.user .role:not(:has(.pg)) { display: none; }
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body .msg .text p + p { margin-top: 10px !important; }
 /* Output hierarchy: open answer text, a single glass question, and quiet
@@ -3342,9 +3362,6 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 .ai-block[data-block="translate"] .translation-direction .translation-delete { width: 26px; height: 28px; }
 .ai-block[data-block="translate"] .translation-notice { font-size: var(--ui-fs-xs); }
 .ai-block[data-block="translate"] .translation-original[open] .translation-source { max-height: none; overflow: visible; }
-@media (max-width: 600px) {
-  :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .ai-body > .msg.user { max-width: 90%; margin-right: 8px; }
-}
 :root:is([data-theme="glass"], [data-theme="light"], [data-theme="dark"]) .msg .agent-steps {
   padding: 8px 10px; gap: 5px; border-radius: 9px; background: rgba(var(--surface-rgb), .16);
   border: 1px solid rgba(var(--surface-rgb), .4); font-family: var(--font-ui);

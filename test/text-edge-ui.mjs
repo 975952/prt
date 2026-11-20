@@ -61,24 +61,25 @@ try {
   });
   const checkHandle = async label => {
     const box = await geometry();
-    await page.mouse.move(box.left + 1, box.y); await pause(50);
+    await page.mouse.move(box.left - 12 * box.scale, box.y); await pause(50);
     const handle = await page.$eval('.text-edge-hint', node => {
       const r = node.getBoundingClientRect(); return { on: node.classList.contains('on'), x: r.left + r.width / 2, y: r.top + r.height / 2 };
     });
     assert.ok(handle.on, `${label}: answer edge reveals handle`);
-    assert.ok(Math.abs(handle.x - box.left) < 2, `${label}: rail ${handle.x} aligns to answer ${box.left}`);
+    assert.ok(Math.abs(handle.x - (box.left - 12 * box.scale)) < 2, `${label}: rail stays outside the answer`);
+    assert.ok(await page.$eval('.text-edge-hint', node => parseFloat(getComputedStyle(node).width) <= 4), `${label}: thin rail`);
     assert.ok(Math.abs(handle.y - box.y) < 2, `${label}: rail tracks pointer height`);
     return box;
   };
   const resize = async (label, target = 450) => {
     const before = await checkHandle(label), center = (before.left + before.right) / 2;
     await page.mouse.down();
-    await page.mouse.move(center - target * before.scale / 2, before.y, { steps: 8 });
+    await page.mouse.move(center - (target / 2 + 12) * before.scale, before.y, { steps: 8 });
     await pause(50);
     const during = await geometry();
     assert.ok(Math.abs(during.width / during.scale - target) < 3, `${label}: intended ${target}, got ${during.width / during.scale}`);
     const rail = await page.$eval('.text-edge-hint', node => { const r = node.getBoundingClientRect(); return r.left + r.width / 2; });
-    assert.ok(Math.abs(rail - during.left) < 2, `${label}: dragged rail follows answer`);
+    assert.ok(Math.abs(rail - (during.left - 12 * during.scale)) < 2, `${label}: dragged rail follows outside the answer`);
     await page.mouse.up();
     assert.ok(Math.abs(await page.evaluate(() => __ctx.uiStyle.maxWidth) - target) < 2);
     assert.ok(Math.abs(await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.maxWidth) - target) < 2);
@@ -121,10 +122,11 @@ try {
   box = await geometry();
   assert.ok(box.scale > 1.1, 'Alina uses changed agent zoom');
   await page.mouse.move(box.left + 1, box.y); await page.mouse.down();
-  assert.equal(await page.evaluate(() => document.body.classList.contains('text-edge-dragging')), false, 'hidden Alina rail must not intercept selection');
+  assert.equal(await page.evaluate(() => document.body.classList.contains('text-edge-dragging')), false, 'text selection must not activate the outside rail');
   await page.mouse.up();
+  await resize('full Alina', 460);
   assert.deepEqual(errors, []);
-  console.log(`PASS no invisible resize hit area in full Alina; ${scratch}`);
+  console.log(`PASS thin outside rail resizes full Alina without intercepting text selection; ${scratch}`);
 } catch (error) {
   if (page) await page.screenshot({ path: path.join(scratch, 'failure.png') }).catch(() => {});
   console.error(`Artifacts: ${scratch}`); throw error;
