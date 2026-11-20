@@ -62,7 +62,7 @@ try {
     const top = document.getElementById('immersiveTopbar'), bottom = document.getElementById('immersiveFooter');
     return { current: v.current, presentation: v.immersivePresentation, visible: pages.map(n => +n.dataset.page),
       fits: pages.every(n => { const r = n.getBoundingClientRect(); return r.left >= box.left && r.right <= box.right + 1 && r.top >= box.top && r.bottom <= box.bottom + 1; }),
-      clearOfBars: box.top >= top.getBoundingClientRect().bottom && box.bottom <= bottom.getBoundingClientRect().top,
+      fullViewport: box.top === 0 && box.bottom === innerHeight && box.left === 0 && box.right === innerWidth,
       barsVisible: [top, bottom].every(n => getComputedStyle(n).opacity === '1' && getComputedStyle(n).pointerEvents === 'auto'),
       previousDisabled: document.getElementById('immersivePrev').disabled, nextDisabled: document.getElementById('immersiveNext').disabled,
       blankLeaf: v.pagesEl.classList.contains('immersive-last-single') };
@@ -85,13 +85,20 @@ try {
     assert.deepEqual(s.visible, name === 'Portrait' ? [1, 2] : [2]);
     assert.ok(s.fits);
     if (name !== 'Portrait') {
-      assert.ok(s.clearOfBars && s.barsVisible); assert.equal(s.previousDisabled, false); assert.equal(s.nextDisabled, false);
+      assert.ok(s.fullViewport); assert.equal(s.previousDisabled, false); assert.equal(s.nextDisabled, false);
       await page.mouse.move(750, 480);
-      await new Promise(resolve => setTimeout(resolve, 1100));
-      assert.ok((await state()).barsVisible, 'bars remain visible after idle');
+      await page.waitForFunction(() => Number(getComputedStyle(document.getElementById('immersiveFooter')).opacity) < .05);
+      assert.equal((await state()).barsVisible, false, 'slides use the same auto-hiding bars as book mode');
+      const scaleBeforeReveal = await page.evaluate(() => __viewer.scale);
+      await page.mouse.move(750, 2);
+      await page.waitForFunction(() => getComputedStyle(document.getElementById('immersiveTopbar')).opacity === '1');
+      assert.ok((await state()).barsVisible, 'moving to an edge reveals the original controls');
+      assert.equal(await page.evaluate(() => __viewer.scale), scaleBeforeReveal, 'revealing chrome must not resize the slide');
       await page.keyboard.press('ArrowDown'); await settled();
       assert.equal((await state()).current, 3); assert.ok((await state()).nextDisabled); assert.equal((await state()).blankLeaf, false);
       await page.keyboard.press('Home'); await settled(); assert.equal((await state()).current, 1); assert.ok((await state()).previousDisabled);
+      await page.mouse.move(750, 958);
+      await page.waitForFunction(() => getComputedStyle(document.getElementById('immersiveFooter')).opacity === '1');
       await page.click('#immersiveNext'); await settled(); assert.equal((await state()).current, 2);
       await page.evaluate(() => document.getElementById('viewer').focus());
       await page.keyboard.down('Shift'); await page.keyboard.press('Space'); await page.keyboard.up('Shift');
@@ -99,6 +106,8 @@ try {
       await page.mouse.move(750, 480); await page.mouse.wheel({ deltaY: 100 });
       await page.waitForFunction(() => __viewer.current === 2); await settled();
       await page.keyboard.press('End'); await settled(); assert.equal((await state()).current, 3);
+      await page.mouse.move(750, 958);
+      await page.waitForFunction(() => getComputedStyle(document.getElementById('immersiveFooter')).opacity === '1');
       await page.click('#immersivePrev'); await settled(); assert.equal((await state()).current, 2);
       await page.evaluate(() => Promise.all([__viewer.stepPage(-1), __viewer.stepPage(1), __viewer.stepPage(1)]));
       assert.deepEqual((await state()).visible, [3]);
@@ -114,7 +123,7 @@ try {
       await page.screenshot({ path: path.join(scratch, `${name}.png`) });
       await page.setViewport({ width: 560, height: 820 });
       await page.waitForFunction(() => { const v = __viewer, r = v.pageEls[v.current].getBoundingClientRect(); return r.width <= v.container.clientWidth; });
-      assert.ok((await state()).fits && (await state()).clearOfBars);
+      assert.ok((await state()).fits && (await state()).fullViewport);
       await page.setViewport({ width: 1500, height: 960 });
     }
     await page.evaluate(() => __ctx.immersiveReading.setActive(false));

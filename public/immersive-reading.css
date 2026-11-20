@@ -33,11 +33,6 @@ body.immersive-reading #immersiveFooter { bottom: 0; left: 50%; border: 1px soli
 body.immersive-reading.immersive-chrome-visible .immersive-chrome { opacity: 1; pointer-events: auto; }
 body.immersive-reading.immersive-chrome-visible #immersiveTopbar { transform: translateY(0); }
 body.immersive-reading.immersive-chrome-visible #immersiveFooter { transform: translate(-50%, 0); }
-/* Slide-sized PDFs keep their tools visible outside the fitted page. */
-body.immersive-reading.immersive-presentation #main { inset: 64px 0; height: auto; }
-body.immersive-reading.immersive-presentation .immersive-chrome { opacity: 1; pointer-events: auto; }
-body.immersive-reading.immersive-presentation #immersiveTopbar { transform: translateY(0); }
-body.immersive-reading.immersive-presentation #immersiveFooter { transform: translate(-50%, 0); }
 .immersive-title { flex: 1; color: var(--fg-dim); font-size: 13px; padding-inline: 12px; }
 .immersive-control { display: inline-flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--fg); font: inherit; font-size: 13px; cursor: pointer; white-space: nowrap; flex-shrink: 0; }
 #immersiveFooter { width: max-content; max-width: calc(100vw - 16px); }

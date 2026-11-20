@@ -49,14 +49,12 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
   }).observe(translation, { attributes: true, attributeFilter: ['class'], attributeOldValue: true });
 
   function scheduleHide(delay = 160) {
-    if (getViewer()?.immersivePresentation) return;
     const deadline = performance.now() + delay;
     if (hideTimer && hideDeadline <= deadline) return;
     clearTimeout(hideTimer);
     hideDeadline = deadline;
     hideTimer = setTimeout(() => {
       hideTimer = 0;
-      if (getViewer()?.immersivePresentation) return;
       if (top.matches(':hover') || bottom.matches(':hover') || top.contains(document.activeElement) || bottom.contains(document.activeElement)) return;
       body.classList.remove('immersive-chrome-visible');
     }, delay);
@@ -69,7 +67,6 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
   function sync() {
     const viewer = getViewer();
     const presentation = !!viewer?.immersivePresentation;
-    body.classList.toggle('immersive-presentation', active && presentation);
     page.value = String(viewer?.current || 1); page.max = String(viewer?.numPages || 1);
     total.textContent = `/ ${viewer?.numPages || 0}`;
     prev.disabled = (viewer?.current || 1) <= (presentation ? 1 : 2);
@@ -168,7 +165,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
         sync(); reveal(); viewerElement.focus({ preventScroll: true });
       } else {
         active = false; clearTimeout(hideTimer); hideTimer = 0; clearTimeout(turnTimer);
-        body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible', 'immersive-presentation');
+        body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible');
         delete body.dataset.immersiveCard;
         columnsHome.after(columns);
         document.getElementById('immersiveBtn')?.setAttribute('aria-pressed', 'false');
@@ -181,7 +178,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
       }
     } catch (error) {
       active = false; clearTimeout(hideTimer); hideTimer = 0; clearTimeout(turnTimer);
-      body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible', 'immersive-presentation');
+      body.classList.remove('immersive-reading', 'immersive-chat-open', 'immersive-chrome-visible');
       delete body.dataset.immersiveCard;
       columnsHome.after(columns);
       document.getElementById('immersiveBtn')?.setAttribute('aria-pressed', 'false');
