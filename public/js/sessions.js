@@ -173,7 +173,15 @@ function sessButton(icon, title, cls, onclick, extra = {}) {
 
 /* ───────────────────────────── 接口 ───────────────────────────── */
 
-/** 新格式：所有会话统一存储，无需按 doc 分类查询 */
+function listScopeKey() {
+  return st.ctx?.scopeKey?.() || st.folderKey;
+}
+
+function isScopeFileKey(fileKey) {
+  return !!fileKey && (st.ctx?.isScopeFileKey?.(fileKey) ?? (fileKey === listScopeKey()));
+}
+
+/** 历史面板查全库，阅读器的快速列表按当前会话归属过滤。 */
 async function fetchSessionRows(scope, limit) {
   const q = new URLSearchParams({
     folderPath: st.folderPath,
@@ -181,6 +189,7 @@ async function fetchSessionRows(scope, limit) {
     archived: 'all',
     limit: String(limit),
   });
+  if (scope === 'folder') q.set('doc', listScopeKey());
   const r = await fetch(`/api/sessions?${q}`);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(errorOf(j, r));

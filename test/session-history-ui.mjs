@@ -36,7 +36,6 @@ const rows = [
 ];
 let mode = 'global', empty = false;
 const currentKey = () => mode === 'global' ? 'default' : mode === 'folder' ? 'folder-vision' : 'paper-alpha';
-const accepted = row => mode === 'global' ? ['default','__global__'].includes(row.fileKey) : row.fileKey === currentKey();
 window.calls = [];
 window.fetch = async (input, options = {}) => {
   const url = new URL(input,location.href), method = options.method || 'GET';
@@ -56,7 +55,7 @@ const ctx = {
   hasDoc: () => true, isAgentWorkspace: () => mode === 'global', scopeMode: () => mode,
   scopeKey: currentKey, folderPath: () => 'vision', folderKey: () => 'folder-vision', folderKeyOf: value => 'folder-'+value,
   doc: () => mode === 'global' ? null : papers[0], currentSid: () => mode+'-main',
-  acceptSessionRow: accepted, isScopeFileKey: key => key === currentKey(), papers: () => papers, folders: () => ['vision','math'],
+  isScopeFileKey: key => key === currentKey(), papers: () => papers, folders: () => ['vision','math'],
   isBusy: () => false, renderAi: () => {}, showChatAndRender: () => {}, followCurrentSession: () => {},
   openSessionFromHistory: async (row,options) => {window.opened = {sid:row.sid,fileKey:row.fileKey,options};},
   describeSessionScope: row => row.fileKey === 'default' || row.fileKey === '__global__' ? {mode:'global'}
@@ -94,19 +93,20 @@ try {
   page.on('requestfailed', request => failed.push(request.url()));
   await page.setViewport({width:1200,height:900});
   await page.goto(`http://127.0.0.1:${server.address().port}/`);
-  await page.waitForFunction(() => window.ready && document.querySelectorAll('.sess-hrow').length === 2);
+  await page.waitForFunction(() => window.ready && document.querySelectorAll('.sess-hrow').length === 4);
   const row = sid => `.sess-hrow[data-sid="${sid}"]`;
   const more = sid => `${row(sid)} .sess-hmore`;
   const menu = '.sess-row-menu';
-  const open = async (sid='global-main') => { await page.click(more(sid)); await page.waitForSelector(menu,{visible:true}); };
+  const open = async (sid='global-main') => { await page.locator(more(sid)).click(); await page.waitForSelector(menu,{visible:true}); };
   const closed = () => page.waitForFunction(() => !document.querySelector('.sess-row-menu'));
-  assert.deepEqual(await page.$$eval('.sess-hrow', nodes => nodes.map(node=>node.dataset.sid)), ['global-main','global-other']);
+  const historySids = () => page.$$eval('.sess-hrow', nodes => [...new Set(nodes.map(node=>node.dataset.sid))].sort());
+  assert.deepEqual(await historySids(), ['folder-main','global-main','global-other','paper-main']);
   assert.equal(await page.$eval('.sess-arrange-chips', node=>node.hidden),true);
   assert.equal(await page.$eval('#sessHistMemory', node=>node.hidden),true);
   assert.equal(await page.$('.sess-htrail'),null);
   assert.equal(await page.$eval(`${row('global-main')} .sess-hmeta`,node=>node.textContent),'Just now');
   assert.equal(await page.$eval(`${row('global-main')} .sess-hgo`,node=>node.getAttribute('aria-current')),'true');
-  pass('global history contains only global rows, title/date, and contextual controls');
+  pass('Alina history includes all owners and shows dates and contextual controls');
 
   await open();
   assert.equal(await page.$$eval(`${menu} [role="menuitem"]`,nodes=>nodes.length),5);
@@ -123,9 +123,10 @@ try {
   assert.equal(await page.evaluate(()=>document.activeElement.classList.contains('sess-hmore')),true);
   assert.equal(await page.$eval('#sessHistory',node=>node.classList.contains('hidden')),false);
   pass('menu exposes five named actions and supports arrows, Home, End and Escape');
+  const nextSid = await page.$eval(row('global-main'), node => node.nextElementSibling?.dataset.sid);
   await page.keyboard.press('Space'); await page.waitForSelector(menu,{visible:true});
   await page.keyboard.press('Tab'); await closed();
-  assert.equal(await page.evaluate(()=>document.activeElement.closest('.sess-hrow')?.dataset.sid),'global-other');
+  assert.equal(await page.evaluate(()=>document.activeElement.closest('.sess-hrow')?.dataset.sid),nextSid);
   pass('Space opens and Tab leaves the menu in document order');
 
   await open(); await page.click('#outside'); await closed();
@@ -175,32 +176,33 @@ try {
   assert.equal(await page.evaluate(()=>document.activeElement.classList.contains('sess-hmore')),true);
   await open(); await page.click(`${menu} .move`); await page.waitForFunction(()=>!document.querySelector('#sessMoveMode').disabled);
   await page.select('#sessMoveMode','paper'); await page.select('#sessMoveTarget','paper-beta'); await page.click('#sessMoveSubmit');
-  await page.waitForFunction(()=>window.moved?.target.docId==='paper-beta'&&!document.querySelector('.sess-hrow[data-sid="global-main"]'));
+  await page.waitForFunction(()=>window.moved?.target.docId==='paper-beta'
+    && document.querySelector('.sess-hrow[data-sid="global-main"]')?.dataset.fileKey==='paper-beta');
   assert.equal(await page.evaluate(()=>window.moved.source),'default');
   pass('scope conversion remains available and uses the original storage owner');
 
   await page.evaluate(()=>window.setScope('folder')); await page.waitForSelector(more('folder-main'));
-  assert.deepEqual(await page.$$eval('.sess-hrow',nodes=>nodes.map(node=>node.dataset.sid)),['folder-main']);
+  assert.deepEqual(await historySids(), ['folder-main','global-main','global-other','paper-main']);
   await page.evaluate(()=>window.setHistoryMode('file')); await page.waitForSelector('.sess-filegroup');
-  assert.equal(await page.$eval('.sess-filegroup-name',node=>node.textContent),'Alpha paper');
+  assert.ok(await page.$$eval('.sess-filegroup-name',nodes=>nodes.some(node=>node.textContent==='Alpha paper')));
   await page.click(`${row('folder-main')} .sess-hgo`);
   assert.deepEqual(await page.evaluate(()=>window.opened),{sid:'folder-main',fileKey:'folder-vision',options:{force:false,docIdHint:'paper-alpha'}});
   await page.evaluate(()=>window.setScope('paper')); await page.waitForSelector(more('paper-main'));
-  assert.deepEqual(await page.$$eval('.sess-hrow',nodes=>nodes.map(node=>node.dataset.sid)),['paper-main']);
-  pass('folder and paper history preserve filtering, file grouping and document navigation');
+  assert.deepEqual(await historySids(), ['folder-main','global-main','global-other','paper-main']);
+  pass('folder and paper history share rows and preserve file grouping and document navigation');
 
   await page.evaluate(()=>{ const host=document.querySelector('#rightSide'); host.style.zoom='1.6'; host.style.height='430px'; });
   await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
   await open('paper-main');
   await page.screenshot({path:path.join(scratch,'history-menu-scaled.png')});
-  const geometry=await page.evaluate(()=>{const a=document.querySelector('.sess-hmore').getBoundingClientRect(),m=document.querySelector('.sess-row-menu').getBoundingClientRect();return {left:m.left,right:m.right,top:m.top,bottom:m.bottom,anchorRight:a.right,zoom:getComputedStyle(document.querySelector('.sess-row-menu')).zoom};});
+  const geometry=await page.$eval(more('paper-main'),node=>{const a=node.getBoundingClientRect(),m=document.querySelector('.sess-row-menu').getBoundingClientRect();return {left:m.left,right:m.right,top:m.top,bottom:m.bottom,anchorRight:a.right,zoom:getComputedStyle(document.querySelector('.sess-row-menu')).zoom};});
   assert.equal(geometry.zoom,'1.6');
   assert.ok(geometry.left>=7&&geometry.top>=7&&geometry.right<=1220-7&&geometry.bottom<=900-7);
   assert.ok(Math.abs(geometry.right-geometry.anchorRight)<2);
   await page.evaluate(()=>window.closeOverlays()); await closed();
   pass('scaled menus remain anchored and inside the viewport; navigation closes overlays');
   await page.evaluate(()=>window.setScope('global')); await page.waitForSelector(more('global-other'));
-  await open('global-other'); await page.click(`${menu} .danger`);
+  await open('global-other'); await page.locator(`${menu} .danger`).click();
   await page.waitForSelector('.sess-confirm-mask:not(.hidden)',{visible:true});
   await page.click('.sess-confirm-btn.danger');
   await page.waitForFunction(()=>!document.querySelector('.sess-hrow[data-sid="global-other"]'));

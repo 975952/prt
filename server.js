@@ -186,21 +186,27 @@ const isChatSid = sid => typeof sid === 'string' && /^[\w-]{1,40}$/.test(sid) &&
 const deletedChatFile = sid => `deleted-chat-${sid}.json`;
 const chatLockKeys = sid => isChatSid(sid) ? [deletedChatFile(sid)] : [];
 const legacyGlobalDeletes = new Set();
-/** 新格式：会话统一按 sid 存储，不再按 doc key 分类 */
-const sessionName = (sid) => `session-${sid}.json`;
+const sessionName = (fileKey, sid) => `session-${fileKey}${sid ? '-' + sid : ''}.json`;
+const sharedSessionName = sid => `session-${sid}.json`;
 
 // Old records have only their file name. The document key ends in a hex hash;
 // the sid can itself contain dashes. New writes store the exact split.
 function storedSessionSid(stem, record) {
   const saved = record?.storageSid;
   if (typeof saved === 'string' && /^[\w-]{0,40}$/.test(saved)
-    && (!saved || stem.endsWith('-' + saved))) return saved;
+    && (!saved || stem === saved || stem.endsWith('-' + saved))) return saved;
   const legacy = /-[0-9a-f]{1,10}-(legacy-[0-9a-f]{8})$/.exec(stem);
   if (legacy) return legacy[1];
   if (DOC_ID_RE.test(stem)) return '';
   const split = /^.+-[0-9a-f]{6,10}-([\w-]{1,40})$/.exec(stem)
     || /^.+-[0-9a-f]{1,5}-([\w-]{1,40})$/.exec(stem);
   return split?.[1] || '';
+}
+
+function sessionStorageOwner(stem, sid, data) {
+  if (typeof data.storageDoc === 'string' && /^[\w\u4e00-\u9fa5-]{1,120}$/.test(data.storageDoc)) return data.storageDoc;
+  if (sid && stem === sid) return docIdOf('default');
+  return sid && stem.endsWith('-' + sid) ? stem.slice(0, -(sid.length + 1)) : stem;
 }
 
 async function loadLegacyGlobalDeletes() {
@@ -225,15 +231,36 @@ async function sessionWasDeleted(file, sid) {
   return await existingPath(path.join(DATA_DIR, deletedSessionFile(file))) || await chatWasDeleted(sid);
 }
 
-/** 新格式：不再需要跟踪 copies，删除就是删除 */
 async function deleteChatCopies(file, sid) {
-  // 只删唯一的会话文件
+  // All writers and transfers for this sid take the same lock, including ones
+  // addressed to an owner that has never saved the conversation before.
   return queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
     const marker = deletedChatFile(sid);
-    await writeDataFile(marker, { v: 1, deletedAt: Date.now() });
-    await fsp.rm(path.join(DATA_DIR, file), { force: true });
+    const previous = await readDataFile(marker, null);
+    const owners = new Map();
+    function add(fileKey) {
+      if (typeof fileKey === 'string' && fileKey && !/[/\\:]/.test(fileKey))
+        owners.set(fileKey, { fileKey, sid });
+    }
+    for (const row of previous?.owners || []) if (row.sid === sid) add(row.fileKey);
+    const suffix = '-' + sid + '.json';
+    if (file !== sharedSessionName(sid)) add(file.slice('session-'.length, -suffix.length));
+    const shared = await readDataFile(sharedSessionName(sid), null);
+    if (shared?.storageSid === sid) add(sessionStorageOwner(sid, sid, shared));
+    for (const name of await fsp.readdir(DATA_DIR)) {
+      if (!name.startsWith('session-') || !name.endsWith(suffix)) continue;
+      const stem = name.slice('session-'.length, -5);
+      if (storedSessionSid(stem, await readDataFile(name, null)) === sid) add(name.slice('session-'.length, -suffix.length));
+    }
+    const rows = [...owners.values()];
+    await writeDataFile(marker, { v: 1, deletedAt: previous?.deletedAt || Date.now(), owners: rows });
+    if (shared?.storageSid === sid) await fsp.rm(path.join(DATA_DIR, sharedSessionName(sid)), { force: true });
     await fsp.rm(path.join(DATA_DIR, 'attachments', sid), { recursive: true, force: true });
-    return [];
+    for (const { fileKey } of rows) {
+      await fsp.rm(path.join(DATA_DIR, sessionName(fileKey, sid)), { force: true });
+      await fsp.rm(path.join(DATA_DIR, 'attachments', fileKey + '-' + sid), { recursive: true, force: true });
+    }
+    return rows;
   });
 }
 const deletedSessionResponse = () => ({ code: 'SESSION_DELETED', error: {
@@ -270,10 +297,12 @@ function writeDataFile(name, obj) {
 const ATTACHMENT_EXTS = ['png', 'jpg', 'webp'];
 const ATTACHMENT_ID_RE = /^[0-9a-f]{32}$/;
 
-/** 新格式：附件按 sid 统一存储 */
+/** Named chats share an attachment directory across workspaces. */
 function attachmentSessionKey(doc, sid) {
   const safeSid = String(sid || '').replace(/[^\w-]/g, '').slice(0, 40);
-  return safeSid || 'default';
+  if (isChatSid(safeSid)) return safeSid;
+  const key = docKeyCandidates(doc).find(candidate => !/[/\\:]/.test(candidate)) || docIdOf('default');
+  return safeSid ? `${key}-${safeSid}` : key;
 }
 function attachmentDir(doc, sid) {
   return path.join(DATA_DIR, 'attachments', attachmentSessionKey(doc, sid));
@@ -332,76 +361,140 @@ async function existingPath(file) {
   catch (error) { if (error.code === 'ENOENT') return false; throw error; }
 }
 async function attachmentFile(doc, sid, id) {
-  for (const ext of ATTACHMENT_EXTS) {
-    const file = path.join(attachmentDir(doc, sid), `${id}.${ext}`);
-    try { if ((await fsp.stat(file)).isFile()) return file; }
-    catch (error) { if (error.code !== 'ENOENT') throw error; }
+  const root = path.join(DATA_DIR, 'attachments');
+  const find = async dirs => {
+    for (const dir of dirs) {
+      for (const ext of ATTACHMENT_EXTS) {
+        const file = path.join(dir, `${id}.${ext}`);
+        try { if ((await fsp.stat(file)).isFile()) return file; }
+        catch (error) { if (error.code !== 'ENOENT') throw error; }
+      }
+    }
+    return null;
+  };
+  const safeSid = String(sid || '').replace(/[^\w-]/g, '').slice(0, 40);
+  const paths = new Set([attachmentDir(doc, safeSid)]);
+  for (const key of docKeyCandidates(doc)) {
+    if (!/[/\\:]/.test(key)) paths.add(path.join(root, safeSid ? `${key}-${safeSid}` : key));
   }
-  return null;
+  const direct = await find(paths);
+  if (direct || !isChatSid(safeSid)) return direct;
+  const dirs = await fsp.readdir(root, { withFileTypes: true }).catch(error => {
+    if (error.code === 'ENOENT') return [];
+    throw error;
+  });
+  const suffix = '-' + safeSid;
+  return find(dirs.filter(dir => dir.isDirectory() && dir.name.endsWith(suffix)
+    && DOC_ID_RE.test(dir.name.slice(0, -suffix.length)))
+    .map(dir => path.join(root, dir.name)).filter(dir => !paths.has(dir)));
 }
 
-/** 新格式：会话统一按 sid 存储，"移动"只是改 folderPath 和 docIds
- * 不再需要复制文件、迁移附件等复杂操作 */
+/** Single-conversation transfer. Evidence doc/page fields are never rewritten.
+ * Old paper-owned images retain their original owner; source-owned images are
+ * copied before publishing the destination. Source files stay recoverable until
+ * the final tombstone commits, and source images remain for pre-existing refs. */
 async function moveSession(body) {
-  const toSid = body?.toSid;
-  const fromSid = body?.fromSid;
-  if (typeof fromSid !== 'string' || !/^[A-Za-z0-9_-]{0,40}$/.test(fromSid)
+  const fromDoc = typeof body?.fromDoc === 'string' ? body.fromDoc.trim() : '';
+  const toDoc = typeof body?.toDoc === 'string' ? body.toDoc.trim() : '';
+  const fromSid = body?.fromSid, toSid = body?.toSid;
+  if (!fromDoc || !toDoc || fromDoc.length > 240 || toDoc.length > 240
+    || typeof fromSid !== 'string' || !/^[A-Za-z0-9_-]{0,40}$/.test(fromSid)
     || typeof toSid !== 'string' || !/^[A-Za-z0-9_-]{1,40}$/.test(toSid)
     || fromSid === '__translate' || toSid === '__translate'
-    || typeof body.folderPath !== 'string' || body.folderPath.length > 400) {
+    || typeof body.folderPath !== 'string' || body.folderPath.length > 400
+    || docIdOf(fromDoc) === docIdOf(toDoc)) {
     throw sessionMoveError(400, 'SESSION_MOVE_INVALID', '会话转换参数不合法');
   }
-  // 新格式下 sid 就是存储标识，直接用 sid 找文件
-  const file = sessionName(fromSid);
-  if (fromSid !== toSid) {
-    // 如果要改 sid，实际上是创建新会话，需要文件复制
-    const toFile = sessionName(toSid);
-    return queueSessionWrites([file, toFile, ...chatLockKeys(fromSid), ...chatLockKeys(toSid)], async () => {
-      if (await sessionWasDeleted(file, fromSid)) throw sessionMoveError(409, 'SESSION_DELETED', '原会话已删除或已转换');
-      const saved = await readDataFile(file, null);
-      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw sessionMoveError(404, 'SESSION_NOT_FOUND', '原会话不存在');
-      if ((Array.isArray(saved.entries) ? saved.entries : []).some(entry => entry?.kind !== 'user' && entry?.status === 'pending')) {
-        throw sessionMoveError(409, 'SESSION_GENERATING', '会话仍有未完成的回答，请等待完成');
+  const fromFile = await resolveSessionFileName(fromDoc, fromSid);
+  const toFile = await resolveSessionFileName(toDoc, toSid);
+  return queueSessionWrites([fromFile, toFile, ...chatLockKeys(fromSid), ...chatLockKeys(toSid)], async () => {
+    const fromFile = await resolveSessionFileName(fromDoc, fromSid);
+    const toFile = await resolveSessionFileName(toDoc, toSid);
+    if (await sessionWasDeleted(fromFile, fromSid)) throw sessionMoveError(409, 'SESSION_DELETED', '原会话已删除或已转换');
+    const saved = await readDataFile(fromFile, null);
+    if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw sessionMoveError(404, 'SESSION_NOT_FOUND', '原会话不存在');
+    const fromStem = fromFile.slice('session-'.length, -5);
+    const sourceOwner = sessionStorageOwner(fromStem, fromSid, saved);
+    if (!docKeyCandidates(fromDoc).includes(sourceOwner)) throw sessionMoveError(404, 'SESSION_NOT_FOUND', '原会话不存在');
+    // Check the locked, latest snapshot: another window may still be streaming.
+    if ((Array.isArray(saved.entries) ? saved.entries : []).some(entry => entry?.kind !== 'user' && entry?.status === 'pending')) {
+      throw sessionMoveError(409, 'SESSION_GENERATING', '会话仍有未完成的回答，请等待完成；若上次已中断，请先恢复并重试，再完成或停止后移动。');
+    }
+    const targetDir = attachmentDir(toDoc, toSid);
+    if (await sessionWasDeleted(toFile, toSid) || await existingPath(path.join(DATA_DIR, toFile)) || await existingPath(targetDir)
+      || await findLegacySessions(toSid)) {
+      throw sessionMoveError(409, 'SESSION_TARGET_EXISTS', '目标会话已存在，请重新转换');
+    }
+    const next = JSON.parse(JSON.stringify(saved));
+    next.storageSid = toSid;
+    next.storageDoc = docIdOf(toDoc);
+    next.folderPath = body.folderPath;
+    const draftOwner = { docId: `session:${docIdOf(toDoc)}:${toSid}`, mode: 'chat' };
+    next.draftOwner = draftOwner;
+    const copies = new Map();
+    const isSource = (doc, sid) => docIdOf(doc) === docIdOf(fromDoc) && sid === fromSid;
+    async function relocate(owner, ids, fallbackDoc, fallbackSid) {
+      if (!owner || typeof owner !== 'object') return;
+      const explicit = typeof owner.attachmentDoc === 'string' && owner.attachmentDoc;
+      let doc = explicit || fallbackDoc || fromDoc;
+      let sid = typeof owner.attachmentSid === 'string' ? owner.attachmentSid : fallbackSid;
+      const refs = [...new Set(ids.filter(id => typeof id === 'string' && ATTACHMENT_ID_RE.test(id)))];
+      let files = await Promise.all(refs.map(id => attachmentFile(doc, sid, id)));
+      // Some old user rows carry the evidence paper but stored images under the
+      // conversation scope. Fall back only when the entire group is available.
+      if (!explicit && files.some(file => !file)) {
+        const scoped = await Promise.all(refs.map(id => attachmentFile(fromDoc, fromSid, id)));
+        if (scoped.every(Boolean)) { doc = fromDoc; sid = fromSid; files = scoped; }
       }
-      if (await sessionWasDeleted(toFile, toSid) || await existingPath(path.join(DATA_DIR, toFile))) {
-        throw sessionMoveError(409, 'SESSION_TARGET_EXISTS', '目标会话已存在');
+      if (files.some(file => !file)) throw sessionMoveError(409, 'SESSION_ATTACHMENT_MISSING', '原会话的截图附件不完整，暂时无法转换');
+      if (isSource(doc, sid) || (isChatSid(fromSid) && sid === fromSid
+        && files.length && files.every(file => path.dirname(file) === attachmentDir(fromDoc, fromSid)))) {
+        for (const file of files) copies.set(path.basename(file), file);
+        if (explicit || refs.length) { owner.attachmentDoc = toDoc; owner.attachmentSid = toSid; }
+      } else if (refs.length) {
+        owner.attachmentDoc = doc; owner.attachmentSid = sid;
       }
-      const next = JSON.parse(JSON.stringify(saved));
-      next.storageSid = toSid;
-      next.folderPath = body.folderPath;
-
-      // 附件也随 sid 迁移
-      const fromDir = attachmentDir('', fromSid);
-      const toDir = attachmentDir('', toSid);
-      if (await existingPath(fromDir)) {
-        await fsp.mkdir(path.dirname(toDir), { recursive: true });
-        await fsp.rename(fromDir, toDir);
+    }
+    for (const entry of Array.isArray(next.entries) ? next.entries : []) {
+      const retry = entry?.retry;
+      const originalRetryDoc = retry?.attachmentDoc || retry?.docId || entry?.docId || fromDoc;
+      const originalRetrySid = typeof retry?.attachmentSid === 'string' ? retry.attachmentSid : fromSid;
+      await relocate(entry, (Array.isArray(entry?.shots) ? entry.shots : []).map(shot => shot?.id),
+        retry?.attachmentDoc || entry?.docId || retry?.docId || fromDoc, originalRetrySid);
+      if (retry && typeof retry === 'object') {
+        await relocate(retry, (Array.isArray(retry.attachments) ? retry.attachments : [])
+          .filter(attachment => attachment?.kind === 'image' || attachment?.screenshot).map(attachment => attachment?.id),
+        originalRetryDoc, originalRetrySid);
+        if ((retry.kind || 'chat') === 'chat') retry.composerOwner = { ...draftOwner };
       }
-
+    }
+    const stageDir = `${targetDir}.moving-${crypto.randomBytes(8).toString('hex')}`;
+    let publishedImages = false, publishedSession = false, committed = false;
+    try {
+      if (copies.size) {
+        await fsp.mkdir(stageDir, { recursive: true });
+        for (const [name, source] of copies) {
+          const target = path.join(stageDir, name);
+          await fsp.copyFile(source, target, fs.constants.COPYFILE_EXCL);
+          if ((await fsp.stat(source)).size !== (await fsp.stat(target)).size) throw new Error('Incomplete attachment copy');
+        }
+        await fsp.rename(stageDir, targetDir);
+        publishedImages = true;
+      }
       await writeDataFile(toFile, next);
-      await writeDataFile(deletedSessionFile(file), { v: 1, deletedAt: Date.now(), movedTo: { sid: toSid } });
-      try { await fsp.rm(path.join(DATA_DIR, file), { force: true }); } catch { /* tombstone hides it */ }
-
-      return { ok: true, sid: toSid, draftOwner: { docId: `session:${toSid}`, mode: 'chat' } };
-    });
-  } else {
-    // 只改 folderPath 和 docIds，不改 sid
-    return queueSessionWrites([file, ...chatLockKeys(fromSid)], async () => {
-      if (await sessionWasDeleted(file, fromSid)) throw sessionMoveError(409, 'SESSION_DELETED', '原会话已删除');
-      const saved = await readDataFile(file, null);
-      if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw sessionMoveError(404, 'SESSION_NOT_FOUND', '原会话不存在');
-      if ((Array.isArray(saved.entries) ? saved.entries : []).some(entry => entry?.kind !== 'user' && entry?.status === 'pending')) {
-        throw sessionMoveError(409, 'SESSION_GENERATING', '会话仍有未完成的回答');
-      }
-      const next = JSON.parse(JSON.stringify(saved));
-      next.folderPath = body.folderPath;
-      if (Array.isArray(body.docIds)) next.docIds = body.docIds;
-      next.storageSid = fromSid;
-      await writeDataFile(file, next);
-
-      return { ok: true, sid: fromSid, draftOwner: { docId: `session:${fromSid}`, mode: 'chat' } };
-    });
-  }
+      publishedSession = true;
+      const marker = isChatSid(fromSid) ? deletedChatFile(fromSid) : deletedSessionFile(fromFile);
+      await writeDataFile(marker, { v: 1, deletedAt: Date.now(), movedTo: { doc: toDoc, sid: toSid } });
+      committed = true;
+      // Failure to remove a hidden backup must not undo a committed transfer.
+      try { await fsp.rm(path.join(DATA_DIR, fromFile), { force: true }); } catch { /* tombstone hides it */ }
+      return { ok: true, doc: toDoc, sid: toSid, draftOwner };
+    } finally {
+      if (!committed && publishedSession) await fsp.rm(path.join(DATA_DIR, toFile), { force: true }).catch(() => {});
+      if (!committed && publishedImages) await fsp.rm(targetDir, { recursive: true, force: true }).catch(() => {});
+      await fsp.rm(stageDir, { recursive: true, force: true }).catch(() => {});
+    }
+  });
 }
 
 async function handleAttachment(req, res, url) {
@@ -437,18 +530,14 @@ async function handleAttachment(req, res, url) {
   if (req.method === 'GET') {
     const id = String(url.searchParams.get('id') || '');
     if (!ATTACHMENT_ID_RE.test(id)) return sendJson(res, 400, { error: { message: '附件 id 不合法' } });
-    const dir = attachmentDir(doc, sid);
-    for (const ext of ATTACHMENT_EXTS) {
-      const abs = path.join(dir, `${id}.${ext}`);
-      let st;
-      try { st = await fsp.stat(abs); } catch { continue; }
-      if (!st.isFile()) continue;
-      try {
+    try {
+      const abs = await attachmentFile(doc, sid, id);
+      if (abs) {
         const bytes = await fsp.readFile(abs);
-        return send(res, 200, bytes, { 'Content-Type': MIME[`.${ext}`] || 'application/octet-stream', 'Content-Length': String(bytes.length) });
-      } catch {
-        return sendJson(res, 500, { error: { message: '读取截图片失败' } });
+        return send(res, 200, bytes, { 'Content-Type': MIME[path.extname(abs)] || 'application/octet-stream', 'Content-Length': String(bytes.length) });
       }
+    } catch {
+      return sendJson(res, 500, { error: { message: '读取截图片失败' } });
     }
     return sendJson(res, 404, { error: { message: '附件不存在（可能已被清理）' } });
   }
@@ -2378,17 +2467,44 @@ function prepareSessionRecord(payload, oldData, now) {
   };
 }
 
-/**
- * 新格式：会话统一按 sid 存储，忽略 doc 参数。
- * 所有会话共用一个名字空间。
- */
-async function resolveSessionFileName(doc, sid) {
-  if (!sid) {
-    // 如果没有 sid，这是一个错误的调用（旧的默认会话格式）
-    // 不再支持无 sid 的会话
-    throw new Error('resolveSessionFileName 需要 sid');
+async function findLegacySessions(sid) {
+  let latest = null;
+  let latestTime = -1;
+  const suffix = `-${sid}.json`;
+  for (const name of await fsp.readdir(DATA_DIR)) {
+    if (!name.startsWith('session-') || !name.endsWith(suffix) || name === sharedSessionName(sid)) continue;
+    const data = await readDataFile(name, null);
+    if (!data || storedSessionSid(name.slice('session-'.length, -5), data) !== sid || await sessionWasDeleted(name, sid)) continue;
+    const time = sessionTs(data.updatedAt);
+    if (time > latestTime) { latest = name; latestTime = time; }
   }
-  return sessionName(sid);
+  return latest;
+}
+
+/** Keep old scoped records addressable while storing new named chats by SID. */
+async function resolveSessionFileName(doc, sid) {
+  const keys = docKeyCandidates(doc).filter(key => !/[/\\:]/.test(key));
+  const shared = isChatSid(sid) ? sharedSessionName(sid) : null;
+  if (shared) {
+    if (await chatWasDeleted(sid)) return shared;
+    const data = await readDataFile(shared, null);
+    if (data?.storageSid === sid) return shared;
+  }
+  for (const key of keys) {
+    const name = sessionName(key, sid);
+    if (await sessionWasDeleted(name)) return name;
+    if (await existingPath(path.join(DATA_DIR, name))) return name;
+  }
+  const scoped = sessionName(keys[0] || docIdOf('default'), sid);
+  if (!shared) return scoped;
+  return await findLegacySessions(sid) || (await existingPath(path.join(DATA_DIR, shared))
+    || await sessionWasDeleted(shared, sid) ? scoped : shared);
+}
+
+async function writableSessionFile(file, sid) {
+  const shared = sharedSessionName(sid);
+  if (!isChatSid(sid) || file === shared || await existingPath(path.join(DATA_DIR, shared))) return file;
+  return shared;
 }
 
 async function handle(req, res) {
@@ -2674,13 +2790,21 @@ async function handle(req, res) {
       const merge = url.searchParams.get('merge') === '1';
       // 同一会话文件的 read-modify-write 串行化：否则并发 POST 各读旧内容，后写者抹掉先写者。
       const job = queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
+        const file = await resolveSessionFileName(doc, sid);
         if (await sessionWasDeleted(file, sid)) return SESSION_DELETED;
         const old = await readDataFile(file, null);
         const merged = merge ? mergeSessionPayload(old, payload) : replaceSessionPayload(payload, old);
+        const stem = file.slice('session-'.length, -5);
+        const storageDoc = old ? sessionStorageOwner(stem, sid, old) : docIdOf(doc);
+        if (old && isChatSid(sid) && !docKeyCandidates(doc).includes(storageDoc)) {
+          merged.folderPath = old.folderPath;
+        }
         const record = prepareSessionRecord(merged, old, Date.now());
         record.storageSid = sid;
-        await writeDataFile(file, record);
-        await pruneAttachments(doc, sid, record);
+        record.storageDoc = storageDoc;
+        const target = await writableSessionFile(file, sid);
+        await writeDataFile(target, record);
+        if (!isChatSid(sid) || target === sharedSessionName(sid)) await pruneAttachments(doc, sid, record);
         return record;
       });
       let stored;
@@ -2704,12 +2828,14 @@ async function handle(req, res) {
       }
       let next;
       try { next = await queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
+      const file = await resolveSessionFileName(doc, sid);
       if (await sessionWasDeleted(file, sid)) return SESSION_DELETED;
       const cur = await readDataFile(file, null);
       if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return null;
       const now = Date.now();
       const next = { ...cur };
       next.storageSid = sid;
+      next.storageDoc = sessionStorageOwner(file.slice('session-'.length, -5), sid, cur);
       if (Object.prototype.hasOwnProperty.call(patch, 'title')) {
         const t = collapsWs(patch.title).slice(0, SESSION_TITLE_MAX);
         // 带 titleSource='ai' 的是自动标题；普通改名保持 user（手动最优先）
@@ -2734,7 +2860,7 @@ async function handle(req, res) {
       }
       next.v = 4;
       if (!sessionTs(next.createdAt)) next.createdAt = sessionTs(cur.updatedAt) || now;
-      await writeDataFile(file, next);
+      await writeDataFile(await writableSessionFile(file, sid), next);
       return next;
       }); }
       catch (e) {
@@ -2759,11 +2885,12 @@ async function handle(req, res) {
     }
     if (req.method === 'DELETE') {
       try {
-        if (url.searchParams.get('copies') === '1' && isChatSid(sid) && sid === url.searchParams.get('sid')) {
+        if (isChatSid(sid) && sid === url.searchParams.get('sid')) {
           const owners = await deleteChatCopies(file, sid);
           return sendJson(res, 200, { ok: true, owners });
         }
         await queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
+          const file = await resolveSessionFileName(doc, sid);
           const marker = deletedSessionFile(file);
           if (!await existingPath(path.join(DATA_DIR, marker))) await writeDataFile(marker, { v: 1, deletedAt: Date.now(), scope: 'file' });
           await fsp.rm(path.join(DATA_DIR, file), { force: true });
@@ -2816,18 +2943,19 @@ async function handle(req, res) {
       for (const name of names) {
         const m = /^session-(.+)\.json$/.exec(name);
         if (!m) continue;
-        const rest = m[1];
-        if (rest.endsWith('-__translate') || rest.endsWith('__translate')) continue;
-        let sid = '';
-        if (rest === fromDocKey) sid = '';
-        else if (rest.startsWith(`${fromDocKey}-`)) sid = rest.slice(fromDocKey.length + 1);
-        else continue;
-        const targetName = sessionName(toDocKey, sid);
-        await queueSessionWrites([name, targetName, ...chatLockKeys(sid)], async () => {
-          if (await sessionWasDeleted(name, sid) || await sessionWasDeleted(targetName, sid)) return;
-          const data = await readDataFile(name, null);
+        const stem = m[1], snapshot = await readDataFile(name, null);
+        if (!snapshot) continue;
+        const sid = storedSessionSid(stem, snapshot);
+        if (sid === '__translate' || sessionStorageOwner(stem, sid, snapshot) !== fromDocKey) continue;
+        const scopedTarget = sessionName(toDocKey, sid);
+        await queueSessionWrites([name, scopedTarget, ...chatLockKeys(sid)], async () => {
+          const source = await resolveSessionFileName(fromDocKey, sid);
+          if (source !== name || await sessionWasDeleted(source, sid)) return;
+          const data = await readDataFile(source, null);
           if (!data || typeof data !== 'object' || Array.isArray(data)) return;
-          await writeDataFile(targetName, { ...data, v: 4, storageSid: sid, folderPath: toPath || data.folderPath || '' });
+          const target = isChatSid(sid) ? await writableSessionFile(source, sid) : scopedTarget;
+          if (await sessionWasDeleted(target, sid)) return;
+          await writeDataFile(target, { ...data, v: 4, storageSid: sid, storageDoc: toDocKey, folderPath: toPath });
           migrated += 1;
         });
       }
@@ -2860,6 +2988,8 @@ async function handle(req, res) {
   if (pathname === '/api/attachment') return handleAttachment(req, res, url);
 
   if (pathname === '/api/sessions') {
+    const doc = url.searchParams.get('doc');
+    const keys = doc ? docKeyCandidates(doc) : [];
     const folderPath = (url.searchParams.get('folderPath') || '').slice(0, 400);
     const scope = url.searchParams.get('scope') === 'all' ? 'all' : 'folder';
     const archivedParam = url.searchParams.get('archived');
@@ -2869,35 +2999,32 @@ async function handle(req, res) {
     let names = [];
     try { names = await fsp.readdir(DATA_DIR); } catch { names = []; }
     const out = [];
-
-    for (const name of names) {
-      // 新格式：session-{sid}.json
-      const m = /^session-(.+)\.json$/.exec(name);
-      if (!m) continue;
-      const sid = m[1];
-      // 跳过特殊会话（译文等）
-      if (sid === '__translate' || sid.includes('__translate')) continue;
-
-      const data = await readDataFile(name, null);
+    const records = new Map();
+    const shared = new Set();
+    for (const fileName of names) {
+      const match = /^session-(.+)\.json$/.exec(fileName);
+      if (!match || match[1].endsWith('-__translate') || match[1] === '__translate') continue;
+      const data = await readDataFile(fileName, null);
       if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
-      if (await sessionWasDeleted(name, sid)) continue;
-
-      // 按 folderPath 过滤（scope=folder 模式）
-      if (scope === 'folder') {
-        const dataFolder = String(data.folderPath || '');
-        if (dataFolder !== folderPath) continue;
-      }
-
+      const stem = match[1], sid = storedSessionSid(stem, data);
+      if (sid === '__translate' || await sessionWasDeleted(fileName, sid)) continue;
+      if (sid && stem === sid) shared.add(sid);
+      records.set(fileName, { stem, sid, data });
+    }
+    for (const [fileName, { stem, sid, data }] of records) {
+      if (shared.has(sid) && stem !== sid) continue;
+      const fileKey = sessionStorageOwner(stem, sid, data);
+      const dataFolder = (typeof data.folderPath === 'string' && data.folderPath) || (doc && keys.includes(fileKey) ? folderPath : '');
+      if (scope === 'folder' && (doc ? !keys.includes(fileKey) : dataFolder !== folderPath)) continue;
       let stat = null;
-      try { stat = await fsp.stat(path.join(DATA_DIR, name)); } catch { stat = null; }
+      try { stat = await fsp.stat(path.join(DATA_DIR, fileName)); } catch { stat = null; }
       const mtime = stat ? Math.round(stat.mtimeMs) : 0;
       const createdFallback = stat && stat.birthtimeMs ? Math.round(stat.birthtimeMs) : 0;
       const updatedAt = sessionTs(data.updatedAt) || mtime;
-
       out.push({
         sid,
-        fileKey: sid,  // 新格式：fileKey 就是 sid
-        folderPath: (typeof data.folderPath === 'string' && data.folderPath) ? data.folderPath : '',
+        fileKey,
+        folderPath: dataFolder,
         title: sessionTitleOf(data),
         titleSource: data.titleSource === 'user' ? 'user' : (data.titleSource === 'ai' && collapsWs(data.title) ? 'ai' : 'auto'),
         preview: collapsWs(sessionLastEntryText(data)).slice(0, 80),
@@ -2914,7 +3041,6 @@ async function handle(req, res) {
         contentRev: Number(data.contentRev) || 0,
       });
     }
-
     let items = out;
     if (archivedFilter === '0') items = items.filter((s) => !s.archived);
     else if (archivedFilter === '1') items = items.filter((s) => s.archived);

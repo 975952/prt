@@ -2827,7 +2827,6 @@ function initAgentWorkspace() {
     onMoveCurrent: sessionsMoveCurrent,
     onSessionSelect: async row => {
       if (!row || typeof row.sid !== 'string') return;
-      if (agentSessionOverride !== 'global') await changeAgentScope('global');
       sessionsHideEntryCard();
       await openSessionFromHistory(row, { force: true });
       setAgentLanding(false);
@@ -7612,14 +7611,11 @@ function scopeDocIdOf(name) {
   const slug = s.replace(/\.[^.]+$/, '').replace(/[^\w\u4e00-\u9fa5-]+/g, '_').slice(0, 48);
   return `${slug}-${h.toString(16)}`;
 }
-/** 新格式：fileKey 就是 sid，无需 scope 匹配逻辑 */
 function isScopeFileKey(fileKey) {
-  // 所有会话对所有 scope 都可见，fileKey 就是 sid
-  return true;
+  return !!fileKey && scopeDocIdOf(fileKey) === scopeDocIdOf(sessionScopeKey());
 }
 function isAgentGlobalSessionKey(fileKey) {
-  // 无需再区分，所有会话都共用，但保持接口兼容
-  return true;
+  return !!fileKey && [scopeDocIdOf('default'), scopeDocIdOf(LEGACY_GLOBAL_SESSION_DOC)].includes(scopeDocIdOf(fileKey));
 }
 function describeSessionScope(row) {
   const key = scopeDocIdOf(row?.fileKey || sessionScopeKey());
@@ -8049,8 +8045,10 @@ function onRemoteSessionSaved(data) {
   }
   if (data.kind === 'translate') dropDocView(data.docId);
   if (data.kind === 'chat') {
-    const key = chatOwnerKey(data.scope, data.sid);
+    const scope = scopeDocIdOf(data.scope) === scopeDocIdOf('default') ? 'default' : data.scope;
+    const key = chatOwnerKey(scope, data.sid);
     if (key !== displayedChatKey && !chatJobs.has(key)) chatViews.delete(key);
+    if (agentWorkspaceView === 'full') refreshConversationList();
   }
   remoteSessionPending.push(data);
   scheduleRemoteSession();
@@ -8895,10 +8893,11 @@ const refreshConversationList = debounce(async () => {
   updateAgentRecentSessions();
 }, 120);
 function refreshSavedConversationList(scope, sid, { completed = false } = {}) {
-  if (!hasChatScope() || scopeDocIdOf(scope) !== scopeDocIdOf(sessionScopeKey())) return;
+  const ownerKey = scopeDocIdOf(scope);
+  if (!hasChatScope() || (agentWorkspaceView !== 'full' && ownerKey !== scopeDocIdOf(sessionScopeKey()))) return;
   // Publish a newly saved conversation locally as well as to other windows.
   // Only metadata is refreshed: streaming nodes and the selected draft stay put.
-  if (completed || !sessionsGetList().some(row => row.sid === sid && isScopeFileKey(row.fileKey))) refreshConversationList();
+  if (completed || !sessionsGetList().some(row => row.sid === sid && scopeDocIdOf(row.fileKey) === ownerKey)) refreshConversationList();
 }
 
 function closeSessionMenu() {
@@ -9159,7 +9158,7 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   renderSessionBar();
   updateSendScope();
   if (!silent) toast(tr("已新建会话"), 'ok', 1600);
-  sessionsOnSessionChanged({ refresh: false });
+  sessionsOnSessionChanged({ refresh: owner.scope !== targetOwner.scope });
   setAgentLanding(agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global');
 }
 
@@ -15073,42 +15072,28 @@ function updateSessionSettingHints() {
     : tr("按论文整理会话，便于回到对应的阅读内容。"));
 }
 
-/** 切换「换论文时对话怎么接」：当前这段对话先按旧归属存盘，再把同一个 sid 接到新归属方式下，
- *  内容复制一份到新位置，旧文件保留作备份，不迁移不删除，避免任何数据丢失。 */
+/** 修改打开论文的默认会话方式，同时保留当前会话的存储归属。 */
 async function applySessionScopeMode(mode) {
   const owner = captureSessionOwner();
   const docId = state.doc?.docId || '';
-  const sid = docId ? activeSidFor(docId) : '';
   const prev = readSessionScopeMode();
   const want = mode === 'paper' || mode === 'global' ? mode : 'folder';
   if (prev === want) { updateSessionSettingHints(); return; }
   if (chatJobs.has(displayedChatKey)) { toast(tr("正在生成中，先等它跑完或点停止再切换会话"), 'err', 3200); fillSessionSettings(); return; }
   persistSession.cancel?.();
-  // ① 旧归属下先存一次：saveSessionNow 读 scope 键时还是旧模式
   if (docId) { try { await saveSessionNow(); } catch { /* 存不下也继续 */ } }
   if (!sessionOwnerCurrent(owner)) return;
+  const oldSlot = activeSessionSlot(docId);
+  const storage = { scope: owner.scope, folder: sessionStorageFolderPath(), paperId: currentComposerOwner('chat').docId };
   sessionNavigationSeq += 1;
   parkChatSession();
-  // ② 记下旧归属键，再写新模式。新键下的副本要用「完整复制旧文件」而不是重新保存一次，
-  //    否则 payload 里 docIds 只有当前论文，跨论文会话的「问过哪几篇」会丢。
-  const oldScopeKey = sessionScopeKey();
   const next = writeSessionScopeMode(want);
-  const nextScopeKey = sessionScopeKey();
-  updateSessionSettingHints();
-  // ③ 把同一个 sid 接到新归属的槽位，并完整复制一份到新键（旧文件保留作备份，不迁移不删除）
-  if (docId && sid) {
-    setActiveSidFor(docId, sid);
-    displayedChatKey = chatOwnerKey(nextScopeKey, sid);
-    parkChatSession();
-    const targetOwner = captureSessionOwner();
-    let copied = false;
-    if (oldScopeKey !== nextScopeKey) copied = await copySessionAcrossScope(oldScopeKey, nextScopeKey, sid);
-    if (!sessionOwnerCurrent(targetOwner)) return;
-    // 源文件不存在（例如刚启动还没落盘）时才退回按内存内容保存一次
-    if (!copied) { try { await saveSessionNow(); } catch { /* 同上 */ } }
-    if (!sessionOwnerCurrent(targetOwner)) return;
+  if (docId && oldSlot !== activeSessionSlot(docId)) {
+    if (owner.sid || sessionHasChatContent()) selectSessionOwner(docId, owner.sid, storage);
+    else mountChatSession();
+    activateComposerDraft('chat');
   }
-  if (docId) { displayedChatKey = chatOwnerKey(nextScopeKey, activeSidFor(docId)); parkChatSession(); }
+  updateSessionSettingHints();
   const label = next === 'global' ? tr("全局共用（所有论文接同一段对话）")
     : (next === 'paper' ? tr("按论文（每篇论文各接自己那一段）") : tr("按文件夹（同文件夹里的论文接同一段）"));
   toast(tr("换论文时对话怎么接：{0}", label), 'ok', 2600);

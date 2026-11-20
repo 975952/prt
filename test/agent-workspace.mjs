@@ -95,9 +95,9 @@ function folderScope(folder) {
   for (const character of `/${folder}`) hash = Math.imul(hash ^ character.charCodeAt(0), 16777619) >>> 0;
   return `folder-${hash.toString(16).padStart(8, '0')}`;
 }
-async function seed(scope, sid, title, marker, paper = null) {
+function sessionFixture(sid, title, marker, paper) {
   const stamp = Date.now();
-  await json(sessionUrl(scope, sid), {
+  return {
     title, titleSource: 'user', createdAt: stamp, updatedAt: stamp,
     folderPath: paper?.folder || '', docIds: paper ? [paper.docId] : [],
     entries: [
@@ -107,9 +107,12 @@ async function seed(scope, sid, title, marker, paper = null) {
         status: 'complete', docId: paper?.docId || '', docTitle: paper?.name || '' },
     ],
     history: [{ role: 'user', content: `Question ${marker}` }, { role: 'assistant', content: marker }], ops: [],
-  });
+  };
 }
-async function newPage(mode, locale = 'en') {
+async function seed(scope, sid, title, marker, paper = null) {
+  await json(sessionUrl(scope, sid), sessionFixture(sid, title, marker, paper));
+}
+async function newPage(mode, locale = 'en', { skipWelcome = false } = {}) {
   const context = await browser.createBrowserContext();
   const tab = await context.newPage();
   page = tab;
@@ -151,18 +154,20 @@ async function newPage(mode, locale = 'en') {
     }
     return request.continue();
   });
-  await tab.evaluateOnNewDocument(({ mode, locale }) => {
+  await tab.evaluateOnNewDocument(({ mode, locale, skipWelcome }) => {
     if (!localStorage.getItem('agent-workspace-test-initialized')) {
       localStorage.setItem('reader.locale', locale);
       localStorage.setItem('reader.session.scopeMode', mode);
       localStorage.setItem('reader.session.onEnter', 'choose');
       localStorage.setItem('reader.session.aiTitle', '0');
       localStorage.setItem('reader.agentRead', '0');
+      if (skipWelcome) localStorage.setItem('reader.agent.welcome.v1', 'acknowledged');
       localStorage.setItem('agent-workspace-test-initialized', '1');
     }
-  }, { mode, locale });
+  }, { mode, locale, skipWelcome });
   await tab.goto(`${base}/?topbar=static`, { waitUntil: 'domcontentloaded' });
   await tab.waitForFunction(() => !!window.__ctx && window.__state?.papers.length === 4);
+  await tab.waitForSelector('html:not([data-startup])');
   await tab.evaluate(() => window.__ctx.setScopeRange('current'));
   return tab;
 }
@@ -220,9 +225,7 @@ async function chooseGlobal() {
     && document.querySelector('#aiArea').textContent.includes('GLOBAL_PRIMARY_ONLY'));
 }
 async function reviewSharedHistory(paper) {
-  page = await newPage('paper');
-  const welcomeSkip = await page.$('#agentWelcomeSkip');
-  if (welcomeSkip) await welcomeSkip.click();
+  page = await newPage('paper', 'en', { skipWelcome: true });
   const openPaper = async () => {
     if (!await visible('#home')) await page.locator('#homeBtn').click();
     await page.locator(`#homeList .home-item[data-id=${JSON.stringify(paper.docId)}] .home-item-go`).click();
@@ -247,6 +250,9 @@ async function reviewSharedHistory(paper) {
     const { sessions } = await json('/api/sessions?scope=all&archived=all&limit=500');
     const fileKey = owner === 'default' ? 'default-9ce67dce' : owner;
     assert.deepEqual(sessions.filter(item => item.sid === id).map(item => item.fileKey), [fileKey]);
+    const stored = JSON.parse(fs.readFileSync(path.join(dataDir, `session-${id}.json`), 'utf8'));
+    assert.equal(stored.storageSid, id);
+    assert.equal(stored.storageDoc, fileKey);
   };
   const assertTranscript = async (id, owner, start, reply) => {
     const saved = await json(sessionUrl(owner, id));
@@ -314,21 +320,28 @@ async function reviewHistoryDeletion(paper) {
   const removed = ['historyactive', 'historyinactive'];
   const retained = 'independenthistory';
   const title = 'Two discussions with the same title';
-  // Changing the scope setting copies the conversation and its SID. Alina
-  // shows its global owner while the reader's history spans all owners.
+  // Older builds could leave scoped files for the same conversation.
+  const legacyFile = (owner, id) => path.join(dataDir, `session-${owner === 'default' ? 'default-9ce67dce' : owner}-${id}.json`);
   for (const id of removed) {
-    for (const owner of owners) await seed(owner, id, title, id, paper);
+    for (const owner of owners) {
+      fs.writeFileSync(legacyFile(owner, id), JSON.stringify({ ...sessionFixture(id, title, id, paper), storageSid: id }));
+    }
   }
   await seed(paper.docId, retained, title, 'INDEPENDENT_HISTORY', paper);
   const row = id => `#sessHistory .sess-hrow[data-sid=${JSON.stringify(id)}]`;
-  page = await newPage('paper');
+  page = await newPage('paper', 'en', { skipWelcome: true });
   await full({ landing: true }); await history();
   await page.locator(row(removed[0]) + ' .sess-hgo').click();
   await page.waitForFunction(id => __ctx.activeSession === id && !document.querySelector('#sessHistory').getClientRects().length, {}, removed[0]);
   for (const id of [...removed].reverse()) {
     await history();
-    await page.locator(row(id) + ' .sess-hmore').click();
-    await page.locator('#sessRowMenu .danger').click();
+    const more = row(id) + ' .sess-hmore';
+    await page.waitForSelector(more, { visible: true });
+    // History refresh replaces rows and dismisses their menus.
+    await page.$eval(more, trigger => {
+      trigger.click();
+      document.querySelector('#sessRowMenu .danger').click();
+    });
     await page.locator('.sess-confirm-mask:not(.hidden) .sess-confirm-btn.danger').click();
     await page.waitForFunction(id => !document.querySelector(`#sessHistory .sess-hrow[data-sid="${id}"]`), {}, id);
   }
@@ -338,6 +351,7 @@ async function reviewHistoryDeletion(paper) {
     if (cold) {
       await page.reload({ waitUntil: 'domcontentloaded' });
       await page.waitForFunction(() => window.__ctx && __state.papers.length === 4);
+      await page.waitForSelector('html:not([data-startup])');
     }
     if (!await visible('#home')) await page.locator('#homeBtn').click();
     await page.locator(`#homeList .home-item[data-id=${JSON.stringify(paper.docId)}] .home-item-go`).click();
@@ -351,7 +365,10 @@ async function reviewHistoryDeletion(paper) {
       !ids.includes(previouslyDeletedSid));
   }
   for (const id of removed) {
-    for (const owner of owners) assert.equal((await json(sessionUrl(owner, id))).deleted, true, `deleted ${owner}/${id}`);
+    for (const owner of owners) {
+      assert.equal((await json(sessionUrl(owner, id))).deleted, true, `deleted ${owner}/${id}`);
+      assert.ok(!fs.existsSync(legacyFile(owner, id)), `removed the old scoped file for ${owner}/${id}`);
+    }
   }
   check('deletion reaches every historical owner and preserves the unrelated conversation on disk',
     (await json(sessionUrl(paper.docId, retained))).entries.some(entry => entry.text === 'INDEPENDENT_HISTORY'));

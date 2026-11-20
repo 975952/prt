@@ -140,70 +140,71 @@ try {
   assert.equal((await request('/api/sessions/move', undefined, 'GET')).status, 405);
   pass('invalid scopes and translation IDs, missing/deleted sources and occupied/tombstoned targets never alter the source');
 
-  await seed('generating-source', 'source', { entries: [
+  const generatingSid = 'generating-chat', generatingTargetSid = 'generated-chat';
+  await seed('generating-source', generatingSid, { entries: [
     { id: 'question', block: 'chat', kind: 'user', status: 'user', text: 'Still generating' },
     { id: 'answer', block: 'chat', kind: 'assistant', status: 'pending', text: 'Partial output', generation: 1, generationId: 'attempt' },
   ], history: [{ role: 'user', content: 'Still generating' }] });
-  const generating = await read(session('generating-source', 'source'));
-  assert.equal((await move('generating-source', 'source', 'generating-target', 'dest', 409)).code, 'SESSION_GENERATING');
-  assert.deepEqual(await read(session('generating-source', 'source')), generating);
+  const generating = await read(session('generating-source', generatingSid));
+  assert.equal((await move('generating-source', generatingSid, 'generating-target', generatingTargetSid, 409)).code, 'SESSION_GENERATING');
+  assert.deepEqual(await read(session('generating-source', generatingSid)), generating);
   assert.equal((await list('generating-target')).sessions.length, 0);
   // A real Stop/completion is an ordinary same-attempt merge, not a replacement
   // that discards the rest of the conversation. This is also the crash-retry path.
-  assert.equal((await request(session('generating-source', 'source', true), { entries: [
+  assert.equal((await request(session('generating-source', generatingSid, true), { entries: [
     { ...generating.entries[1], status: 'stopped' },
   ] })).status, 200);
-  await move('generating-source', 'source', 'generating-target', 'dest');
-  assert.equal((await read(session('generating-target', 'dest'))).entries.find(row => row.id === 'answer').status, 'stopped');
+  await move('generating-source', generatingSid, 'generating-target', generatingTargetSid);
+  assert.equal((await read(session('generating-target', generatingTargetSid))).entries.find(row => row.id === 'answer').status, 'stopped');
   for (const status of ['complete', 'failed']) {
-    await seed(`terminal-${status}`, 'source', { entries: [{ id: 'answer', block: 'chat', kind: 'assistant', status, text: 'Retained answer' }] });
-    await move(`terminal-${status}`, 'source', 'terminal-target', status);
+    const id = `terminal-${status}`;
+    await seed(id, id, { entries: [{ id: 'answer', block: 'chat', kind: 'assistant', status, text: 'Retained answer' }] });
+    await move(id, id, 'terminal-target', status);
   }
-  await seed('user-pending-source', 'source', { entries: [{ id: 'question', kind: 'user', status: 'pending', text: 'Legacy user row' }] });
-  await move('user-pending-source', 'source', 'terminal-target', 'user-pending');
+  await seed('user-pending-source', 'pending-user-chat', { entries: [{ id: 'question', kind: 'user', status: 'pending', text: 'Legacy user row' }] });
+  await move('user-pending-source', 'pending-user-chat', 'terminal-target', 'user-pending');
   pass('pending assistant output blocks transfer without mutation; stopped, complete, failed and legacy user rows remain movable');
 
-  await seed('missing-image-source', 'source', { entries: [{ id: 'lost', block: 'chat', kind: 'user', shots: [{ id: 'a'.repeat(32) }] }] });
-  const missing = await read(session('missing-image-source', 'source'));
-  const missingResult = await move('missing-image-source', 'source', 'missing-image-target', 'dest', 409);
+  await seed('missing-image-source', 'missing-image-chat', { entries: [{ id: 'lost', block: 'chat', kind: 'user', shots: [{ id: 'a'.repeat(32) }] }] });
+  const missing = await read(session('missing-image-source', 'missing-image-chat'));
+  const missingResult = await move('missing-image-source', 'missing-image-chat', 'missing-image-target', 'moved-missing-image', 409);
   assert.equal(missingResult.code, 'SESSION_ATTACHMENT_MISSING');
-  assert.deepEqual(await read(session('missing-image-source', 'source')), missing);
+  assert.deepEqual(await read(session('missing-image-source', 'missing-image-chat')), missing);
   assert.equal((await list('missing-image-target')).sessions.length, 0);
   pass('missing referenced screenshots abort before publishing any target');
 
-  const faultDoc = 'fault-source', faultSid = 'source', faultImage = await upload(faultDoc, faultSid);
+  const faultDoc = 'fault-source', faultSid = 'fault-chat', faultImage = await upload(faultDoc, faultSid);
   await seed(faultDoc, faultSid, { entries: [{ id: 'image', block: 'chat', kind: 'user', attachmentDoc: faultDoc, attachmentSid: faultSid, shots: [{ id: faultImage }] }] });
   const faultBefore = await read(session(faultDoc, faultSid));
-  const faultKey = (await list(faultDoc)).sessions[0].fileKey;
-  const barrier = path.join(dataDir, `deleted-session-${faultKey}-${faultSid}.json.tmp`);
+  const barrier = path.join(dataDir, `deleted-chat-${faultSid}.json.tmp`);
   fs.mkdirSync(barrier);
-  assert.equal((await move(faultDoc, faultSid, 'fault-target', 'dest', 500)).code, 'SESSION_MOVE_FAILED');
+  assert.equal((await move(faultDoc, faultSid, 'fault-target', 'moved-fault-chat', 500)).code, 'SESSION_MOVE_FAILED');
   assert.deepEqual(await read(session(faultDoc, faultSid)), faultBefore);
   assert.equal((await list('fault-target')).sessions.length, 0);
   await image(faultDoc, faultSid, faultImage);
   fs.rmdirSync(barrier);
-  await move(faultDoc, faultSid, 'fault-target', 'dest'); await image('fault-target', 'dest', faultImage);
+  await move(faultDoc, faultSid, 'fault-target', 'moved-fault-chat'); await image('fault-target', 'moved-fault-chat', faultImage);
   pass('failure while committing the source tombstone rolls back the target and preserves original JSON and images for retry');
 
   await seed('race-source', 'race');
   const writes = Array.from({ length: 16 }, (_, index) => request(session('race-source', 'race', true), {
     entries: [{ id: `answer-${index}`, block: 'chat', kind: 'assistant', status: 'complete', text: `Concurrent answer ${index}` }],
   }));
-  const moving = move('race-source', 'race', 'race-target', 'dest');
+  const moving = move('race-source', 'race', 'race-target', 'moved-race');
   const responses = await Promise.all(writes); await moving;
-  const raced = await read(session('race-target', 'dest'));
+  const raced = await read(session('race-target', 'moved-race'));
   responses.forEach((response, index) => {
     assert([200, 409].includes(response.status));
     if (response.status === 200) assert(raced.entries.some(entry => entry.id === `answer-${index}`), `successful write ${index} retained`);
   });
   assert.equal((await request(session('race-source', 'race', true), { entries: [{ id: 'late', text: 'Late stale save' }] })).status, 409);
-  await seed('contender-a', 'source'); await seed('contender-b', 'source');
+  await seed('contender-a', 'contender-a'); await seed('contender-b', 'contender-b');
   const contenders = await Promise.all(['contender-a', 'contender-b'].map(fromDoc => request('/api/sessions/move', {
-    fromDoc, fromSid: 'source', toDoc: 'contested-target', toSid: 'dest', folderPath: '',
+    fromDoc, fromSid: fromDoc, toDoc: 'contested-target', toSid: 'contested-chat', folderPath: '',
   })));
   assert.deepEqual(contenders.map(response => response.status).sort(), [200, 409]);
   const loser = contenders[0].status === 409 ? 'contender-a' : 'contender-b';
-  assert.equal((await read(session(loser, 'source'))).entries[0].text, 'Seed');
+  assert.equal((await read(session(loser, loser))).entries[0].text, 'Seed');
   pass('simultaneous saves and competing moves preserve all acknowledged writes and never overwrite an occupied target');
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ backend: desktop ? 'Rust' : 'Node', passed: checks }, null, 2), 'utf8');
   console.log(`Session move: ${checks}/${checks} passed; ${scratch}`);
