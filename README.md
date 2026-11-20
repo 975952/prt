@@ -2,11 +2,11 @@
 
 # prt
 
-**从考试复习到论文阅读，在原文旁边把问题读明白。**
+**读到哪，问到哪。**
 
 **简体中文** · [English](README.en.md)
 
-面向 Windows 的学习与阅读工作区，把 PDF 讲义、PPT 课件、书籍和论文集中整理，阅读时直接翻译、提问和记笔记。用 Alina 查找资料、梳理知识点、跨文件问答，再通过页码引用回到原文核对。
+prt 是 Windows 本地 PDF 阅读器。读论文时，可以圈出一张图，让 Alina 对照原文解释；复习时，可以把几份讲义放进同一文件夹，问一个跨文件的问题，再点回答里的页码核对出处。
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square&label=release)](https://github.com/975952/prt/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-586976?style=flat-square)](https://github.com/975952/prt/releases/latest)
@@ -16,7 +16,12 @@
 
 </div>
 
-看论文或 PPT 遇到不懂的内容，往往要复制文字、截个图，切到 AI 软件里提问，再回来找原文。考试复习时，还得在一堆课件和讲义之间来回翻找。prt 把阅读、AI 问答与资料整理放在同一个工作区，让资料和讨论留在一起，方便边读、边问、边对照。
+<details>
+<summary>查看项目海报 · 用课件中的一张图提问</summary>
+
+![项目介绍海报，以正态分布曲线为例展示截图提问和返回引用页](docs/assets/prt-overview-zh.png)
+
+</details>
 
 > **版本说明：** 下方功能介绍对应当前 `main` 分支源码。已发布安装包为 [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0)，尚不包含后续新增的 PPT 导入、沉浸翻书等功能；体验最新源码需[自行构建](docs/开发指南.md)，安装包功能请以对应 Release 说明为准。
 

@@ -2,11 +2,11 @@
 
 # prt
 
-**From exam revision to research papers, ask beside the source.**
+**Ask questions as you read.**
 
 [简体中文](README.md) · **English**
 
-A study and reading workspace for Windows. Organize PDF handouts, PowerPoint slides, books, and research papers; translate, ask questions, and take notes while reading. Alina helps find material, explain concepts, and answer questions across files, with page references that lead back to the source.
+prt is a local PDF reader for Windows. Select a figure in a paper and ask Alina to explain it in context. When revising for an exam, ask a question across a folder of lecture notes, then follow the page references to check each source.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
