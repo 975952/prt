@@ -961,8 +961,30 @@ let serverState = {};
   await prepareStartupDisplay();
   window.__prtStartup?.finish();
   finishWindowBoot();
+  if (window.__PRT_WINDOW_ID) {
+    let opening = false;
+    window.addEventListener('prt-desktop', async event => {
+      if (event.detail?.type !== 'shell-pdf-waiting' || opening) return;
+      opening = true;
+      try { await receiveShellPdfs(); } finally { opening = false; }
+    });
+  }
   showAgentWelcome(async () => { await openSettings(); showSettingsPane('agent'); });
 })().catch(error => window.__prtStartup?.fail(error));
+
+async function receiveShellPdfs() {
+  try {
+    const response = await fetch('/api/shell-open', { method: 'POST' });
+    const result = await response.json();
+    if (result.error) toast(result.error, 'err', 5000);
+    if (result.path) {
+      await refreshPaperList();
+      const paper = state.papers.find(p => (p.path || p.name) === result.path);
+      if (paper) await openDoc(paper);
+      else toast(tr("未找到指定文档，可能已经移动或删除"), 'err', 4500);
+    }
+  } catch (error) { console.warn('PDF shell open', error); }
+}
 
 /** Boot restores sessions and panels after loading the PDF. Publish only the
  * final layout and visible bitmaps, including a saved page beyond page one. */

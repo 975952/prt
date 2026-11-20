@@ -18,6 +18,7 @@ mod model_profiles;
 mod migration;
 mod powerpoint;
 mod server;
+mod shell_pdf;
 mod store;
 mod util;
 mod window;
@@ -75,7 +76,7 @@ fn single_instance_guard(data_dir: &std::path::Path) -> Option<migration::DataLo
     if allow_multi { return Some(migration::DataLock::unlocked()); }
     match migration::acquire_data_lock(data_dir) {
         Ok(guard) => Some(guard),
-        Err(_) => { focus_existing_window(); None }
+        Err(_) => None
     }
 }
 
@@ -166,11 +167,26 @@ fn main() {
     let dirs = util::init_dirs();
     // Storage inspection and import never start the service or write normal app logs.
     if let Some(code) = migration::handle_cli(&args, dirs) { std::process::exit(code); }
+    let pdfs: Vec<_> = args.iter().map(std::path::Path::new)
+        .filter(|p| p.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf"))).collect();
+    if !want_help && !pdfs.is_empty() && !migration::pending(dirs).unwrap_or(true) {
+        for path in &pdfs {
+            if let Err(error) = shell_pdf::enqueue(dirs, path) {
+                let msg = format!("无法打开 {}：{error}", path.display());
+                if !console && !background { migration::notify(&msg); }
+                else { let _ = writeln!(std::io::stderr(), "{msg}"); }
+                std::process::exit(2);
+            }
+        }
+    }
     let _instance_guard = if want_help { migration::DataLock::unlocked() } else {
         match single_instance_guard(dirs.data.as_path()) {
             Some(guard) => guard,
             None => {
-                if !background && !console { notify_already_running(); }
+                if pdfs.is_empty() && !background && !console {
+                    focus_existing_window();
+                    notify_already_running();
+                }
                 return;
             }
         }

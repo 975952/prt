@@ -175,6 +175,12 @@ fn handle(mut rq: Request, ctx: &Ctx) {
             }
             return chat::handle(rq, &body, ctx);
         }
+        "/api/shell-open" if method == Method::Post => {
+            return match crate::shell_pdf::next(crate::util::dirs()) {
+                Ok(path) => send_json(rq, 200, &serde_json::json!({"path":path})),
+                Err(e) => send_json(rq, 400, &serde_json::json!({"error":e.to_string()})),
+            };
+        }
         "/api/papers" => return api::papers(rq, &method, &raw_query, &body),
         "/api/folders" => match method {
             Method::Post => return api::folders_create(rq, &raw_query),

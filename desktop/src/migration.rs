@@ -377,7 +377,7 @@ fn option(args: &[String], name: &str) -> Result<Option<String>> {
     Ok(result)
 }
 
-fn notify(message: &str) {
+pub(crate) fn notify(message: &str) {
     #[cfg(windows)]
     {
         use std::ffi::c_void;

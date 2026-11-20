@@ -40,6 +40,7 @@ const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(35);
 /// `{type:"fullscreen", on?:boolean}`（不传 on 就切换；Esc 由页面发 on=false）。
 #[derive(Debug, Clone)]
 enum WindowAction {
+    ShellPdfWaiting,
     Drag,
     Resize(ResizeDirection),
     Minimize,
@@ -414,14 +415,33 @@ pub fn run(url: String, background: bool) -> ! {
         }
     }
     if windows.is_empty() { std::process::exit(4); }
+    let shell_proxy = proxy.clone();
+    let source = *windows.keys().next().unwrap();
+    std::thread::spawn(move || {
+        let queue = util::dirs().data.join("shell-open");
+        loop {
+            std::thread::sleep(std::time::Duration::from_millis(700));
+            let waiting = std::fs::read_dir(&queue).is_ok_and(|mut files|
+                files.any(|f| f.is_ok_and(|e| e.path().extension().is_some_and(|x| x == "request"))));
+            if waiting && shell_proxy.send_event(WindowMessage { source, action: WindowAction::ShellPdfWaiting }).is_err() { break; }
+        }
+    });
     let mut last_save = Instant::now();
     let mut quitting = false;
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
+            Event::UserEvent(WindowMessage { action: WindowAction::ShellPdfWaiting, .. }) => {
+                if let Some(r) = windows.values().find(|r| r.window.is_focused())
+                    .or_else(|| windows.values().find(|r| r.key == "main")).or_else(|| windows.values().next()) {
+                    if !background { r.window.set_minimized(false); r.window.set_focus(); }
+                    emit(r, json!({"type":"shell-pdf-waiting"}));
+                }
+            }
             Event::UserEvent(WindowMessage { source, action }) => {
                 if !windows.contains_key(&source) { return; }
                 match action {
+                    WindowAction::ShellPdfWaiting => unreachable!(),
                     WindowAction::CancelOpen(request) => {
                         windows.retain(|_, r| !r.pending.as_ref().map(|(parent, req, _)| *parent == source && *req == request).unwrap_or(false));
                         save_windows(&windows);

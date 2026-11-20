@@ -45,6 +45,7 @@ WizardStyle=modern
 UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\prt.exe
 Uninstallable=yes
+ChangesAssociations=yes
 CloseApplications=no
 RestartApplications=no
 RestartIfNeededByRun=no
@@ -56,6 +57,15 @@ LicenseFile=..\..\LICENSE
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"
+
+[Registry]
+Root: HKCU; Subkey: "Software\Classes\prt.Reader.PDF"; ValueType: string; ValueName: ""; ValueData: "prt PDF"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\prt.Reader.PDF\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\prt.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "prt.Reader.PDF"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\prt\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "prt"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\prt\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "prt PDF reader"
+Root: HKCU; Subkey: "Software\prt\Capabilities\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "prt.Reader.PDF"
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "prt"; ValueData: "Software\prt\Capabilities"; Flags: uninsdeletevalue
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked
