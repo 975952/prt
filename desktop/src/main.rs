@@ -16,6 +16,7 @@ mod icon_geometry;
 mod limits;
 mod model_profiles;
 mod migration;
+mod powerpoint;
 mod server;
 mod store;
 mod util;

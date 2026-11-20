@@ -1,4 +1,4 @@
-import { t as tr, locale, localizeStaticDocument, LOCALE_KEY, RESPONSE_LANGUAGE_KEY, storedLocale, responseLanguage } from './i18n.js';
+import { t as tr, locale, localizeStaticDocument, localizedError, LOCALE_KEY, RESPONSE_LANGUAGE_KEY, storedLocale, responseLanguage } from './i18n.js';
 import { windowStorage as localStorage, storageKey, windowId, startWindows, finishWindowBoot, windowReady, openReaderWindow, canWrite, allowEdit, isWindowClosed, releaseDocument, notifySessionSaved } from './windows.js';
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
@@ -3232,7 +3232,7 @@ function renderHome({ navigation = true } = {}) {
     }
     const emptyTitle = !allPapers.length ? tr("还没有论文") : query ? tr("没有找到匹配的论文")
       : homeView.filter === 'recent' ? tr("还没有阅读记录") : homeView.filter === 'unread' ? tr("所有论文都已开始阅读") : tr("这个文件夹还没有论文");
-    const emptyHint = !allPapers.length || homeView.folder !== null && !query ? tr("点「打开 PDF」选一个，或直接把 PDF 拖进来")
+    const emptyHint = !allPapers.length || homeView.folder !== null && !query ? tr("点「打开 PDF / PPT」选择文件，或直接拖进来")
       : query ? tr("试试其他关键词，或返回全部论文。") : tr("在全部论文中选择一篇，开始阅读。");
     list.append(el('li', { class: 'home-empty' },
       el('span', { class: 'home-empty-icon', 'aria-hidden': 'true' }, iconEl(query ? 'search' : 'book', { size: 26 })),
@@ -3428,9 +3428,9 @@ function renderPaperList() {
 
 /* ───────────────── 文件列表：批量导入 / 拖拽排序 / 删除（2026-10） ───────────────── */
 
-/** 从 FileList / DataTransfer 里挑出 PDF（大小写不敏感） */
+/** 从 FileList / DataTransfer 里挑出可导入文件（大小写不敏感） */
 function pdfFilesFrom(files) {
-  return Array.from(files || []).filter((f) => f && /\.pdf$/i.test(f.name));
+  return Array.from(files || []).filter((f) => f && /\.(pdf|pptx?)$/i.test(f.name));
 }
 
 /* ───────────────── 文件列表：多选（Ctrl/Shift 点击、左侧细条拖框）+ 批量操作 ───────────────── */
@@ -4600,17 +4600,21 @@ let localObjectUrl = null;
 
 /** 上传一个 PDF 到 papers/（folder=''=根；返回服务端落盘信息） */
 async function uploadPdfFile(file, folder = '') {
+  if (file.size > 256 * 1024 * 1024) throw new Error(tr('文件超过 256MB，无法导入'));
+  const presentation = /\.pptx?$/i.test(file.name);
+  if (presentation) toast(tr('正在将 {0} 转为 PDF，请稍候…', file.name), 'info', 6000);
   const buf = await file.arrayBuffer();
   const q = new URLSearchParams({ name: file.name });
   if (folder) q.set('folder', folder);
   const r = await fetch(`/api/upload?${q}`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/pdf' },
+    headers: { 'Content-Type': presentation ? 'application/octet-stream' : 'application/pdf' },
     body: buf,
+    signal: AbortSignal.timeout(presentation ? 135000 : 60000),
   });
   let j = {};
   try { j = await r.json(); } catch { /* 非 JSON */ }
-  if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
+  if (!r.ok) throw new Error(localizedError(j?.error?.message || `HTTP ${r.status}`));
   return j;
 }
 
@@ -4622,7 +4626,7 @@ async function importExternalDrop(dt, targetFolder) {
     const pdfs = pdfFilesFrom(dt?.files);
     if (pdfs.length) {
       if (targetFolder) await importPdfsToFolder(pdfs, targetFolder);
-      else importLocalFiles(pdfs);
+      else await importLocalFiles(pdfs);
     }
     return;
   }
@@ -4632,14 +4636,14 @@ async function importExternalDrop(dt, targetFolder) {
     const entry = it.webkitGetAsEntry?.();
     if (!entry) continue;
     if (entry.isDirectory) dirs.push(entry);
-    else if (entry.isFile && /\.pdf$/i.test(entry.name)) {
+    else if (entry.isFile && /\.(pdf|pptx?)$/i.test(entry.name)) {
       const f = it.getAsFile?.();
       if (f) pdfFiles.push(f);
     }
   }
   if (pdfFiles.length) {
     if (targetFolder) await importPdfsToFolder(pdfFiles, targetFolder);
-    else importLocalFiles(pdfFiles);
+    else await importLocalFiles(pdfFiles);
   }
   for (const dirEntry of dirs) {
     await importExternalFolder(dirEntry, targetFolder);
@@ -4678,7 +4682,7 @@ async function importExternalFolder(entry, parent) {
   const pdfs = [];
   let subdirs = 0;
   for (const en of entries) {
-    if (en.isFile && /\.pdf$/i.test(en.name)) {
+    if (en.isFile && /\.(pdf|pptx?)$/i.test(en.name)) {
       const f = await new Promise((res) => en.file(res, () => res(null)));
       if (f) pdfs.push(f);
     } else if (en.isDirectory) {
@@ -4705,14 +4709,16 @@ async function importPdfsToFolder(pdfs, folder) {
  * 万一上传失败（比如 papers/ 不可写），退回临时打开，至少还能看。
  */
 async function openLocalFile(file) {
-  if (!/\.pdf$/i.test(file.name)) { toast(tr("只支持 PDF 文件"), 'err'); return; }
-  setBusy(true, tr("正在导入…"));
+  if (!/\.(pdf|pptx?)$/i.test(file.name)) { toast(tr("支持 PDF、PPT 和 PPTX 文件"), 'err'); return; }
+  const presentation = /\.pptx?$/i.test(file.name);
+  setBusy(true, presentation ? tr('正在将 PPT 转为 PDF…') : tr("正在导入…"));
   try {
     const j = await uploadPdfFile(file);
     await refreshPaperList();
     await openDoc({ name: j.name, url: j.url, docId: j.docId, path: j.path || j.name });
     toast(tr("已存到 papers/：{0}", j.name), 'ok', 2600);
   } catch (e) {
+    if (presentation) { toast(tr('PPT 导入失败：{0}', e.message), 'err', 7000); return; }
     toast(tr("导入失败（{0}），先用临时方式打开", e.message), 'err', 5000);
     if (localObjectUrl) URL.revokeObjectURL(localObjectUrl);
     localObjectUrl = URL.createObjectURL(file);
@@ -4724,13 +4730,15 @@ async function openLocalFile(file) {
 
 async function importLocalFiles(files) {
   const pdfs = pdfFilesFrom(files);
-  if (!pdfs.length) { toast(tr("只支持 PDF 文件"), 'err'); return; }
+  if (!pdfs.length) { toast(tr("支持 PDF、PPT 和 PPTX 文件"), 'err'); return; }
   if (pdfs.length === 1) return openLocalFile(pdfs[0]);
   setBusy(true, tr("正在导入 1/{0}…", pdfs.length));
   const imported = [];
   const failed = [];
   for (let i = 0; i < pdfs.length; i++) {
-    setBusy(true, tr("正在导入 {0}/{1}…", i + 1, pdfs.length));
+    setBusy(true, /\.pptx?$/i.test(pdfs[i].name)
+      ? tr('正在转换 PPT {0}/{1}…', i + 1, pdfs.length)
+      : tr("正在导入 {0}/{1}…", i + 1, pdfs.length));
     try {
       imported.push(await uploadPdfFile(pdfs[i]));
     } catch (e) {

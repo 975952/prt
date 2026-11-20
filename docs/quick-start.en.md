@@ -32,6 +32,10 @@ The interface starts in **English**. Open **Settings → Language / 语言** to 
 
 The **To** selector in Translation is independent. Changing the interface language does not change an existing translation target.
 
+## Import PowerPoint files (main branch)
+
+Choose **Open PDF / PPT**, or drop `.ppt` / `.pptx` files into the library or a folder. Multiple files are supported. Conversion uses Microsoft PowerPoint installed on Windows; complete Office first-run setup first. Files stay on your computer. The limit is 256 MB per source file, with a conversion timeout of about two minutes. The resulting PDF is added to the library and opens automatically for a single-file import. The original presentation is unchanged; only the PDF is stored in the library. Existing PDFs are preserved using numbered filenames. Animation and media become static pages; encrypted or damaged presentations may fail.
+
 ## Connect an AI service
 
 In **Settings → Model**, enter the service URL, model name, and API key. Save the profile and test the connection. Use a vision-capable model for screenshots and scanned pages. Keep the API key private.

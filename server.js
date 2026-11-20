@@ -9,6 +9,7 @@ const crypto = require('crypto');
 const { Readable } = require('stream');
 const sec = require('./security');
 const modelProfiles = require('./model-profiles');
+const { convertPowerPoint } = require('./powerpoint');
 
 const ROOT = __dirname;
 const PUBLIC_DIR = path.join(ROOT, 'public');
@@ -1979,7 +1980,9 @@ async function uniquePdfName(base, size) {
 }
 
 async function handleUpload(req, res, url) {
-  const name = sanitizePdfName(url.searchParams.get('name'));
+  const rawName = url.searchParams.get('name') || '';
+  const isPresentation = /\.pptx?$/i.test(rawName);
+  const name = sanitizePdfName(isPresentation ? rawName.replace(/\.pptx?$/i, '.pdf') : rawName);
   if (!name) return sendJson(res, 400, { error: { message: '文件名不合法' } });
   const folderRel = normalizeRel(url.searchParams.get('folder'));
   const absDir = await resolveTargetDir(folderRel);
@@ -1995,13 +1998,35 @@ async function handleUpload(req, res, url) {
     return sendJson(res, 400, { error: { message: '请求体读取失败' } });
   }
   if (!body.length) return sendJson(res, 400, { error: { message: '空文件' } });
+  if (isPresentation) {
+    try { body = await convertPowerPoint(body, rawName); }
+    catch (e) { return sendJson(res, e.status || 500, { error: { message: e.status ? e.message : 'PowerPoint 转换失败，请检查磁盘空间与目录权限' } }); }
+  }
   if (body.subarray(0, 5).toString('latin1') !== '%PDF-') {
     return sendJson(res, 400, { error: { message: '这不是一个 PDF 文件' } });
   }
 
   try {
-    const final = await uniquePdfNameInDir(absDir, name, body.length);
-    await fsp.writeFile(path.join(absDir, final), body);
+    let final = await uniquePdfNameInDir(absDir, name, isPresentation ? -1 : body.length);
+    if (isPresentation) {
+      // Publish a complete PDF atomically; never reuse an unrelated same-size PDF.
+      const temp = path.join(absDir, `.ppt-${crypto.randomUUID()}.tmp`);
+      try {
+        await fsp.writeFile(temp, body, { flag: 'wx' });
+        for (;;) {
+          try {
+            try { await fsp.link(temp, path.join(absDir, final)); }
+            catch (e) {
+              if (!['ENOTSUP', 'EPERM', 'EINVAL', 'ENOSYS'].includes(e.code)) throw e;
+              // FAT/exFAT portable drives do not support hard links.
+              await fsp.copyFile(temp, path.join(absDir, final), fs.constants.COPYFILE_EXCL);
+            }
+            break;
+          }
+          catch (e) { if (e.code !== 'EEXIST') throw e; final = await uniquePdfNameInDir(absDir, name, -1); }
+        }
+      } finally { await fsp.unlink(temp).catch(() => {}); }
+    } else await fsp.writeFile(path.join(absDir, final), body);
     const st = await fsp.stat(path.join(absDir, final));
     const rel = folderRel ? `${folderRel}/${final}` : final;
     console.log(`[upload] ${rel} (${Math.round(body.length / 1024)}KB)`);

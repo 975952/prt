@@ -2838,7 +2838,10 @@ pub fn upload(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
         return send_text(rq, 405, "Method Not Allowed");
     }
     let raw = query_get(raw_query, "name").unwrap_or_else(|| "uploaded.pdf".to_string());
-    let name = match sanitize_pdf_name(&raw) {
+    let lower = raw.to_ascii_lowercase();
+    let is_presentation = lower.ends_with(".ppt") || lower.ends_with(".pptx");
+    let pdf_name = if is_presentation { format!("{}.pdf", &raw[..raw.rfind('.').unwrap()]) } else { raw.clone() };
+    let name = match sanitize_pdf_name(&pdf_name) {
         Some(n) => n,
         None => return send_json(rq, 400, &err_json("文件名不合法")),
     };
@@ -2850,18 +2853,26 @@ pub fn upload(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     if body.is_empty() {
         return send_json(rq, 400, &err_json("空文件"));
     }
+    let converted;
+    let body = if is_presentation {
+        converted = match crate::powerpoint::convert(body, &raw) {
+            Ok(pdf) => pdf,
+            Err((status, message)) => return send_json(rq, status, &err_json(message)),
+        };
+        converted.as_slice()
+    } else { body };
     if !body.starts_with(b"%PDF-") {
         return send_json(rq, 400, &err_json("这不是一个 PDF 文件"));
     }
 
-    let final_name = unique_pdf_name_in_dir(&abs_dir, &name, body.len() as u64);
-    let abs = abs_dir.join(&final_name);
+    let mut final_name = unique_pdf_name_in_dir(&abs_dir, &name, if is_presentation { u64::MAX } else { body.len() as u64 });
+    let mut abs = abs_dir.join(&final_name);
     // 拖进来的文件很多是「同一份 PDF 重复拖入」：unique_pdf_name_in_dir 已经把
     // 同名同大小视为同一份并复用文件名，这里就不要再原地重写一遍。以前无脑
     // fs::write 会在 19MB 文件上反复「截断→重写」，正好在打开这篇论文时就会让
     // PDF.js 的 Range 请求读到写了一半的文件，报 `Unexpected server response`
     // （这个报错是「服务端返回了非 200/206」，不是 PDF 损坏）。
-    let already_same = std::fs::metadata(&abs)
+    let already_same = !is_presentation && std::fs::metadata(&abs)
         .map(|m| m.len() == body.len() as u64)
         .unwrap_or(false);
     if !already_same {
@@ -2875,7 +2886,28 @@ pub fn upload(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
         if let Err(e) = std::fs::write(&tmp, body) {
             return send_json(rq, 500, &err_json(&format!("写入 papers/ 失败：{}", e)));
         }
-        if let Err(e) = std::fs::rename(&tmp, &abs) {
+        let published = if is_presentation {
+            loop {
+                let linked = std::fs::hard_link(&tmp, &abs).or_else(|e| {
+                    // FAT/exFAT portable drives cannot create hard links. Still never overwrite.
+                    if e.kind() != std::io::ErrorKind::Unsupported && !matches!(e.raw_os_error(), Some(1) | Some(50)) { return Err(e); }
+                    use std::io::Write;
+                    let mut file = std::fs::OpenOptions::new().write(true).create_new(true).open(&abs)?;
+                    let result = file.write_all(body);
+                    drop(file);
+                    if result.is_err() { let _ = std::fs::remove_file(&abs); }
+                    result
+                });
+                match linked {
+                    Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                        final_name = unique_pdf_name_in_dir(&abs_dir, &name, u64::MAX);
+                        abs = abs_dir.join(&final_name);
+                    },
+                    result => { let _ = std::fs::remove_file(&tmp); break result; }
+                }
+            }
+        } else { std::fs::rename(&tmp, &abs) };
+        if let Err(e) = published {
             let _ = std::fs::remove_file(&tmp);
             return send_json(rq, 500, &err_json(&format!("写入 papers/ 失败：{}", e)));
         }

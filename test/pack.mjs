@@ -19,6 +19,7 @@ const INCLUDE = [
   'server.js',
   'security.js',
   'model-profiles.js',
+  'powerpoint.js',
   'start.bat',
   'README.md',
   'README.en.md',

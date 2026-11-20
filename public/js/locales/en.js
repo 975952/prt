@@ -1,6 +1,23 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  '导入 PDF / PPT': 'Import PDF / PPT',
+  '打开 PDF / PPT': 'Open PDF / PPT',
+  '拖入 PDF / PPT，或': 'Drop PDF / PPT files, or',
+  '拖入 PDF / PPT，支持多个文件；PPT 需本机 PowerPoint': 'Drop PDF / PPT files here; PPT requires Microsoft PowerPoint',
+  '点「打开 PDF / PPT」选择文件，或直接拖进来': 'Choose Open PDF / PPT, or drag files here',
+  '支持 PDF、PPT 和 PPTX 文件': 'Supported files: PDF, PPT and PPTX',
+  '文件超过 256MB，无法导入': 'This file exceeds the 256 MB import limit',
+  '正在将 {0} 转为 PDF，请稍候…': 'Converting {0} to PDF. Please wait…',
+  '正在将 PPT 转为 PDF…': 'Converting PPT to PDF…',
+  '正在转换 PPT {0}/{1}…': 'Converting PPT {0}/{1}…',
+  'PPT 导入失败：{0}': 'PPT import failed: {0}',
+  'PPT 转 PDF 需要 Windows 和已安装的 Microsoft PowerPoint': 'PPT conversion requires Windows and an installed copy of Microsoft PowerPoint',
+  '正在转换另一份 PPT，请稍后重试': 'Another PPT is being converted. Please try again shortly',
+  '这不是有效的 PPT/PPTX 文件': 'This is not a valid PPT/PPTX file',
+  'PowerPoint 转换失败，请确认文件未损坏、未加密，并已完成 Office 首次启动设置': 'PowerPoint conversion failed. Check that the file is intact and not encrypted, and complete Office first-run setup',
+  'PowerPoint 转换超时，请检查 Office 是否有待处理的提示后重试': 'PowerPoint conversion timed out. Check for pending Office prompts and try again',
+  'PowerPoint 转换失败，请检查磁盘空间与目录权限': 'PowerPoint conversion failed. Check disk space and folder permissions',
   '阅读模式切换失败：{0}': 'Could not change the reading view: {0}',
   '沉浸翻书': 'Immersive book', '翻书': 'Book view', '退出翻书': 'Exit book view',
   '沉浸翻书工具': 'Book view tools', '收起问答': 'Hide chat',
