@@ -42,9 +42,12 @@ try {
   await page.waitForFunction(() => !!window.__ctx);
   for (const theme of ['light', 'glass', 'dark']) {
     await page.select('#uiTheme', theme);
-    const radii = await page.$$eval('#home .home-sidebar, #home .home-content', panels =>
-      panels.map(panel => getComputedStyle(panel).borderRadius));
-    assert.deepEqual(radii, ['0px', '22px 0px 0px'], theme + ' Library panels');
+    const panels = await page.$$eval('#home .home-sidebar, #home .home-content', nodes =>
+      nodes.map(node => {
+        const css = getComputedStyle(node);
+        return [css.borderRadius, css.borderWidth, css.boxShadow];
+      }));
+    assert.deepEqual(panels, [['0px', '0px', 'none'], ['22px 0px 0px', '0px', 'none']], theme + ' Library panels');
   }
   await page.click('#homeAgent');
   await page.waitForFunction(() => document.body.classList.contains('agent-landing') && document.querySelector('#rightSide').getAttribute('aria-busy') !== 'true');
