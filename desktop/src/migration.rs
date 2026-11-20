@@ -30,7 +30,7 @@ fn plain_path(path: PathBuf) -> PathBuf {
 }
 
 /// Resolve existing ancestors without creating a directory. This also catches aliases.
-fn identity(path: &Path) -> Result<PathBuf> {
+pub(crate) fn identity(path: &Path) -> Result<PathBuf> {
     let absolute = if path.is_absolute() { path.to_path_buf() } else {
         std::env::current_dir().map_err(|e| io_error("Cannot resolve current directory", e))?.join(path)
     };

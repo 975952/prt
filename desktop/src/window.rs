@@ -40,7 +40,7 @@ const CLOSE_ACK_TIMEOUT: Duration = Duration::from_secs(35);
 /// `{type:"fullscreen", on?:boolean}`（不传 on 就切换；Esc 由页面发 on=false）。
 #[derive(Debug, Clone)]
 enum WindowAction {
-    ShellPdf(String),
+    RelaunchSetting(Option<bool>),
     Drag,
     Resize(ResizeDirection),
     Minimize,
@@ -60,7 +60,11 @@ enum WindowAction {
 }
 
 #[derive(Debug, Clone)]
-struct WindowMessage { source: WindowId, action: WindowAction }
+enum WindowMessage {
+    IconLaunch,
+    ShellPdf(String),
+    FromWindow { source: WindowId, action: WindowAction },
+}
 
 fn valid_key(s: &str) -> bool {
     !s.is_empty() && s.len() <= 80 && s.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-')
@@ -69,6 +73,8 @@ fn valid_key(s: &str) -> bool {
 fn parse_action(msg: &str) -> Option<WindowAction> {
     let v: serde_json::Value = serde_json::from_str(msg).ok()?;
     match v.get("type").and_then(|x| x.as_str())? {
+        "relaunch-get" => Some(WindowAction::RelaunchSetting(None)),
+        "relaunch-set" => Some(WindowAction::RelaunchSetting(Some(v.get("focusExisting")?.as_bool()?))),
         "drag" => Some(WindowAction::Drag),
         "minimize" => Some(WindowAction::Minimize),
         "maximize" => Some(WindowAction::Maximize),
@@ -239,7 +245,7 @@ fn decorate_builder<'a>(
             match parse_action(msg) {
                 Some(action) => {
                     // 必须回到事件循环线程再动窗口（tao 的窗口不是 Send）
-                    if proxy.send_event(WindowMessage { source, action }).is_err() {
+                    if proxy.send_event(WindowMessage::FromWindow { source, action }).is_err() {
                         crate::log_line("[window] 事件循环已关闭，窗口动作被丢弃");
                     }
                 }
@@ -398,6 +404,13 @@ fn request_close(reader: &mut ReaderWindow) {
 pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
     let event_loop = EventLoopBuilder::<WindowMessage>::with_user_event().build();
     let proxy = event_loop.create_proxy();
+    #[cfg(windows)]
+    {
+        let icon_proxy = proxy.clone();
+        if let Err(e) = crate::relaunch::listen(&util::dirs().data, move || {
+            icon_proxy.send_event(WindowMessage::IconLaunch).is_ok()
+        }) { crate::log_line(&format!("[window] Could not listen for icon launches: {e}")); }
+    }
     let origin = url::Url::parse(&url).expect("local service URL").origin().ascii_serialization().to_ascii_lowercase();
     let webview_dir = util::dirs().data.join("webview2");
     let _ = std::fs::create_dir_all(&webview_dir);
@@ -425,12 +438,13 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
     }
     if windows.is_empty() { std::process::exit(4); }
     let shell_proxy = proxy.clone();
-    let source = *windows.keys().next().unwrap();
+    let mut last_focused = *windows.keys().next().unwrap();
+    let mut focus_on_launch = store::read_json("relaunch-focus.json", json!(false)).as_bool().unwrap_or(false);
     std::thread::spawn(move || {
         loop {
             std::thread::sleep(std::time::Duration::from_millis(700));
             match crate::shell_pdf::next(util::dirs()) {
-                Ok(Some(path)) => if shell_proxy.send_event(WindowMessage { source, action: WindowAction::ShellPdf(path) }).is_err() { break; },
+                Ok(Some(path)) => if shell_proxy.send_event(WindowMessage::ShellPdf(path)).is_err() { break; },
                 Ok(None) => {}
                 Err(e) => crate::log_line(&format!("[shell] {e}")),
             }
@@ -441,17 +455,48 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
     event_loop.run(move |event, target, control_flow| {
         *control_flow = ControlFlow::Wait;
         match event {
-            Event::UserEvent(WindowMessage { action: WindowAction::ShellPdf(path), .. }) => {
+            Event::WindowEvent { window_id, event: WindowEvent::Focused(true), .. } => {
+                last_focused = window_id;
+            }
+            Event::UserEvent(WindowMessage::IconLaunch) => {
+                if focus_on_launch || windows.len() >= 10 {
+                    if let Some(r) = windows.get(&last_focused).or_else(|| windows.values().next()) {
+                        if !background {
+                            if r.window.is_minimized() { r.window.set_minimized(false); }
+                            r.window.set_focus();
+                        }
+                    }
+                } else {
+                    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos();
+                    let key = format!("w-{}-{stamp}", std::process::id());
+                    match create_reader(target, &mut context, proxy.clone(), &url, &origin, &key, "", &json!({}), background) {
+                        Ok(r) => { last_focused = r.window.id(); windows.insert(last_focused, r); save_windows(&windows); }
+                        Err(e) => crate::migration::notify(&e),
+                    }
+                }
+            }
+            Event::UserEvent(WindowMessage::ShellPdf(path)) => {
                 let key = (1..).map(|n| format!("shell-{n}")).find(|k| windows.values().all(|r| &r.key != k)).unwrap();
                 match create_reader(target, &mut context, proxy.clone(), &url, &origin, &key, "", &json!({"shellPdf":path}), background) {
                     Ok(r) => { windows.insert(r.window.id(), r); }
                     Err(e) => crate::migration::notify(&e),
                 }
             }
-            Event::UserEvent(WindowMessage { source, action }) => {
+            Event::UserEvent(WindowMessage::FromWindow { source, action }) => {
                 if !windows.contains_key(&source) { return; }
                 match action {
-                    WindowAction::ShellPdf(_) => unreachable!(),
+                    WindowAction::RelaunchSetting(requested) => {
+                        let mut saved = true;
+                        if let Some(value) = requested {
+                            saved = store::write_json("relaunch-focus.json", &json!(value));
+                            if saved { focus_on_launch = value; }
+                        }
+                        for (id, reader) in &windows {
+                            if *id == source || requested.is_some() && saved {
+                                emit(reader, json!({"type":"relaunch-setting", "focusExisting":focus_on_launch, "saved":saved}));
+                            }
+                        }
+                    }
                     WindowAction::CancelOpen(request) => {
                         windows.retain(|_, r| !r.pending.as_ref().map(|(parent, req, _)| *parent == source && *req == request).unwrap_or(false));
                         save_windows(&windows);

@@ -17,6 +17,8 @@ mod limits;
 mod model_profiles;
 mod migration;
 mod powerpoint;
+#[cfg(windows)]
+mod relaunch;
 mod server;
 mod shell_pdf;
 mod store;
@@ -63,7 +65,7 @@ fn attach_console() {
 #[cfg(not(windows))]
 fn attach_console() {}
 
-/// 单实例守卫：同一个 data 目录只允许一个阅读器窗口。
+/// 单实例守卫：同一个 data 目录的所有阅读器窗口共用一个进程。
 ///
 /// 为什么需要：桌面壳把 WebView2 的用户数据目录固定放在 `data/webview2`。两个实例
 /// 同时跑时会共用同一个用户数据目录（WebView2 不支持同 UDF 多进程），本地服务也会
@@ -80,56 +82,6 @@ fn single_instance_guard(data_dir: &std::path::Path) -> Option<migration::DataLo
     }
 }
 
-#[cfg(windows)]
-fn focus_existing_window() {
-    use std::ffi::c_void;
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn FindWindowW(lpClassName: *const u16, lpWindowName: *const u16) -> *mut c_void;
-        fn ShowWindow(hWnd: *mut c_void, nCmdShow: i32) -> i32;
-        fn SetForegroundWindow(hWnd: *mut c_void) -> i32;
-    }
-
-    // 已有实例：尽量把它的窗口提到前台（失败也无所谓）。
-    unsafe {
-        let title: Vec<u16> = "prt".encode_utf16().chain(std::iter::once(0)).collect();
-        let hwnd = FindWindowW(std::ptr::null(), title.as_ptr());
-        if !hwnd.is_null() {
-            ShowWindow(hwnd, 9); // SW_RESTORE
-            SetForegroundWindow(hwnd);
-        }
-    }
-}
-
-#[cfg(not(windows))]
-fn focus_existing_window() {}
-
-/// 第二个实例启动时给用户一句人话提示（后台 / 控制台模式不弹框）。
-#[cfg(windows)]
-fn notify_already_running() {
-    use std::ffi::c_void;
-    #[link(name = "user32")]
-    unsafe extern "system" {
-        fn MessageBoxW(hWnd: *mut c_void, lpText: *const u16, lpCaption: *const u16, uType: u32) -> i32;
-    }
-    let text: Vec<u16> = concat!(
-        "prt 已经在运行了。\n\n",
-        "同一个数据目录使用一个 prt 进程。请切换到已经打开的 prt；\n",
-        "要同时阅读多篇论文，请右键文档或标签，选择「在新窗口打开」。\n\n",
-        "prt is already running. Switch to the existing window.\n",
-        "To read several papers, right-click a paper or tab and choose Open in new window."
-    )
-    .encode_utf16()
-    .chain(std::iter::once(0))
-    .collect();
-    let caption: Vec<u16> = "prt".encode_utf16().chain(std::iter::once(0)).collect();
-    unsafe {
-        MessageBoxW(std::ptr::null_mut(), text.as_ptr(), caption.as_ptr(), 0x0000_0040);
-    }
-}
-
-#[cfg(not(windows))]
-fn notify_already_running() {}
 
 fn parse_port(args: &[String]) -> Option<u16> {
     for (i, a) in args.iter().enumerate() {
@@ -184,8 +136,10 @@ fn main() {
             Some(guard) => guard,
             None => {
                 if pdfs.is_empty() && !background && !console {
-                    focus_existing_window();
-                    notify_already_running();
+                    #[cfg(windows)]
+                    if let Err(e) = relaunch::forward(&dirs.data) {
+                        migration::notify(&format!("无法联系已打开的 prt / Could not reach the running reader.\n{e}"));
+                    }
                 }
                 return;
             }

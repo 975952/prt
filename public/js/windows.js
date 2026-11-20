@@ -195,6 +195,21 @@ export function windowReady() {
 }
 export function startWindows(callbacks) {
   hooks = callbacks;
+  if (desktopWindows) {
+    const select = document.getElementById('relaunchAction');
+    document.getElementById('relaunchField').classList.remove('hidden');
+    window.addEventListener('prt-desktop', ({ detail }) => {
+      if (detail.type !== 'relaunch-setting') return;
+      select.value = detail.focusExisting ? 'focus' : 'new';
+      select.disabled = false;
+      if (!detail.saved) hooks.notify?.(tr('窗口设置保存失败'));
+    });
+    select.onchange = () => {
+      select.disabled = true;
+      nativePost('relaunch-set', { focusExisting: select.value === 'focus' });
+    };
+    nativePost('relaunch-get');
+  }
 }
 export function finishWindowBoot() { ready = true; windowReady(); }
 export const isWindowClosed = () => closed;
