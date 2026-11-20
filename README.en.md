@@ -6,7 +6,7 @@
 
 [简体中文](README.md) · **English**
 
-prt is a local PDF reader for Windows. Select a figure in a paper and ask Alina to explain it in context. When revising for an exam, ask a question across a folder of lecture notes, then follow the page references to check each source.
+prt is a local PDF reader for Windows with built-in AI chat. Organize papers and lecture notes by topic in Library, then open a PDF to translate a passage or ask about a figure. To compare papers, ask Alina a question across files and follow the page references back to each source.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
@@ -17,13 +17,13 @@ prt is a local PDF reader for Windows. Select a figure in a paper and ask Alina 
 
 ## Three workspaces in dark mode
 
-![Library with folders, search, and recently read papers](docs/assets/library-dark-papers-en.png)
+![Library with folders, search, and recently read papers](docs/assets/library-dark-16x10-en.png)
 
 <sub>The library in dark mode, with first-page previews from six public papers including ViT and ResNet. [Papers and screenshot details](docs/assets/README.md).</sub>
 
-![Alina workspace with chat input and shortcuts to reading and paper search](docs/assets/alina-dark-papers-en.png)
+![Alina workspace with chat input and shortcuts to reading and paper search](docs/assets/alina-dark-16x10-en.png)
 
-![Reader showing the Transformer architecture alongside an illustrative explanation](docs/assets/reader-dark-papers-en.png)
+![Reader showing the Transformer architecture alongside an illustrative explanation](docs/assets/reader-dark-16x10-en.png)
 
 <sub>Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762). The answer is illustrative.</sub>
 

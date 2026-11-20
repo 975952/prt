@@ -6,7 +6,7 @@
 
 **简体中文** · [English](README.en.md)
 
-prt 是 Windows 本地 PDF 阅读器。读论文时，可以圈出一张图，让 Alina 对照原文解释；复习时，可以把几份讲义放进同一文件夹，问一个跨文件的问题，再点回答里的页码核对出处。
+prt 是一款带 AI 问答的 Windows 本地 PDF 阅读器。在书架里按主题整理讲义和论文，打开原文即可划词翻译、给图表提问。想比较几篇论文时，可以在 Alina 里接着问，点击回答中的页码回到对应原文。
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square&label=release)](https://github.com/975952/prt/releases/latest)
 [![Windows](https://img.shields.io/badge/Windows-10%20%2F%2011-586976?style=flat-square)](https://github.com/975952/prt/releases/latest)
@@ -18,13 +18,13 @@ prt 是 Windows 本地 PDF 阅读器。读论文时，可以圈出一张图，�
 
 ## 三个工作区 · 深色模式
 
-![书架首页：继续阅读、文件夹与搜索](docs/assets/library-dark-papers-zh.png)
+![书架首页：继续阅读、文件夹与搜索](docs/assets/library-dark-16x10-zh.png)
 
 <sub>深色主题下的书架，封面来自 ViT、ResNet 等六篇公开论文的原始 PDF。[论文来源与截图说明](docs/assets/README.md)</sub>
 
-![Alina 独立工作区：对话输入框和阅读快捷入口](docs/assets/alina-dark-papers-zh.png)
+![Alina 独立工作区：对话输入框和阅读快捷入口](docs/assets/alina-dark-16x10-zh.png)
 
-![阅读工作区：对照 Transformer 结构图阅读右侧讲解](docs/assets/reader-dark-papers-zh.png)
+![阅读工作区：对照 Transformer 结构图阅读右侧讲解](docs/assets/reader-dark-16x10-zh.png)
 
 <sub>论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。</sub>
 
