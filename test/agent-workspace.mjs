@@ -16,6 +16,9 @@ const desktop = process.argv.includes('--desktop');
 const moveReview = process.argv.includes('--move-review');
 const landingReview = process.argv.includes('--landing-review');
 const sourcesReview = process.argv.includes('--sources-review');
+const historyDeletionReview = process.argv.includes('--history-deletion');
+const includeHistoryDeletion = historyDeletionReview || !(sourcesReview || moveReview || landingReview);
+const previouslyDeletedSid = 'previouslydeletedsid';
 const executablePath = [process.env.CHROME, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe']
   .find(file => file && fs.existsSync(file));
@@ -29,6 +32,16 @@ const fixturePaths = ['vision/alpha.pdf', 'vision/beta.pdf', 'math/gamma.pdf', '
 for (const relative of fixturePaths) {
   fs.mkdirSync(path.dirname(path.join(papersDir, relative)), { recursive: true });
   writeTitlePdf(path.join(papersDir, relative), { title: `Synthetic ${path.basename(relative, '.pdf')} research` });
+}
+if (includeHistoryDeletion) {
+  // Exact storage left by the old version after deleting from Alina: its
+  // global file is gone, the old per-file marker and the folder copy remain.
+  const marker = 'deleted-session-default-9ce67dce-' + previouslyDeletedSid + '.json';
+  const survivor = 'session-' + folderScope('vision') + '-' + previouslyDeletedSid + '.json';
+  fs.writeFileSync(path.join(dataDir, marker), JSON.stringify({ v: 1, deletedAt: Date.now() }));
+  fs.writeFileSync(path.join(dataDir, survivor), JSON.stringify({ title: 'Previous deletion', entries: [
+    { id: 'old-question', block: 'chat', kind: 'user', text: 'A previously deleted question' },
+  ] }));
 }
 const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 const listen = server => new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
@@ -202,6 +215,53 @@ async function chooseGlobal() {
   await page.click('#sessHistory .sess-hrow[data-sid="global-primary"] .sess-hgo');
   await page.waitForFunction(() => window.__ctx.activeSession === 'global-primary'
     && document.querySelector('#aiArea').textContent.includes('GLOBAL_PRIMARY_ONLY'));
+}
+async function reviewHistoryDeletion(paper) {
+  const owners = ['default', paper.docId, folderScope(paper.folder)];
+  const removed = ['historyactive', 'historyinactive'];
+  const retained = 'independenthistory';
+  const title = 'Two discussions with the same title';
+  // Changing the scope setting copies the conversation and its SID. Alina
+  // shows its global owner while the reader's history spans all owners.
+  for (const id of removed) {
+    for (const owner of owners) await seed(owner, id, title, id, paper);
+  }
+  await seed(paper.docId, retained, title, 'INDEPENDENT_HISTORY', paper);
+  const row = id => `#sessHistory .sess-hrow[data-sid=${JSON.stringify(id)}]`;
+  page = await newPage('paper');
+  await full({ landing: true }); await history();
+  await page.locator(row(removed[0]) + ' .sess-hgo').click();
+  await page.waitForFunction(id => __ctx.activeSession === id && !document.querySelector('#sessHistory').getClientRects().length, {}, removed[0]);
+  for (const id of [...removed].reverse()) {
+    await history();
+    await page.locator(row(id) + ' .sess-hmore').click();
+    await page.locator('#sessRowMenu .danger').click();
+    await page.locator('.sess-confirm-mask:not(.hidden) .sess-confirm-btn.danger').click();
+    await page.waitForFunction(id => !document.querySelector(`#sessHistory .sess-hrow[data-sid="${id}"]`), {}, id);
+  }
+  check('Alina history removes both the open conversation and a different selected row',
+    (await Promise.all(removed.map(id => json(sessionUrl('default', id))))).every(session => session.deleted));
+  for (const cold of [false, true]) {
+    if (cold) {
+      await page.reload({ waitUntil: 'domcontentloaded' });
+      await page.waitForFunction(() => window.__ctx && __state.papers.length === 4);
+    }
+    if (!await visible('#home')) await page.locator('#homeBtn').click();
+    await page.locator(`#homeList .home-item[data-id=${JSON.stringify(paper.docId)}] .home-item-go`).click();
+    await page.waitForFunction(id => window.__state.viewerDocId === id && document.body.classList.contains('reading'), {}, paper.docId);
+    await history();
+    await page.waitForSelector(row(retained), { visible: true });
+    const ids = await page.$$eval('#sessHistory .sess-hrow', nodes => nodes.map(node => node.dataset.sid));
+    check(`reader history keeps the independent same-title chat and omits both deleted conversations ${cold ? 'after reload' : 'on return'}`,
+      ids.includes(retained) && removed.every(id => !ids.includes(id)));
+    check(`the reader also omits the copy left by an earlier Alina deletion ${cold ? 'after reload' : 'on return'}`,
+      !ids.includes(previouslyDeletedSid));
+  }
+  for (const id of removed) {
+    for (const owner of owners) assert.equal((await json(sessionUrl(owner, id))).deleted, true, `deleted ${owner}/${id}`);
+  }
+  check('deletion reaches every historical owner and preserves the unrelated conversation on disk',
+    (await json(sessionUrl(paper.docId, retained))).entries.some(entry => entry.text === 'INDEPENDENT_HISTORY'));
 }
 async function reviewSources(paperA, paperB) {
   const url = sessionUrl('default', 'global-primary');
@@ -481,7 +541,8 @@ try {
   await seed(visionScope, 'folder-old', 'Folder private discussion', 'FOLDER_PRIVATE_ONLY', paperA);
   browser = await puppeteer.launch({ executablePath, headless: true, pipe: true,
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: path.join(scratch, 'browser') });
-  if (sourcesReview) await reviewSources(paperA, paperB);
+  if (historyDeletionReview) await reviewHistoryDeletion(paperA);
+  else if (sourcesReview) await reviewSources(paperA, paperB);
   else if (moveReview) await reviewMoveCases({ paperA, paperB });
   else {
   if (!landingReview) {
@@ -1025,7 +1086,9 @@ try {
   check('history opened from a conversation returns to that same conversation', await sid() === beforeHistorySid
     && !await visible('#agentLanding') && await visible('#aiArea') && (await chatText()).includes('SYNTHETIC_NAME_DISMISS_REPLY'));
   }
-  check('only the local synthetic model was used', modelRequests.length >= 1);
+  if (includeHistoryDeletion && !historyDeletionReview) await reviewHistoryDeletion(paperA);
+  if (historyDeletionReview) check('history deletion needs no model requests', !modelRequests.length);
+  else check('only the local synthetic model was used', modelRequests.length >= 1);
   assert.deepEqual(errors, [], 'no uncaught browser errors or external requests');
   pass('no browser errors or external service requests');
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ mode: desktop ? 'desktop' : 'node',

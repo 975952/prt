@@ -167,16 +167,8 @@ async function readDataFile(name, fallback) {
 
 let writeChain = Promise.resolve();
 let profileWriteChain = Promise.resolve();
-/** 每个会话文件一条串行链：POST 的 read-modify-write 不能并发交错 */
+/** Serialize writes that touch the same physical file or logical conversation. */
 const sessionWriteChains = new Map();
-function queueSessionWrite(file, operation) {
-  const previous = sessionWriteChains.get(file) || Promise.resolve();
-  const task = previous.catch(() => {}).then(operation);
-  sessionWriteChains.set(file, task);
-  const release = () => { if (sessionWriteChains.get(file) === task) sessionWriteChains.delete(file); };
-  task.then(release, release);
-  return task;
-}
 // Reserve both slots synchronously: nested one-key locks could deadlock when
 // two windows move conversations in opposite directions.
 function queueSessionWrites(files, operation) {
@@ -190,9 +182,75 @@ function queueSessionWrites(files, operation) {
 }
 const SESSION_DELETED = Symbol('session deleted');
 const deletedSessionFile = file => `deleted-${file}`;
-async function sessionWasDeleted(file) {
-  try { await fsp.access(path.join(DATA_DIR, deletedSessionFile(file))); return true; }
-  catch (error) { if (error.code === 'ENOENT') return false; throw error; }
+const isChatSid = sid => typeof sid === 'string' && /^[\w-]{1,40}$/.test(sid) && sid !== '__translate';
+const deletedChatFile = sid => `deleted-chat-${sid}.json`;
+const chatLockKeys = sid => isChatSid(sid) ? [deletedChatFile(sid)] : [];
+const legacyGlobalDeletes = new Set();
+const sessionName = (fileKey, sid) => `session-${fileKey}${sid ? '-' + sid : ''}.json`;
+
+// Old records have only their file name. The document key ends in a hex hash;
+// the sid can itself contain dashes. New writes store the exact split.
+function storedSessionSid(stem, record) {
+  const saved = record?.storageSid;
+  if (typeof saved === 'string' && /^[\w-]{0,40}$/.test(saved)
+    && (!saved || stem.endsWith('-' + saved))) return saved;
+  const legacy = /-[0-9a-f]{1,10}-(legacy-[0-9a-f]{8})$/.exec(stem);
+  if (legacy) return legacy[1];
+  if (DOC_ID_RE.test(stem)) return '';
+  const split = /^.+-[0-9a-f]{6,10}-([\w-]{1,40})$/.exec(stem)
+    || /^.+-[0-9a-f]{1,5}-([\w-]{1,40})$/.exec(stem);
+  return split?.[1] || '';
+}
+
+async function loadLegacyGlobalDeletes() {
+  const globalKeys = [...new Set(['default', '__global__'].flatMap(docKeyCandidates))].sort((a, b) => b.length - a.length);
+  for (const name of await fsp.readdir(DATA_DIR)) {
+    if (!name.startsWith('deleted-session-') || !name.endsWith('.json')) continue;
+    const stem = name.slice('deleted-session-'.length, -5);
+    if (globalKeys.includes(stem)) continue;
+    const key = globalKeys.find(key => stem.startsWith(key + '-'));
+    if (!key) continue;
+    const sid = stem.slice(key.length + 1);
+    if (!isChatSid(sid)) continue;
+    const old = await readDataFile(name, null);
+    if (old?.v === 1 && old.deletedAt > 0 && !Object.hasOwn(old, 'scope') && !Object.hasOwn(old, 'movedTo')) legacyGlobalDeletes.add(sid);
+  }
+}
+
+async function chatWasDeleted(sid) {
+  return isChatSid(sid) && (legacyGlobalDeletes.has(sid) || await existingPath(path.join(DATA_DIR, deletedChatFile(sid))));
+}
+async function sessionWasDeleted(file, sid) {
+  return await existingPath(path.join(DATA_DIR, deletedSessionFile(file))) || await chatWasDeleted(sid);
+}
+
+async function deleteChatCopies(file, sid) {
+  // All writers and transfers for this sid take the same lock, including ones
+  // addressed to an owner that has never saved the conversation before.
+  return queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
+    const marker = deletedChatFile(sid);
+    const previous = await readDataFile(marker, null);
+    const owners = new Map();
+    function add(fileKey) {
+      if (typeof fileKey === 'string' && fileKey && !/[/\\:]/.test(fileKey))
+        owners.set(fileKey, { fileKey, sid });
+    }
+    for (const row of previous?.owners || []) if (row.sid === sid) add(row.fileKey);
+    const suffix = '-' + sid + '.json';
+    add(file.slice('session-'.length, -suffix.length));
+    for (const name of await fsp.readdir(DATA_DIR)) {
+      if (!name.startsWith('session-') || !name.endsWith(suffix)) continue;
+      const stem = name.slice('session-'.length, -5);
+      if (storedSessionSid(stem, await readDataFile(name, null)) === sid) add(name.slice('session-'.length, -suffix.length));
+    }
+    const rows = [...owners.values()];
+    await writeDataFile(marker, { v: 1, deletedAt: previous?.deletedAt || Date.now(), owners: rows });
+    for (const { fileKey } of rows) {
+      await fsp.rm(path.join(DATA_DIR, sessionName(fileKey, sid)), { force: true });
+      await fsp.rm(path.join(DATA_DIR, 'attachments', fileKey + '-' + sid), { recursive: true, force: true });
+    }
+    return rows;
+  });
 }
 const deletedSessionResponse = () => ({ code: 'SESSION_DELETED', error: {
   code: 'SESSION_DELETED', message: '会话已删除，请新建会话后继续。' } });
@@ -317,8 +375,8 @@ async function moveSession(body) {
   }
   const fromFile = await resolveSessionFileName(fromDoc, fromSid);
   const toFile = await resolveSessionFileName(toDoc, toSid);
-  return queueSessionWrites([fromFile, toFile], async () => {
-    if (await sessionWasDeleted(fromFile)) throw sessionMoveError(409, 'SESSION_DELETED', '原会话已删除或已转换');
+  return queueSessionWrites([fromFile, toFile, ...chatLockKeys(fromSid), ...chatLockKeys(toSid)], async () => {
+    if (await sessionWasDeleted(fromFile, fromSid)) throw sessionMoveError(409, 'SESSION_DELETED', '原会话已删除或已转换');
     const saved = await readDataFile(fromFile, null);
     if (!saved || typeof saved !== 'object' || Array.isArray(saved)) throw sessionMoveError(404, 'SESSION_NOT_FOUND', '原会话不存在');
     // Check the locked, latest snapshot: another window may still be streaming.
@@ -326,10 +384,11 @@ async function moveSession(body) {
       throw sessionMoveError(409, 'SESSION_GENERATING', '会话仍有未完成的回答，请等待完成；若上次已中断，请先恢复并重试，再完成或停止后移动。');
     }
     const targetDir = attachmentDir(toDoc, toSid);
-    if (await sessionWasDeleted(toFile) || await existingPath(path.join(DATA_DIR, toFile)) || await existingPath(targetDir)) {
+    if (await sessionWasDeleted(toFile, toSid) || await existingPath(path.join(DATA_DIR, toFile)) || await existingPath(targetDir)) {
       throw sessionMoveError(409, 'SESSION_TARGET_EXISTS', '目标会话已存在，请重新转换');
     }
     const next = JSON.parse(JSON.stringify(saved));
+    next.storageSid = toSid;
     next.folderPath = body.folderPath;
     const draftOwner = { docId: `session:${docIdOf(toDoc)}:${toSid}`, mode: 'chat' };
     next.draftOwner = draftOwner;
@@ -399,7 +458,7 @@ async function moveSession(body) {
 
 async function handleAttachment(req, res, url) {
   const doc = url.searchParams.get('doc') || 'default';
-  const sid = url.searchParams.get('sid') || '';
+  const sid = (url.searchParams.get('sid') || '').replace(/[^\w-]/g, '').slice(0, 40);
   if (req.method === 'POST') {
     let body;
     try {
@@ -414,9 +473,13 @@ async function handleAttachment(req, res, url) {
     if (!ext) return sendJson(res, 400, { error: { message: '只支持 PNG / JPEG / WebP 截图' } });
     const id = crypto.randomBytes(16).toString('hex');
     try {
-      const dir = attachmentDir(doc, sid);
-      await fsp.mkdir(dir, { recursive: true });
-      await fsp.writeFile(path.join(dir, `${id}.${ext}`), body);
+      const saved = await queueSessionWrites(chatLockKeys(sid), async () => {
+        if (await chatWasDeleted(sid)) return SESSION_DELETED;
+        const dir = attachmentDir(doc, sid);
+        await fsp.mkdir(dir, { recursive: true });
+        await fsp.writeFile(path.join(dir, `${id}.${ext}`), body);
+      });
+      if (saved === SESSION_DELETED) return sendJson(res, 409, deletedSessionResponse());
     } catch (e) {
       sec.diag(`保存截图附件失败: ${e && e.message}`);
       return sendJson(res, 500, { error: { message: '保存截图失败（磁盘空间或目录权限）' } });
@@ -2654,7 +2717,7 @@ async function handle(req, res) {
     const sid = (url.searchParams.get('sid') || '').replace(/[^\w-]/g, '').slice(0, 40);
     const file = await resolveSessionFileName(doc, sid);
     if (req.method === 'GET') {
-      if (await sessionWasDeleted(file)) return sendJson(res, 200, { entries: [], history: [], ops: [], deleted: true, code: 'SESSION_DELETED' });
+      if (await sessionWasDeleted(file, sid)) return sendJson(res, 200, { entries: [], history: [], ops: [], deleted: true, code: 'SESSION_DELETED' });
       return sendJson(res, 200, applySessionDeletions(await readDataFile(file, { entries: [], history: [], ops: [] })));
     }
     if (req.method === 'POST') {
@@ -2666,11 +2729,12 @@ async function handle(req, res) {
       // 多窗口：merge=1 时和磁盘旧内容按条目 id 合并，两个窗口同时保存不会互相覆盖。
       const merge = url.searchParams.get('merge') === '1';
       // 同一会话文件的 read-modify-write 串行化：否则并发 POST 各读旧内容，后写者抹掉先写者。
-      const job = queueSessionWrite(file, async () => {
-        if (await sessionWasDeleted(file)) return SESSION_DELETED;
+      const job = queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
+        if (await sessionWasDeleted(file, sid)) return SESSION_DELETED;
         const old = await readDataFile(file, null);
         const merged = merge ? mergeSessionPayload(old, payload) : replaceSessionPayload(payload, old);
         const record = prepareSessionRecord(merged, old, Date.now());
+        record.storageSid = sid;
         await writeDataFile(file, record);
         await pruneAttachments(doc, sid, record);
         return record;
@@ -2695,12 +2759,13 @@ async function handle(req, res) {
         return sendJson(res, 400, { error: { message: '会话 meta 必须是对象' } });
       }
       let next;
-      try { next = await queueSessionWrite(file, async () => {
-      if (await sessionWasDeleted(file)) return SESSION_DELETED;
+      try { next = await queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
+      if (await sessionWasDeleted(file, sid)) return SESSION_DELETED;
       const cur = await readDataFile(file, null);
       if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return null;
       const now = Date.now();
       const next = { ...cur };
+      next.storageSid = sid;
       if (Object.prototype.hasOwnProperty.call(patch, 'title')) {
         const t = collapsWs(patch.title).slice(0, SESSION_TITLE_MAX);
         // 带 titleSource='ai' 的是自动标题；普通改名保持 user（手动最优先）
@@ -2749,12 +2814,18 @@ async function handle(req, res) {
       });
     }
     if (req.method === 'DELETE') {
-      try { await queueSessionWrite(file, async () => {
-        await writeDataFile(deletedSessionFile(file), { v: 1, deletedAt: Date.now() });
-        await fsp.rm(path.join(DATA_DIR, file), { force: true });
-        await removeAttachmentDir(doc, sid);
-      }); }
-      catch (e) {
+      try {
+        if (url.searchParams.get('copies') === '1' && isChatSid(sid) && sid === url.searchParams.get('sid')) {
+          const owners = await deleteChatCopies(file, sid);
+          return sendJson(res, 200, { ok: true, owners });
+        }
+        await queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
+          const marker = deletedSessionFile(file);
+          if (!await existingPath(path.join(DATA_DIR, marker))) await writeDataFile(marker, { v: 1, deletedAt: Date.now(), scope: 'file' });
+          await fsp.rm(path.join(DATA_DIR, file), { force: true });
+          await removeAttachmentDir(doc, sid);
+        });
+      } catch (e) {
         sec.diag(`删除阅读会话失败: ${e && e.message}`);
         return sendJson(res, 500, { error: { message: '删除阅读会话失败，请重试' } });
       }
@@ -2807,12 +2878,14 @@ async function handle(req, res) {
         if (rest === fromDocKey) sid = '';
         else if (rest.startsWith(`${fromDocKey}-`)) sid = rest.slice(fromDocKey.length + 1);
         else continue;
-        const data = await readDataFile(name, null);
-        if (!data || typeof data !== 'object' || Array.isArray(data)) continue;
-        const next = { ...data, v: 4, folderPath: toPath || data.folderPath || '' };
-        const targetName = sid ? `session-${toDocKey}-${sid}.json` : `session-${toDocKey}.json`;
-        await writeDataFile(targetName, next);
-        migrated += 1;
+        const targetName = sessionName(toDocKey, sid);
+        await queueSessionWrites([name, targetName, ...chatLockKeys(sid)], async () => {
+          if (await sessionWasDeleted(name, sid) || await sessionWasDeleted(targetName, sid)) return;
+          const data = await readDataFile(name, null);
+          if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+          await writeDataFile(targetName, { ...data, v: 4, storageSid: sid, folderPath: toPath || data.folderPath || '' });
+          migrated += 1;
+        });
       }
     } catch (e) {
       sec.diag(`迁移会话失败: ${e && e.message}`);
@@ -2830,7 +2903,11 @@ async function handle(req, res) {
       const fromDir = path.join(attRoot, dirName);
       const toDir = path.join(attRoot, `${toDocKey}${tail}`);
       if (fromDir === toDir) continue;
-      try { await fsp.cp(fromDir, toDir, { recursive: true, force: true }); attachments += 1; }
+      const sid = tail ? tail.slice(1) : '';
+      try { await queueSessionWrites(chatLockKeys(sid), async () => {
+        if (await sessionWasDeleted(sessionName(fromDocKey, sid), sid) || await sessionWasDeleted(sessionName(toDocKey, sid), sid)) return;
+        await fsp.cp(fromDir, toDir, { recursive: true, force: true }); attachments += 1;
+      }); }
       catch (e) { sec.diag(`迁移截图附件失败: ${e && e.message}`); }
     }
     return sendJson(res, 200, { ok: true, migrated, attachments });
@@ -2853,9 +2930,15 @@ async function handle(req, res) {
     const describe = async (fileName, sid, folderPathHint) => {
       if (seen.has(fileName)) return;
       seen.add(fileName);
-      if (await sessionWasDeleted(fileName)) return;
       const data = await readDataFile(fileName, null);
       if (!data || typeof data !== 'object' || Array.isArray(data)) return;
+      const stem = fileName.slice('session-'.length, -5);
+      const storedSid = storedSessionSid(stem, data);
+      // Candidate keys can prefix one another. A saved storage identity wins
+      // over a prefix match, and the more specific candidate can list it later.
+      if (sid !== null && typeof data.storageSid === 'string' && sid !== storedSid) { seen.delete(fileName); return; }
+      sid ??= storedSid;
+      if (sid === '__translate' || await sessionWasDeleted(fileName, sid)) return;
       let stat = null;
       try { stat = await fsp.stat(path.join(DATA_DIR, fileName)); } catch { stat = null; }
       const mtime = stat ? Math.round(stat.mtimeMs) : 0;
@@ -2863,7 +2946,6 @@ async function handle(req, res) {
       const updatedAt = sessionTs(data.updatedAt) || mtime;
       // fileKey：这一行实际存在的 doc key（历史面板要能对任意文件夹/归属模式的行做
       // 置顶/改名/归档/删除；全局共用模式下旧会话仍留在原文件夹的键上）
-      const stem = fileName.replace(/^session-/, '').replace(/\.json$/, '');
       const fileKey = (sid && stem.endsWith(`-${sid}`)) ? stem.slice(0, -(sid.length + 1)) : stem;
       out.push({
         sid,
@@ -2892,12 +2974,10 @@ async function handle(req, res) {
         if (!m) continue;
         const rest = m[1];
         if (rest.endsWith('-__translate') || rest.endsWith('__translate')) continue;
-        // 新格式尾部是 sid（newSid 只由 base36 组成）；老格式 session-<key>.json 没有 sid
-        const sidMatch = /^(.*)-([a-z0-9]{6,24})$/.exec(rest);
-        await describe(name, sidMatch ? sidMatch[2] : '', '');
+        await describe(name, null, '');
       }
     } else {
-      const keys = docKeyCandidates(doc);
+      const keys = docKeyCandidates(doc).sort((a, b) => b.length - a.length);
       const fileFor = (key, sid) => (sid ? `session-${key}-${sid}.json` : `session-${key}.json`);
       // 对每一个候选 key：老的单会话文件 + 该 key 下的所有 sid 文件
       for (const key of keys) {
@@ -3069,6 +3149,7 @@ function openBrowser(url) {
 
 async function main() {
   await ensureDirs();
+  await loadLegacyGlobalDeletes();
   const server = http.createServer((req, res) => {
     handle(req, res).catch((e) => {
       // 审计 §P2：未处理的异常里可能带本机路径 / 上游 URL，细节只进本地诊断日志

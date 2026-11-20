@@ -52,6 +52,7 @@ window.fetch = async (input, options = {}) => {
   return Response.json({error:'Unexpected fixture request'},{status:400});
 };
 const ctx = {
+  deleteSession: async (sid, doc) => (await fetch('/api/session?' + new URLSearchParams({ sid, doc, copies:'1' }), {method:'DELETE'})).ok,
   hasDoc: () => true, isAgentWorkspace: () => mode === 'global', scopeMode: () => mode,
   scopeKey: currentKey, folderPath: () => 'vision', folderKey: () => 'folder-vision', folderKeyOf: value => 'folder-'+value,
   doc: () => mode === 'global' ? null : papers[0], currentSid: () => mode+'-main',

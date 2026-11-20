@@ -1308,6 +1308,35 @@ fn session_file_resolved(doc: &str, sid: &str) -> String {
 
 fn deleted_session_file(file: &str) -> String { format!("deleted-{}", file) }
 fn session_was_deleted(file: &str) -> bool { store::data_path(&deleted_session_file(file)).exists() }
+fn valid_session_sid(sid: &str) -> bool {
+    sid.len() <= 40 && sid.bytes().all(|b| b.is_ascii_alphanumeric() || matches!(b, b'_' | b'-'))
+}
+fn logical_chat_sid(sid: &str) -> bool { !sid.is_empty() && sid != "__translate" && valid_session_sid(sid) }
+fn deleted_chat_file(sid: &str) -> String { format!("deleted-chat-{sid}.json") }
+fn legacy_global_deletions() -> &'static HashSet<String> {
+    static SIDS: OnceLock<HashSet<String>> = OnceLock::new();
+    SIDS.get_or_init(|| {
+        let mut keys: Vec<_> = ["default", "__global__"].iter().flat_map(|doc| {
+            [doc_id_of(doc), doc_id_of(&format!("{doc}.pdf"))]
+        }).collect();
+        keys.sort_by_key(|key| std::cmp::Reverse(key.len()));
+        store::list_data_files().into_iter().filter_map(|name| {
+            let stem = name.strip_prefix("deleted-session-")?.strip_suffix(".json")?;
+            if keys.iter().any(|key| key == stem) { return None; }
+            let sid = keys.iter().find_map(|key| stem.strip_prefix(key.as_str())?.strip_prefix('-'))?;
+            if !logical_chat_sid(sid) { return None; }
+            let mark = store::read_json_opt(&name)?;
+            (mark.get("v").and_then(Value::as_u64) == Some(1)
+                && mark.get("deletedAt").and_then(Value::as_u64).is_some_and(|ts| ts > 0)
+                && mark.get("scope").is_none() && mark.get("movedTo").is_none()).then(|| sid.to_string())
+        }).collect()
+    })
+}
+fn chat_was_deleted(sid: &str) -> bool {
+    // Older Alina versions deleted only the global owner. A move tombstone
+    // and a new, explicitly file-scoped delete must stay local to their owner.
+    logical_chat_sid(sid) && (legacy_global_deletions().contains(sid) || store::data_path(&deleted_chat_file(sid)).is_file())
+}
 fn deleted_session_response() -> Value {
     json!({"code":"SESSION_DELETED", "error":{"code":"SESSION_DELETED", "message":"会话已删除，请新建会话后继续。"}})
 }
@@ -2024,12 +2053,8 @@ fn session_file_times(name: &str) -> (u64, u64) {
 }
 
 /// 单条会话的列表项（与 Node 版 /api/sessions 的 describe 一致）
-fn describe_session(name: &str, sid: &str, folder_hint: &str) -> Option<Value> {
-    if session_was_deleted(name) { return None; }
-    let data = store::read_json_opt(name)?;
-    if !data.is_object() {
-        return None;
-    }
+fn describe_session(name: &str, file_key: &str, sid: &str, data: &Value, folder_hint: &str) -> Option<Value> {
+    if !data.is_object() || session_was_deleted(name) || chat_was_deleted(sid) { return None; }
     let (mtime, created_fallback) = session_file_times(name);
     let updated = {
         let t = session_ts(data.get("updatedAt"));
@@ -2054,15 +2079,6 @@ fn describe_session(name: &str, sid: &str, folder_hint: &str) -> Option<Value> {
     let last_opened = session_ts(data.get("lastOpenedAt"));
     // fileKey：这一行实际存在的 doc key（历史面板要能对任意文件夹/归属模式的行做
     // 置顶/改名/归档/删除；全局共用模式下旧会话仍留在原文件夹的键上）
-    let stem = name
-        .strip_prefix("session-")
-        .and_then(|s| s.strip_suffix(".json"))
-        .unwrap_or(name);
-    let file_key = if !sid.is_empty() && stem.ends_with(&format!("-{sid}")) {
-        stem[..stem.len() - sid.len() - 1].to_string()
-    } else {
-        stem.to_string()
-    };
     Some(json!({
         "sid": sid,
         "fileKey": file_key,
@@ -2088,18 +2104,34 @@ fn describe_session(name: &str, sid: &str, folder_hint: &str) -> Option<Value> {
     }))
 }
 
-/// 全部文件夹模式下从文件名尾部猜 sid（newSid 只由 base36 组成）
-fn sid_from_session_rest(rest: &str) -> String {
-    if let Some(idx) = rest.rfind('-') {
-        let tail = &rest[idx + 1..];
-        if tail.len() >= 6
-            && tail.len() <= 24
-            && tail.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-        {
-            return tail.to_string();
+fn session_identity<'a>(name: &'a str, data: &Value) -> Option<(&'a str, &'a str)> {
+    let stem = name.strip_prefix("session-")?.strip_suffix(".json")?;
+    if stem.is_empty() || stem.contains(['/', '\\', ':', '\0']) { return None; }
+    let split = |sid: &str| -> Option<(&'a str, &'a str)> {
+        if sid.is_empty() { return Some((stem, "")); }
+        let key = stem.strip_suffix(sid)?.strip_suffix('-')?;
+        if key.is_empty() { return None; }
+        Some((key, &stem[key.len() + 1..]))
+    };
+    if let Some(sid) = data.get("storageSid").and_then(Value::as_str).filter(|s| valid_session_sid(s)) {
+        if let Some(parts) = split(sid) { return Some(parts); }
+    }
+    let hex = |s: &str| s.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+    let hashed_key = |s: &str, lengths: std::ops::RangeInclusive<usize>|
+        s.rsplit_once('-').is_some_and(|(_, tail)| lengths.contains(&tail.len()) && hex(tail));
+    if let Some((key, suffix)) = stem.rsplit_once("-legacy-") {
+        if hashed_key(key, 1..=10) && suffix.len() == 8 && hex(suffix) { return Some((key, &stem[key.len() + 1..])); }
+    }
+    // In a single-session legacy filename the terminal hex is the owner's
+    // hash. For named sessions, split after the owner's hash so IDs may contain dashes.
+    if hashed_key(stem, 6..=10) { return Some((stem, "")); }
+    for lengths in [6..=10, 1..=5] {
+        for (idx, _) in stem.rmatch_indices('-') {
+            let (key, sid) = (&stem[..idx], &stem[idx + 1..]);
+            if hashed_key(key, lengths.clone()) && !sid.is_empty() && valid_session_sid(sid) { return Some((key, sid)); }
         }
     }
-    String::new()
+    Some((stem, ""))
 }
 
 fn json_has_key(v: &Value, k: &str) -> bool {
@@ -2223,6 +2255,49 @@ fn remove_attachment_dir(doc: &str, sid: &str) {
     let _ = std::fs::remove_dir_all(attachment_dir(doc, sid));
 }
 
+// Caller holds the session write lock. Publish all owners first so a retry
+// can finish removing attachment directories after a partially completed cleanup.
+fn delete_chat_copies(file: &str, sid: &str) -> std::io::Result<Value> {
+    use std::collections::BTreeSet;
+    let marker = deleted_chat_file(sid);
+    let prior = store::read_json_opt(&marker).unwrap_or(Value::Null);
+    let stem = file.strip_prefix("session-").and_then(|s| s.strip_suffix(".json")).unwrap();
+    let requested_key = stem.strip_suffix(sid).and_then(|s| s.strip_suffix('-')).unwrap();
+    let mut keys = BTreeSet::from([requested_key.to_string()]);
+    if let Some(owners) = prior.get("owners").and_then(Value::as_array) {
+        for owner in owners {
+            let key = owner.get("fileKey").and_then(Value::as_str).unwrap_or("");
+            if !key.is_empty() && !key.contains(['/', '\\', ':', '\0']) && owner.get("sid").and_then(Value::as_str) == Some(sid) {
+                keys.insert(key.to_string());
+            }
+        }
+    }
+    let suffix = format!("-{sid}.json");
+    for entry in std::fs::read_dir(store::data_path(""))? {
+        let entry = entry?;
+        let Some(name) = entry.file_name().into_string().ok() else { continue };
+        if !name.starts_with("session-") || !name.ends_with(&suffix) { continue; }
+        if let Some((key, stored_sid)) = session_identity(&name, &store::read_json(&name, Value::Null)) {
+            if stored_sid == sid { keys.insert(key.to_string()); }
+        }
+    }
+    let owners: Vec<_> = keys.iter().map(|key| json!({"fileKey":key,"sid":sid})).collect();
+    let deleted_at = prior.get("deletedAt").and_then(Value::as_u64).unwrap_or_else(now_ms);
+    if !store::write_json(&marker, &json!({"v":1,"deletedAt":deleted_at,"owners":owners})) {
+        return Err(std::io::Error::other("cannot save logical chat deletion"));
+    }
+    for key in keys {
+        let file = session_file_for(&key, sid);
+        let images = store::data_path("attachments").join(format!("{key}-{sid}"));
+        for result in [std::fs::remove_file(store::data_path(&file)), std::fs::remove_dir_all(&images)] {
+            if let Err(e) = result {
+                if e.kind() != std::io::ErrorKind::NotFound { return Err(e); }
+            }
+        }
+    }
+    Ok(json!({"ok":true,"owners":owners}))
+}
+
 pub fn attachment(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     let doc = query_get(raw_query, "doc").unwrap_or_else(|| "default".to_string());
     let sid: String = query_get(raw_query, "sid")
@@ -2234,6 +2309,8 @@ pub fn attachment(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     let dir = attachment_dir(&doc, &sid);
     match method {
         Method::Post => {
+            let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
+            if chat_was_deleted(&sid) { return send_json(rq, 409, &deleted_session_response()); }
             if body.is_empty() {
                 return send_json(rq, 400, &err_json("空图片"));
             }
@@ -2355,7 +2432,7 @@ fn move_one_session(body: &Value) -> Result<Value, SessionMoveError> {
     let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
     let from_file = session_file_resolved(from_doc, from_sid);
     let to_file = session_file_resolved(to_doc, to_sid);
-    if session_was_deleted(&from_file) { return Err((409, "SESSION_DELETED", "原会话已删除或已转换")); }
+    if session_was_deleted(&from_file) || chat_was_deleted(from_sid) { return Err((409, "SESSION_DELETED", "原会话已删除或已转换")); }
     let mut next = store::read_json_opt(&from_file).filter(Value::is_object)
         .ok_or((404, "SESSION_NOT_FOUND", "原会话不存在"))?;
     // Inspect the latest snapshot while holding the same lock as streaming saves.
@@ -2365,10 +2442,11 @@ fn move_one_session(body: &Value) -> Result<Value, SessionMoveError> {
         return Err((409, "SESSION_GENERATING", "会话仍有未完成的回答，请等待完成；若上次已中断，请先恢复并重试，再完成或停止后移动。"));
     }
     let target_dir = attachment_dir(to_doc, to_sid);
-    if session_was_deleted(&to_file) || store::data_path(&to_file).exists() || target_dir.exists() {
+    if session_was_deleted(&to_file) || chat_was_deleted(to_sid) || store::data_path(&to_file).exists() || target_dir.exists() {
         return Err((409, "SESSION_TARGET_EXISTS", "目标会话已存在，请重新转换"));
     }
     next["folderPath"] = json!(folder);
+    next["storageSid"] = json!(to_sid);
     let draft_owner = json!({"docId": format!("session:{}:{}", doc_id_of(to_doc), to_sid), "mode":"chat"});
     next["draftOwner"] = draft_owner.clone();
     let mut copies = HashMap::new();
@@ -2438,8 +2516,8 @@ pub fn sessions_move(rq: Request, body: &[u8]) {
 
 pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     let doc = query_get(raw_query, "doc").unwrap_or_else(|| "default".to_string());
-    let sid = query_get(raw_query, "sid")
-        .unwrap_or_default()
+    let raw_sid = query_get(raw_query, "sid").unwrap_or_default();
+    let sid = raw_sid
         .chars()
         .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
         .take(40)
@@ -2448,7 +2526,7 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
     let file = session_file_resolved(&doc, &sid);
     match method {
         Method::Get => {
-            if session_was_deleted(&file) {
+            if session_was_deleted(&file) || chat_was_deleted(&sid) {
                 send_json(rq, 200, &json!({"entries":[],"history":[],"ops":[],"deleted":true,"code":"SESSION_DELETED"}))
             } else {
                 send_json(rq, 200, &apply_session_deletions(&store::read_json(&file, json!({"entries":[],"history":[],"ops":[]})), None))
@@ -2469,14 +2547,15 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
             let merge = query_get(raw_query, "merge").as_deref() == Some("1");
             let stored = {
                 let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
-                if session_was_deleted(&file) { return send_json(rq, 409, &deleted_session_response()); }
+                if session_was_deleted(&file) || chat_was_deleted(&sid) { return send_json(rq, 409, &deleted_session_response()); }
                 let old = store::read_json_opt(&file);
                 let merged = if merge {
                     merge_session_payload(old.as_ref(), &payload)
                 } else {
                     replace_session_payload(&payload, old.as_ref())
                 };
-                let record = prepare_session_record(&merged, old.as_ref());
+                let mut record = prepare_session_record(&merged, old.as_ref());
+                record["storageSid"] = json!(sid);
                 if !store::write_json(&file, &record) {
                     return send_json(rq, 500, &err_json("保存阅读会话失败，请重试"));
                 }
@@ -2505,7 +2584,7 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
                 return send_json(rq, 400, &err_json("会话 meta 必须是对象"));
             }
             let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
-            if session_was_deleted(&file) { return send_json(rq, 409, &deleted_session_response()); }
+            if session_was_deleted(&file) || chat_was_deleted(&sid) { return send_json(rq, 409, &deleted_session_response()); }
             let cur = match store::read_json_opt(&file) {
                 Some(v) if v.is_object() => v,
                 _ => return send_json(rq, 404, &err_json("会话不存在或已被删除")),
@@ -2570,6 +2649,7 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
                 }
             }
             next.insert("v".to_string(), json!(4));
+            next.insert("storageSid".to_string(), json!(sid));
             if session_ts(next.get("createdAt")) == 0 {
                 let fallback = session_ts(next.get("updatedAt"));
                 next.insert(
@@ -2611,7 +2691,13 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
         // 删掉一个会话文件（不碰论文本身）。与 Node 版一致：文件本来就不在也算成功（幂等）。
         Method::Delete => {
             let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
-            if !store::write_json(&deleted_session_file(&file), &json!({"v":1,"deletedAt":now_ms()})) {
+            if query_get(raw_query, "copies").as_deref() == Some("1") && logical_chat_sid(&sid) && raw_sid == sid {
+                return match delete_chat_copies(&file, &sid) {
+                    Ok(result) => send_json(rq, 200, &result),
+                    Err(_) => send_json(rq, 500, &err_json("删除会话失败，请重试")),
+                };
+            }
+            if !session_was_deleted(&file) && !store::write_json(&deleted_session_file(&file), &json!({"v":1,"scope":"file","deletedAt":now_ms()})) {
                 return send_json(rq, 500, &err_json("删除会话失败"));
             }
             let existed = store::data_path(&file).exists();
@@ -2640,43 +2726,21 @@ pub fn sessions(rq: Request, _method: &Method, raw_query: &str) {
 
     let names = store::list_data_files();
     let mut out: Vec<Value> = Vec::new();
-    let mut seen: Vec<String> = Vec::new();
-    if scope_all {
-        for name in &names {
-            let rest = match name.strip_prefix("session-").and_then(|s| s.strip_suffix(".json")) {
-                Some(r) => r,
-                None => continue,
-            };
-            if rest.contains("__translate") || seen.iter().any(|s| s == name) {
-                continue;
-            }
-            seen.push(name.clone());
-            let sid = sid_from_session_rest(rest);
-            if let Some(item) = describe_session(name, &sid, "") {
-                out.push(item);
-            }
+    let keys = doc_key_candidates(&doc);
+    for name in &names {
+        let Some(stem) = name.strip_prefix("session-").and_then(|s| s.strip_suffix(".json")) else { continue };
+        let folder_key = keys.iter().filter(|key| stem == key.as_str() || stem.strip_prefix(key.as_str()).is_some_and(|s| s.starts_with('-')))
+            .max_by_key(|key| key.len());
+        if !scope_all && folder_key.is_none() { continue; }
+        let Some(data) = store::read_json_opt(name) else { continue };
+        let Some((mut key, mut sid)) = session_identity(name, &data) else { continue };
+        if !scope_all && data.get("storageSid").and_then(Value::as_str).is_none() {
+            key = folder_key.unwrap();
+            sid = stem.strip_prefix(key).and_then(|s| s.strip_prefix('-')).unwrap_or("");
         }
-    } else {
-        // 当前文件夹：沿用候选 key 前缀扫（历史哈希算法不同留下的老会话也能列出来）
-        for key in doc_key_candidates(&doc) {
-            let legacy = format!("session-{}.json", key);
-            if names.iter().any(|n| n == &legacy) && !seen.iter().any(|s| s == &legacy) {
-                seen.push(legacy.clone());
-                if let Some(item) = describe_session(&legacy, "", &folder_path) {
-                    out.push(item);
-                }
-            }
-            let prefix = format!("session-{}-", key);
-            for name in &names {
-                if !name.starts_with(&prefix) || !name.ends_with(".json") || name.ends_with("-__translate.json") || seen.iter().any(|s| s == name) {
-                    continue;
-                }
-                seen.push(name.clone());
-                let sid = name[prefix.len()..name.len() - 5].to_string();
-                if let Some(item) = describe_session(name, &sid, &folder_path) {
-                    out.push(item);
-                }
-            }
+        if sid == "__translate" || (!scope_all && !keys.iter().any(|candidate| candidate == key)) { continue; }
+        if let Some(item) = describe_session(name, key, sid, &data, if scope_all { "" } else { &folder_path }) {
+            out.push(item);
         }
     }
     // archived=0 只看活跃（默认），1 只看已归档，all 全都返回
@@ -2761,6 +2825,7 @@ pub fn sessions_move_folder(rq: Request, body: &[u8]) {
     let from_doc = doc_id_of(from_key);
     let to_doc = doc_id_of(to_key);
     let from_prefix = format!("session-{}-", from_doc);
+    let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
     let names = store::list_data_files();
     let mut migrated = 0usize;
     let mut attachments = 0usize;
@@ -2770,7 +2835,7 @@ pub fn sessions_move_folder(rq: Request, body: &[u8]) {
         }
         let sid = &name[from_prefix.len()..name.len() - 5];
         // 译文伪会话（__translate）仍属于文档，不跟文件夹会话一起搬
-        if sid.is_empty() || sid.contains("__translate") {
+        if sid.is_empty() || sid == "__translate" || chat_was_deleted(sid) || session_was_deleted(name) {
             continue;
         }
         let data = match store::read_json_opt(name) {
@@ -2783,6 +2848,8 @@ pub fn sessions_move_folder(rq: Request, body: &[u8]) {
             obj.insert("folderPath".to_string(), json!(to_path));
         }
         let target = format!("session-{}-{}.json", to_doc, sid);
+        if session_was_deleted(&target) { continue; }
+        obj.insert("storageSid".to_string(), json!(sid));
         if !store::write_json(&target, &Value::Object(obj)) {
             continue;
         }

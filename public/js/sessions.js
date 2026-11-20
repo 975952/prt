@@ -280,29 +280,6 @@ function cacheTouched(row) {
   }
 }
 
-/** 删除会话在所有存储键下的副本：切换「换论文时对话怎么接」会复制同一 sid，
- *  只删当前归属键那份的话，其余副本会在历史里「复活」。 */
-async function deleteRowFile(row) {
-  const scope = listScopeKey();
-  const copies = Array.isArray(row?._copies) && row._copies.length
-    ? row._copies
-    : [{ sid: row.sid, fileKey: keyForRow(row) }];
-  let lastErr = null;
-  for (const c of copies) {
-    const doc = c.fileKey || scope;
-    if (!doc) continue;
-    await st.ctx?.discardSessionFile?.(doc, row.sid);
-    const q = new URLSearchParams({ doc, sid: row.sid });
-    let r;
-    try { r = await fetch(`/api/session?${q}`, { method: 'DELETE' }); }
-    finally { st.ctx?.finishSessionFileDiscard?.(doc, row.sid); }
-    if (r.ok || r.status === 404) continue;
-    const j = await r.json().catch(() => ({}));
-    lastErr = new Error(errorOf(j, r));
-  }
-  if (lastErr) throw lastErr;
-}
-
 /* ───────────────────────────── 列表刷新 ───────────────────────────── */
 let listRequest = 0;
 let allListRequest = 0;
@@ -887,7 +864,7 @@ function historySourceRows() {
  *  如果不去重，同一段对话会重复出现好几行、每行都标「当前」。这里按 sid 合并成一行：
  *  · 优先当前归属键下那份，其次有标题、置顶/归档的，最后取最近更新的；
  *  · 标题、置顶、归档、摘要等可能只写在某一副本上，合并时取更完整的值；
- *  · 原副本列表挂在 _copies 上，删除时连同所有副本一起删。 */
+ *  · _copies 记录列表内的归属，用于打开会话和标记当前行。 */
 function preferRow(a, b) {
   const aCur = isScopeFileKey(a.fileKey);
   const bCur = isScopeFileKey(b.fileKey);
@@ -1307,6 +1284,7 @@ function startRename(sid) {
 
 async function confirmDeleteRow(row) {
   if (!guardBusy(tr("删除会话"))) return;
+  const fileKey = keyForRow(row);
   const title = row.title || (row.count ? tr("（无标题会话）") : tr("新会话"));
   const ok = await sessionsConfirm({
     title: tr("删除这个会话？"),
@@ -1316,18 +1294,8 @@ async function confirmDeleteRow(row) {
   });
   if (!ok) return;
   try {
-    if (row.sid === st.currentSid && !!st.currentSid && st.ctx?.hasDoc?.() && isScopeFileKey(keyForRow(row))) {
-      await st.ctx.deleteSession(row.sid);
-      // 当前归属键由 deleteSession 删；其它存储键下的副本要一起清，否则历史里会「复活」
-      const others = (row._copies || []).filter((c) => !isScopeFileKey(c.fileKey || listScopeKey()));
-      if (others.length) await deleteRowFile({ ...row, _copies: others });
-    } else {
-      await deleteRowFile(row);
-    }
-    st.list = st.list.filter((r) => r.sid !== row.sid);
-    st.allList = st.allList.filter((r) => r.sid !== row.sid);
+    if (!await st.ctx.deleteSession(row.sid, fileKey)) return;
     await refreshList({ force: true });
-    if (st.historyOpen) await refreshAllList();
     if (st.entryVisible) renderEntryCard(activeRows()[0] || null);
     if (st.historyOpen) renderHistoryList();
     if (st.quickOpen) renderQuickList();

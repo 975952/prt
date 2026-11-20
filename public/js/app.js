@@ -1037,29 +1037,50 @@ let renderingChatJob = null;
 const chatOwnerKey = (scope, sid) => JSON.stringify([scope, sid || '']);
 const currentChatKey = () => chatOwnerKey(sessionScopeKey(), activeSidFor(state.doc?.docId));
 const sessionMutationPending = (key = currentChatKey()) => pendingSessionMutations.has(key);
-function retireDeletedConversation(scope, sid) {
-  const key = chatOwnerKey(scope, sid);
-  if (deletedChatKeys.has(key)) return;
-  deletedChatKeys.add(key); sessionWrites.invalidate(key);
-  for (const otherKey of new Set([...chatJobs.keys(), ...chatViews.keys(), displayedChatKey].filter(Boolean))) {
-    if (otherKey === key) continue;
-    const [otherScope, otherSid] = JSON.parse(otherKey);
-    if (otherSid === (sid || '') && scopeDocIdOf(otherScope) === scopeDocIdOf(scope)) retireDeletedConversation(otherScope, sid);
+function matchesDeletedConversation(scope, sid, copies, otherScope, otherSid) {
+  return otherSid === sid && ((copies && !!sid) || scopeDocIdOf(otherScope) === scopeDocIdOf(scope));
+}
+function retireDeletedConversation(scope, sid, { copies = false, announce = true } = {}) {
+  const matches = (otherScope, otherSid) => matchesDeletedConversation(scope, sid, copies, otherScope, otherSid);
+  const matchesKey = key => key && matches(...JSON.parse(key));
+  const active = hasChatScope() && matches(sessionScopeKey(), activeSidFor(state.doc?.docId));
+  const keys = new Set([chatOwnerKey(scope, sid), displayedChatKey, ...chatJobs.keys(), ...chatViews.keys()]);
+  for (const key of keys) {
+    if (!matchesKey(key)) continue;
+    deletedChatKeys.add(key); sessionWrites.invalidate(key);
+    const job = chatJobs.get(key);
+    if (job) { job.discarded = true; clearTimeout(job.saveTimer); job.controller.abort('session-deleted'); chatJobs.delete(key); }
+    chatViews.delete(key);
   }
-  const job = chatJobs.get(key);
-  if (job) { job.discarded = true; clearTimeout(job.saveTimer); job.controller.abort('session-deleted'); chatJobs.delete(key); }
-  chatViews.delete(key);
-  for (const [docId, view] of docViews) if (view.chatKey === key) docViews.delete(docId);
-  if (displayedChatKey === key) {
+  for (const [docId, view] of docViews) {
+    if (matchesKey(view.chatKey)) docViews.delete(docId);
+    else if (view.sessionList) view.sessionList = view.sessionList.filter(row => !matches(row.fileKey, row.sid));
+  }
+  // Parked papers can still point at the deleted conversation after leaving Alina.
+  const pointers = readActiveSessions();
+  const currentSlot = active ? activeSessionSlot(state.doc?.docId) : null;
+  let updatedPointers = false;
+  for (const [slot, value] of Object.entries(pointers)) {
+    if (slot === currentSlot) continue; // newSession switches the visible slot and its draft together.
+    const key = slot === 'global' ? 'default' : slot.startsWith('doc:') ? slot.slice(4) : slot;
+    if (!matches(key, value)) continue;
+    pointers[slot] = newSid();
+    activeSessionFallback.set(slot, pointers[slot]);
+    updatedPointers = true;
+  }
+  if (updatedPointers) {
+    try { localStorage.setItem(SESSION_KEY, JSON.stringify(pointers)); activeSessionFallback.clear(); } catch { /* memory only */ }
+  }
+  releaseRetiredChatPdfs();
+  if (active || matchesKey(displayedChatKey)) {
     persistSession.cancel?.();
     clearChatBlock();
     state.sessionEntries = state.sessionEntries.filter(row => row?.block === 'translate');
     state.history = []; state.sessionSummary = ''; state.summaryCovered = 0;
     displayedChatKey = ''; refreshChatJobState();
-    toast(tr("这段会话已被删除，已停止旧任务并打开新会话。"), 'ok', 5000);
-    void newSession({ silent: true, fromEntry: true });
+    if (announce) toast(tr("这段会话已被删除，已停止旧任务并打开新会话。"), 'ok', 5000);
+    if (active) return newSession({ silent: true, fromEntry: true });
   }
-  releaseRetiredChatPdfs();
 }
 async function sessionWriteRequest(url, options, scope, sid) {
   if (deletedChatKeys.has(chatOwnerKey(scope, sid))) return null;
@@ -7963,7 +7984,11 @@ function scheduleRemoteSession() {
 }
 function onRemoteSessionSaved(data) {
   if (!data || data.sender === windowId) return;
-  if (data.kind === 'chat' && data.deleted) { retireDeletedConversation(data.scope, data.sid); return; }
+  if (data.kind === 'chat' && data.deleted) {
+    retireDeletedConversation(data.scope, data.sid, { copies: !!data.copies });
+    refreshConversationList();
+    return;
+  }
   if (data.kind === 'translate') dropDocView(data.docId);
   if (data.kind === 'chat') {
     const key = chatOwnerKey(data.scope, data.sid);
@@ -8736,19 +8761,7 @@ function sessionsContext() {
     continueSession: async (sid, opts) => { await switchSession(sid, opts || {}); setAgentLanding(false); },
     openSessionFromHistory: async (row, opts) => { await openSessionFromHistory(row, opts || {}); setAgentLanding(false); },
     startNewSession: async (opts) => { await newSession(opts || {}); },
-    deleteSession: (sid) => deleteSession(sid, { confirm: false }),
-    discardSessionFile: async (scope, sid) => {
-      for (const key of [...chatViews.keys()]) {
-        const [ownerScope, ownerSid] = JSON.parse(key);
-        if (ownerSid === (sid || '') && (ownerScope === scope || scopeDocIdOf(ownerScope) === scopeDocIdOf(scope))) await discardChatSession(ownerScope, ownerSid);
-      }
-    },
-    finishSessionFileDiscard: (scope, sid) => {
-      for (const key of [...pendingSessionMutations]) {
-        const [ownerScope, ownerSid] = JSON.parse(key);
-        if (ownerSid === (sid || '') && (ownerScope === scope || scopeDocIdOf(ownerScope) === scopeDocIdOf(scope))) finishChatSessionDiscard(ownerScope, ownerSid);
-      }
-    },
+    deleteSession: (sid, scope) => deleteSession(sid, { confirm: false, scope }),
     clearCurrentSession: () => clearCurrentSession({ confirm: false }),
     saveNow: () => saveSessionNow(),
     // 会话头/历史面板里的「会话设置」按钮：直接打开设置里的「会话」分类
@@ -9194,51 +9207,36 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   setAgentLanding(agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global');
 }
 
-/** 删掉一个会话文件（不碰论文 / 笔记）；删的是当前会话就退回老会话或新建
- *  confirm=false：sessions.js 已用应用内确认框问过了 */
-async function deleteSession(sid, { confirm: askConfirm = true } = {}) {
-  if (!hasChatScope()) return;
+/** The history row supplies its actual owner, even when another workspace is visible. */
+async function deleteSession(sid, { confirm: askConfirm = true, scope = sessionScopeKey() } = {}) {
+  if (!hasChatScope() || !scope || sid === TRANSLATE_SID) return false;
   if (state.busy) {
     toast(tr("正在生成中，先等它跑完或点停止再删除会话"), 'err', 3200);
-    return;
+    return false;
   }
-  const docId = state.doc?.docId || '';
-  const owner = captureSessionOwner();
-  if (askConfirm && !confirm(tr("删除这个会话？论文和笔记不受影响。"))) return;
-  await discardChatSession(owner.scope, sid);
+  if (askConfirm && !confirm(tr("删除这个会话？论文和笔记不受影响。"))) return false;
+  const copies = !!sid;
+  const keys = [...new Set([chatOwnerKey(scope, sid), displayedChatKey, ...chatViews.keys(), ...chatJobs.keys()])]
+    .filter(key => key && matchesDeletedConversation(scope, sid, copies, ...JSON.parse(key)));
   try {
-    const r = await sessionWrites.enqueue(chatOwnerKey(owner.scope, sid), () => fetch(`/api/session?${sessionQuery(owner.scope, sid)}`, { method: 'DELETE' }));
+    await Promise.all(keys.map(key => discardChatSession(...JSON.parse(key))));
+    const query = new URLSearchParams({ doc: scope, sid });
+    if (copies) query.set('copies', '1');
+    const r = await fetch(`/api/session?${query}`, { method: 'DELETE' });
     if (!r.ok) throw new Error(`HTTP ${r.status}`);
-  } catch (e) { toast(tr("删除失败：{0}", e.message), 'err', 4000); return; }
-  finally { finishChatSessionDiscard(owner.scope, sid); }
-  deletedChatKeys.add(chatOwnerKey(owner.scope, sid));
-  notifySessionSaved({ kind: 'chat', docId, scope: owner.scope, sid, deleted: true });
-  if (!sessionOwnerCurrent(owner)) return;
-  let followOwner = owner;
-  if (owner.sid === (sid || '')) {
-    sessionNavigationSeq += 1;
-    setActiveSidFor(docId, newSid());
-    activateComposerDraft('chat');
-    clearChatBlock();
-    chatVersion += 1;               // 删了当前会话 = 全局会话内容变了：作废所有停放视图
-    // 删会话只清问答；文档级译文条目留在内存里，避免下一次保存把它覆盖成空
-    state.sessionEntries = state.sessionEntries.filter((e) => e && e.block === 'translate');
-    state.history = [];
-    state.sessionSummary = '';
-    state.summaryCovered = 0;
-    followOwner = captureSessionOwner();
-    await restoreSession(docId, { only: 'chat' });
-    if (!sessionOwnerCurrent(followOwner)) return;
-    await loadPaperMemory();
-    if (!sessionOwnerCurrent(followOwner)) return;
+  } catch (e) {
+    toast(tr("删除失败：{0}", e.message), 'err', 4000);
+    return false;
+  } finally {
+    for (const key of keys) finishChatSessionDiscard(...JSON.parse(key));
   }
-  await loadSessionList();
-  if (!sessionOwnerCurrent(followOwner)) return;
+  notifySessionSaved({ kind: 'chat', scope, sid, deleted: true, copies });
+  await retireDeletedConversation(scope, sid, { copies, announce: false });
+  await sessionsOnSessionChanged({ refresh: true });
   renderSessionMenu();
   renderSessionBar();
   toast(tr("会话已删除"), 'ok', 1600);
-  sessionsOnSessionChanged({ refresh: false });
-  if (owner.sid === (sid || '') && agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global') setAgentLanding(true);
+  return true;
 }
 
 function renderSessionBar() {
