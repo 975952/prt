@@ -29,7 +29,6 @@ prt is a local PDF reader for Windows with built-in AI chat. Organize papers and
 
 When a paper or slide is hard to follow, you often copy text or take a screenshot, switch to an AI app, then return to find your place. Exam revision adds another round of searching through handouts and slide decks. prt brings reading, AI questions, and document organization into one workspace, keeping the source beside the discussion.
 
-> **Version note:** The features below describe the current `main` source branch. The published installer is [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0) and does not include later additions such as PowerPoint import and Book view. [Build from source](docs/开发指南.md) to try the latest code; use each Release's notes to check its packaged features.
 
 ## Main features
 
@@ -67,7 +66,7 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 
 Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required; the installer checks for the runtime. Node.js is not needed. For an app that runs without installation, download **prt.exe** into a writable folder. You supply your own model service; provider charges may apply.
 
-**Published release:** [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0). Provides a Windows setup wizard, Start menu and desktop shortcuts, upgrades, and an uninstaller. The installed app keeps program files separate from papers and conversation data. Upgrades preserve your files, and uninstalling keeps personal data. During first installation, you can select a portable copy to copy its papers, settings, and conversations; the original folder remains intact. New source features are not automatically included in an already published installer.
+**Published release:** [v1.4.0](https://github.com/975952/prt/releases/tag/v1.4.0). Provides a Windows setup wizard, Start menu and desktop shortcuts, upgrades, and an uninstaller. The installed app keeps program files separate from papers and conversation data. Upgrades preserve your files, and uninstalling keeps personal data. During first installation, you can select a portable copy to copy its papers, settings, and conversations; the original folder remains intact.
 
 Switching between folders keeps open tabs, and reloading restores their order. Fullscreen keeps the tab bar and Home button visible, and generation continues while you browse Home. **Fit width** fills the available reading area and adapts when sidebars or window size change.
 
