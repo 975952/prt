@@ -15,6 +15,18 @@ prt is a local PDF reader for Windows. Select a figure in a paper and ask Alina 
 
 </div>
 
+## Three workspaces in dark mode
+
+![Library with folders, search, and recently read papers](docs/assets/library-dark-papers-en.png)
+
+<sub>The library in dark mode, with first-page previews from six public papers including ViT and ResNet. [Papers and screenshot details](docs/assets/README.md).</sub>
+
+![Alina workspace with chat input and shortcuts to reading and paper search](docs/assets/alina-dark-papers-en.png)
+
+![Reader showing the Transformer architecture alongside an illustrative explanation](docs/assets/reader-dark-papers-en.png)
+
+<sub>Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762). The answer is illustrative.</sub>
+
 When a paper or slide is hard to follow, you often copy text or take a screenshot, switch to an AI app, then return to find your place. Exam revision adds another round of searching through handouts and slide decks. prt brings reading, AI questions, and document organization into one workspace, keeping the source beside the discussion.
 
 > **Version note:** The features below describe the current `main` source branch. The published installer is [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0) and does not include later additions such as PowerPoint import and Book view. [Build from source](docs/开发指南.md) to try the latest code; use each Release's notes to check its packaged features.
@@ -34,15 +46,9 @@ When a paper or slide is hard to follow, you often copy text or take a screensho
 
 PPT/PPTX import requires **Microsoft PowerPoint installed locally on Windows** to convert slides to PDF for reading; it does not provide native slide editing. AI features use your configured model service. Figures, screenshots, and scanned-page questions require a vision-capable model.
 
-![Library with folders, search, and recently read papers](docs/assets/library-en.png)
-
-<sub>The library in dark mode, with first-page previews from six public papers including ViT and ResNet. [Papers and screenshot details](docs/assets/README.md).</sub>
-
 ## Library, Alina, and the reader
 
 Start in Library by default, or choose the reader or Alina in settings. Alina places the reading, paper search, and resume-chat actions together below the input. New chat stays in the sidebar, with a bubble-plus icon when collapsed. Workspace switches preserve reading position and conversations.
-
-![Alina workspace with chat input and shortcuts to reading and paper search](docs/assets/alina-en.png)
 
 PDF organization uses filenames first, then first-page text or images when needed. It proposes flat topic folders, groups similar documents, and preserves existing organization where appropriate. Each classification replaces previous suggestions; files move only after preview and confirmation. Library has a resizable sidebar and shares Alina's dark background.
 
@@ -51,10 +57,6 @@ Source citations show the full document title and page number, with a link back 
 The separate **Book view** mode uses a two-page spread with a realistic page fold for portrait documents and a single page for landscape slides. Toolbars hide automatically. Translation and chat use movable floating cards, with saved translation history, source comparison, copying, and notes. Ordinary F11 fullscreen keeps the continuous reading layout.
 
 Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach. During reading, use the top-bar Home button to browse the library, then select a tab to return with its reading position, zoom, and background generation preserved.
-
-![Reader showing the Transformer architecture alongside an illustrative explanation](docs/assets/reader-en.png)
-
-<sub>Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762). The answer is illustrative.</sub>
 
 ## Get started
 
@@ -76,17 +78,6 @@ Updated appearance defaults include 17px reading text, 140% home zoom, 16% page 
 Conversations are managed per paper by default, with history ordered by time. Choose folder sharing in Settings to continue a discussion across papers in the same folder; ungrouped files then share a common root-folder conversation space.
 
 This release also includes recent reading fixes: clearer input highlights and shadows, a 92%–100% background brightness range, up to three translations generating at once in submission order, correct selection boundaries in narrow-column papers, and readable pastel diagram backgrounds in dark mode. **Search paper in browser** opens the default browser with a Bing query from citation cards and reference lists.
-
-<details>
-<summary>Preview both translation card materials</summary>
-
-![Liquid glass translation card](docs/assets/translation-liquid.png)
-
-![Frosted glass translation card](docs/assets/translation-frosted.png)
-
-The cards show illustrative Chinese translations in the actual desktop interface. Both materials have adjustable, independently saved settings.
-
-</details>
 
 ## Your data
 

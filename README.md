@@ -16,6 +16,18 @@ prt 是 Windows 本地 PDF 阅读器。读论文时，可以圈出一张图，�
 
 </div>
 
+## 三个工作区 · 深色模式
+
+![书架首页：继续阅读、文件夹与搜索](docs/assets/library-dark-papers-zh.png)
+
+<sub>深色主题下的书架，封面来自 ViT、ResNet 等六篇公开论文的原始 PDF。[论文来源与截图说明](docs/assets/README.md)</sub>
+
+![Alina 独立工作区：对话输入框和阅读快捷入口](docs/assets/alina-dark-papers-zh.png)
+
+![阅读工作区：对照 Transformer 结构图阅读右侧讲解](docs/assets/reader-dark-papers-zh.png)
+
+<sub>论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。</sub>
+
 <details>
 <summary>查看项目海报 · 用课件中的一张图提问</summary>
 
@@ -40,15 +52,9 @@ prt 是 Windows 本地 PDF 阅读器。读论文时，可以圈出一张图，�
 
 PPT/PPTX 导入通过 **Windows 本机已安装的 Microsoft PowerPoint 转换为 PDF** 后阅读，不提供原生幻灯片编辑。AI 功能使用你配置的模型接口；图表、截图与扫描页问答需要支持图像的模型。
 
-![书架首页：继续阅读、文件夹与搜索](docs/assets/library-zh.png)
-
-<sub>深色主题下的书架，封面来自 ViT、ResNet 等六篇公开论文的原始 PDF。[论文来源与截图说明](docs/assets/README.md)</sub>
-
 ## Library、Alina 与阅读区
 
 默认从 Library 打开，也可在设置中选择恢复阅读区或进入 Alina。Alina 首页将“打开上次阅读区”“找论文”“继续上次会话”并列展示；新对话位于侧栏，收起时保留气泡加号入口。切换工作区保留当前阅读位置与会话。
-
-![Alina 独立工作区：对话输入框和阅读快捷入口](docs/assets/alina-zh.png)
 
 整理 PDF 优先按文件名判断，信息不足时再读取第一页文字或图片。分类采用一层目录，相似资料放在一起，已有合理分类尽量保留；每次重新分类覆盖旧建议，预览确认后才移动文件。Library 侧栏可拖动调宽，深色背景与 Alina 统一。
 
@@ -57,10 +63,6 @@ PPT/PPTX 导入通过 **Windows 本机已安装的 Microsoft PowerPoint 转换�
 阅读区另有独立的**沉浸翻书**模式：常规竖向资料采用双页与仿真折页，横向课件采用单页展示，顶底工具栏自动收起。翻译与问答使用可拖动的浮动卡片，译文自动保留，支持历史、原文对照、复制与存笔记。原有 F11 全屏仍保留连续阅读布局。
 
 首页集中展示论文和阅读进度：左侧切换**全部论文、最近阅读、未读与文件夹**，右侧搜索文件名或目录。独立的“继续阅读”入口回到上次阅读的位置，导入与整理入口始终可见。阅读时可随时点击顶栏“首页”浏览书架，再点标签继续阅读；原来的位置、缩放与后台生成保留。
-
-![阅读工作区：对照 Transformer 结构图阅读右侧讲解](docs/assets/reader-zh.png)
-
-<sub>论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。</sub>
 
 ## 开始使用
 
@@ -85,31 +87,6 @@ PPT/PPTX 导入通过 **Windows 本机已安装的 Microsoft PowerPoint 转换�
 本版也包含近期的阅读修复：输入框光影更明显，背景亮度范围提高到 92%–100%；多条译文最多三条同时生成、按发起顺序排列；窄栏论文不再混选相邻栏文字，深色阅读保留淡彩色底框的原有色相。引用卡片和参考文献列表中的“浏览器搜索论文”直接打开默认浏览器，使用 Bing 搜索。
 
 安装版升级时退出 prt，再运行新的 **prt-setup.exe**。便携版升级仍只替换原位置的 **prt.exe**，保留 `papers/` 和 `data/`。下载页提供源码包与 `SHA256SUMS.txt` 校验文件。
-
-<details>
-<summary>查看两种译文卡片、米宣与深色主题</summary>
-
-### 液态玻璃译文卡片
-
-![液态玻璃译文卡片与悬浮 PDF 纸面](docs/assets/translation-liquid.png)
-
-### 磨砂玻璃译文卡片
-
-![磨砂玻璃译文卡片，通透度和雾化程度均可调](docs/assets/translation-frosted.png)
-
-### 深色首页
-
-![prt 深色书架首页](docs/assets/home-dark.png)
-
-### 米宣
-
-![prt 米宣主题与 Transformer 论文问答](docs/assets/reading-paper.png)
-
-### 深色
-
-![prt 深色主题，正文柔化反色，论文图像保留原色](docs/assets/reading-dark.png)
-
-</details>
 
 ## 数据由你保管
 
