@@ -8,15 +8,16 @@ import { cleanPaperTitle, firstPageTitle } from './paper-titles.js';
 import { createPaperAccess } from './paper-access.js';
 import { runWithDeadline } from './task-deadline.js';
 import { disposePdfDocument } from './pdf-lifecycle.js';
+import './pdf-map-compat.js';
 export { disposePdfDocument };
 
 let pdfjsLib = null;
 
 export function pdfWorkerUrl() {
   try {
-    return new URL('../vendor/pdf.worker.min.mjs', import.meta.url).href;
+    return new URL('./pdf-worker.js', import.meta.url).href;
   } catch {
-    return '/vendor/pdf.worker.min.mjs';   // 拿不到模块 URL 时退回桌面版的约定
+    return '/js/pdf-worker.js';
   }
 }
 

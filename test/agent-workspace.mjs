@@ -18,7 +18,8 @@ const landingReview = process.argv.includes('--landing-review');
 const sourcesReview = process.argv.includes('--sources-review');
 const historyDeletionReview = process.argv.includes('--history-deletion');
 const sharedHistoryReview = process.argv.includes('--shared-history');
-const includeHistoryDeletion = historyDeletionReview || !(sourcesReview || moveReview || landingReview || sharedHistoryReview);
+const legacyPdfMap = process.argv.includes('--legacy-pdf-map');
+const includeHistoryDeletion = historyDeletionReview || !(sourcesReview || moveReview || landingReview || sharedHistoryReview || legacyPdfMap);
 const previouslyDeletedSid = 'previouslydeletedsid';
 const executablePath = [process.env.CHROME, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe']
@@ -32,7 +33,10 @@ fs.mkdirSync(dataDir); fs.mkdirSync(papersDir);
 const fixturePaths = ['vision/alpha.pdf', 'vision/beta.pdf', 'math/gamma.pdf', 'math/unavailable.pdf'];
 for (const relative of fixturePaths) {
   fs.mkdirSync(path.dirname(path.join(papersDir, relative)), { recursive: true });
-  writeTitlePdf(path.join(papersDir, relative), { title: `Synthetic ${path.basename(relative, '.pdf')} research` });
+  writeTitlePdf(path.join(papersDir, relative), {
+    title: `Synthetic ${path.basename(relative, '.pdf')} research`,
+    padding: legacyPdfMap && relative === 'vision/alpha.pdf' ? 21 * 1024 * 1024 : 0,
+  });
 }
 if (includeHistoryDeletion) {
   // Exact storage left by the old version after deleting from Alina: its
@@ -128,6 +132,12 @@ async function newPage(mode, locale = 'en', { skipWelcome = false } = {}) {
   await tab.setRequestInterception(true);
   tab.on('request', request => {
     const url = new URL(request.url());
+    if (legacyPdfMap && url.origin === base && url.pathname === '/js/pdf-worker.js' && !url.search) {
+      // A worker has its own globals. Clear the methods before loading its module.
+      return request.respond({ status: 200, contentType: 'text/javascript',
+        body: 'delete Map.prototype.getOrInsert; delete Map.prototype.getOrInsertComputed;'
+          + 'export const { WorkerMessageHandler } = await import("/js/pdf-worker.js?compat");' });
+    }
     if (url.origin === base && ['/api/web-search', '/api/ref-search'].includes(url.pathname)) {
       return request.respond({ status: 200, contentType: 'application/json', body: '{"results":[]}' });
     }
@@ -165,6 +175,10 @@ async function newPage(mode, locale = 'en', { skipWelcome = false } = {}) {
       localStorage.setItem('agent-workspace-test-initialized', '1');
     }
   }, { mode, locale, skipWelcome });
+  if (legacyPdfMap) await tab.evaluateOnNewDocument(() => {
+    delete Map.prototype.getOrInsert;
+    delete Map.prototype.getOrInsertComputed;
+  });
   await tab.goto(`${base}/?topbar=static`, { waitUntil: 'domcontentloaded' });
   await tab.waitForFunction(() => !!window.__ctx && window.__state?.papers.length === 4);
   await tab.waitForSelector('html:not([data-startup])');
@@ -651,7 +665,18 @@ try {
   await seed(visionScope, 'folder-old', 'Folder private discussion', 'FOLDER_PRIVATE_ONLY', paperA);
   browser = await puppeteer.launch({ executablePath, headless: true, pipe: true,
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: path.join(scratch, 'browser') });
-  if (sharedHistoryReview) await reviewSharedHistory(paperA);
+  if (legacyPdfMap) {
+    await newPage('paper', 'en', { skipWelcome: true });
+    let usedRange = false;
+    page.on('request', request => {
+      if (request.url().includes('vision%2Falpha.pdf') && request.headers().range) usedRange = true;
+    });
+    await page.locator(`#homeList .home-item[data-id=${JSON.stringify(paperA.docId)}] .home-item-go`).click();
+    await page.waitForFunction(id => __state.viewerDocId === id && __viewer.pdf?.numPages === 1
+      && document.body.classList.contains('reading'), {}, paperA.docId);
+    check('large PDF opens with byte ranges and without native Map upsert methods', usedRange);
+  }
+  else if (sharedHistoryReview) await reviewSharedHistory(paperA);
   else if (historyDeletionReview) await reviewHistoryDeletion(paperA);
   else if (sourcesReview) await reviewSources(paperA, paperB);
   else if (moveReview) await reviewMoveCases({ paperA, paperB });
@@ -1199,7 +1224,8 @@ try {
   }
   if (includeHistoryDeletion && !historyDeletionReview) await reviewHistoryDeletion(paperA);
   if (includeHistoryDeletion && !historyDeletionReview) await reviewSharedHistory(paperA);
-  if (historyDeletionReview) check('history deletion needs no model requests', !modelRequests.length);
+  if (legacyPdfMap) check('PDF compatibility test needs no model requests', !modelRequests.length);
+  else if (historyDeletionReview) check('history deletion needs no model requests', !modelRequests.length);
   else check('only the local synthetic model was used', modelRequests.length >= 1);
   assert.deepEqual(errors, [], 'no uncaught browser errors or external requests');
   pass('no browser errors or external service requests');
