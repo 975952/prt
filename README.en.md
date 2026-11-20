@@ -6,7 +6,7 @@
 
 [简体中文](README.md) · **English**
 
-prt is a local PDF reader for Windows with built-in AI chat. Organize papers and lecture notes by topic in Library, then open a PDF to translate a passage or ask about a figure. To compare papers, ask Alina a question across files and follow the page references back to each source.
+prt is a local PDF reader for Windows with built-in AI chat. Organize papers and lecture notes in Library, translate a passage or ask about a figure in the reader, and pick up the same conversation in Alina. The two workspaces share conversation history. When comparing papers, follow page references back to each source.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
@@ -39,7 +39,7 @@ When a paper or slide is hard to follow, you often copy text or take a screensho
 | **Research reading** | Translate selections, explain passages, and ask whole-document questions; select screenshots or long captures to discuss equations, figures, and scanned pages |
 | **Cross-file search and comparison** | Search a document, folder, or the whole library; ask cross-file questions with separate page references, jump to the source, and compare documents in tabs or tiled windows |
 | **Paper and reference lookup** | Find local papers by title, research topic, or a description; search online, browse references, and manually import online results that have an available PDF link |
-| **Notes and conversations** | Highlight, take notes, save translations, and organize conversations per document, folder, or globally, with saved drafts and reading positions |
+| **Notes and conversations** | Highlight, take notes, save translations per document, and resume the same conversation from the reader or Alina |
 | **A personal AI assistant** | Chat with Alina outside the reader, use learning memory to adapt explanations, and optionally customize the assistant's name, personality, and communication style |
 | **Reading comfort** | Continuous reading, two-page Book view, and single-page landscape slides; Glass, Rice paper, and Dark themes, Chinese/English UI, and separate answer and translation languages |
 
@@ -51,7 +51,7 @@ Start in Library by default, or choose the reader or Alina in settings. Alina pl
 
 PDF organization uses filenames first, then first-page text or images when needed. It proposes flat topic folders, groups similar documents, and preserves existing organization where appropriate. Each classification replaces previous suggestions; files move only after preview and confirmation. Library has a resizable sidebar and shares Alina's dark background.
 
-Source citations show the full document title and page number, with a link back to the original. Chat with Alina in its own workspace or beside the document, and continue discussions per document, folder, or globally.
+Source citations show the full document title and page number, with a link back to the original. Shared history includes document, folder, and global conversations. Follow-ups from either workspace are saved to the original conversation. New chats in the reader belong to the current document by default, with folder and global options in Settings.
 
 The separate **Book view** mode uses a two-page spread with a realistic page fold for portrait documents and a single page for landscape slides. Toolbars hide automatically. Translation and chat use movable floating cards, with saved translation history, source comparison, copying, and notes. Ordinary F11 fullscreen keeps the continuous reading layout.
 
