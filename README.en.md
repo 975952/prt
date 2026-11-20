@@ -34,13 +34,15 @@ When a paper or slide is hard to follow, you often copy text or take a screensho
 
 PPT/PPTX import requires **Microsoft PowerPoint installed locally on Windows** to convert slides to PDF for reading; it does not provide native slide editing. AI features use your configured model service. Figures, screenshots, and scanned-page questions require a vision-capable model.
 
-![prt library home with search, folders, and continue reading](docs/assets/home-english.png)
+![Library with folders, search, and recently read papers](docs/assets/library-en.png)
 
-<sub>Actual v1.2.5 interface with a synthetic demonstration library. [Screenshot details](docs/assets/README.md).</sub>
+<sub>The library uses demonstration data. [Screenshot details](docs/assets/README.md).</sub>
 
 ## Library, Alina, and the reader
 
 Start in Library by default, or choose the reader or Alina in settings. Alina places the reading, paper search, and resume-chat actions together below the input. New chat stays in the sidebar, with a bubble-plus icon when collapsed. Workspace switches preserve reading position and conversations.
+
+![Alina workspace with chat input and shortcuts to reading and paper search](docs/assets/alina-en.png)
 
 PDF organization uses filenames first, then first-page text or images when needed. It proposes flat topic folders, groups similar documents, and preserves existing organization where appropriate. Each classification replaces previous suggestions; files move only after preview and confirmation. Library has a resizable sidebar and shares Alina's dark background.
 
@@ -50,7 +52,7 @@ The separate **Book view** mode uses a two-page spread with a realistic page fol
 
 Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by filename or folder, and use the dedicated continue-reading card to return to your saved page. Import and library management stay within reach. During reading, use the top-bar Home button to browse the library, then select a tab to return with its reading position, zoom, and background generation preserved.
 
-![prt reading workspace with a paper and an illustrative answer](docs/assets/reading-english.png)
+![Reader showing the Transformer architecture alongside an illustrative explanation](docs/assets/reader-en.png)
 
 <sub>Paper: [Attention Is All You Need](https://arxiv.org/abs/1706.03762). The answer is illustrative.</sub>
 

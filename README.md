@@ -40,13 +40,15 @@ prt 是 Windows 本地 PDF 阅读器。读论文时，可以圈出一张图，�
 
 PPT/PPTX 导入通过 **Windows 本机已安装的 Microsoft PowerPoint 转换为 PDF** 后阅读，不提供原生幻灯片编辑。AI 功能使用你配置的模型接口；图表、截图与扫描页问答需要支持图像的模型。
 
-![prt 首页：继续阅读、论文分类与书架搜索](docs/assets/home-glass.png)
+![书架首页：继续阅读、文件夹与搜索](docs/assets/library-zh.png)
 
-<sub>v1.2.5 实际界面；书架使用独立演示数据。[截图说明](docs/assets/README.md)</sub>
+<sub>书架使用演示资料。[截图说明](docs/assets/README.md)</sub>
 
 ## Library、Alina 与阅读区
 
 默认从 Library 打开，也可在设置中选择恢复阅读区或进入 Alina。Alina 首页将“打开上次阅读区”“找论文”“继续上次会话”并列展示；新对话位于侧栏，收起时保留气泡加号入口。切换工作区保留当前阅读位置与会话。
+
+![Alina 独立工作区：对话输入框和阅读快捷入口](docs/assets/alina-zh.png)
 
 整理 PDF 优先按文件名判断，信息不足时再读取第一页文字或图片。分类采用一层目录，相似资料放在一起，已有合理分类尽量保留；每次重新分类覆盖旧建议，预览确认后才移动文件。Library 侧栏可拖动调宽，深色背景与 Alina 统一。
 
@@ -56,7 +58,7 @@ PPT/PPTX 导入通过 **Windows 本机已安装的 Microsoft PowerPoint 转换�
 
 首页集中展示论文和阅读进度：左侧切换**全部论文、最近阅读、未读与文件夹**，右侧搜索文件名或目录。独立的“继续阅读”入口回到上次阅读的位置，导入与整理入口始终可见。阅读时可随时点击顶栏“首页”浏览书架，再点标签继续阅读；原来的位置、缩放与后台生成保留。
 
-![阅读工作区：原文、问答与公式并排](docs/assets/reading-glass.png)
+![阅读工作区：对照 Transformer 结构图阅读右侧讲解](docs/assets/reader-zh.png)
 
 <sub>论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。</sub>
 
