@@ -41,13 +41,19 @@ try {
   });
   const ipc = (type, extra = {}) => page.evaluate((type, extra) => window.ipc.postMessage(JSON.stringify({ type, ...extra })), type, extra);
   const bounds = () => page.evaluate(() => ({ width: innerWidth, height: innerHeight, maximized: document.body.classList.contains('window-maximized') }));
+  const fillsScreen = async label => {
+    const size = await page.evaluate(() => ({ width: innerWidth, height: innerHeight, screenWidth: screen.width, screenHeight: screen.height,
+      availableHeight: screen.availHeight, viewerBottom: document.getElementById('viewer').getBoundingClientRect().bottom }));
+    assert.ok(Math.abs(size.width - size.screenWidth) <= 1 && Math.abs(size.height - size.screenHeight) <= 1, `${label}: ${JSON.stringify(size)}`);
+    return size;
+  };
   const fullscreen = async on => {
     await ipc('fullscreen', { on });
     await page.waitForFunction(on => document.body.classList.contains('window-fullscreen') === on, {}, on);
     await delay(150);
   };
   const normal = await bounds();
-  await fullscreen(true); await fullscreen(false);
+  await fullscreen(true); await fillsScreen('windowed fullscreen covers the whole monitor'); await fullscreen(false);
   assert.deepEqual(await bounds(), normal, 'windowed fullscreen restores exact original dimensions');
   console.log('PASS native windowed fullscreen restores original dimensions');
   await ipc('maximize');
@@ -55,13 +61,15 @@ try {
   await delay(200);
   const maximized = await bounds();
   await page.evaluate(() => { __nativeBounds.length = 0; });
-  await fullscreen(true); await fullscreen(false);
+  await fullscreen(true); await fillsScreen('maximized fullscreen covers the taskbar area'); await fullscreen(false);
   assert.deepEqual(await bounds(), maximized, 'Tao restores maximized WINDOWPLACEMENT');
   const frames = await page.evaluate(() => __nativeBounds);
   assert.ok(frames.every(r => r.width >= maximized.width - 20 && r.height >= maximized.height - 20), JSON.stringify(frames));
   console.log('PASS maximized fullscreen never passes through the smaller restored window');
   await page.evaluate(() => { __nativeBounds.length = 0; document.getElementById('immersiveBtn').click(); });
   await page.waitForFunction(() => __viewer.immersive && document.getElementById('immersiveTransitionCover').hidden, { timeout: 15000 });
+  const bookSize = await fillsScreen('Book view covers the whole monitor');
+  assert.ok(Math.abs(bookSize.viewerBottom - bookSize.height) <= 1, 'Book viewport reaches the screen bottom');
   await page.evaluate(() => document.getElementById('immersiveExit').click());
   await page.waitForFunction(() => !__viewer.immersive && document.getElementById('immersiveTransitionCover').hidden, { timeout: 15000 });
   assert.deepEqual(await bounds(), maximized, 'Book round trip restores maximized dimensions');

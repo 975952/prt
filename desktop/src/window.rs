@@ -140,7 +140,40 @@ fn is_fullscreen(window: &tao::window::Window) -> bool {
 }
 
 fn set_fullscreen(window: &tao::window::Window, on: bool) {
+    #[cfg(windows)] fullscreen_client_area::set(window, on);
     window.set_fullscreen(if on { Some(Fullscreen::Borderless(None)) } else { None });
+}
+
+// Tao 0.35 crops every maximized undecorated client to rcWork in WM_NCCALCSIZE,
+// including fullscreen windows. Keep the proposed full-monitor client rectangle
+// during fullscreen; delegate normal/maximized layout and restoration to Tao.
+#[cfg(windows)]
+mod fullscreen_client_area {
+    use std::ffi::c_void;
+    use tao::platform::windows::WindowExtWindows;
+    type Hwnd = *mut c_void;
+    type Subclass = unsafe extern "system" fn(Hwnd, u32, usize, isize, usize, usize) -> isize;
+    const ID: usize = 0x50525446;
+    const WM_NCCALCSIZE: u32 = 0x0083;
+    const WM_NCDESTROY: u32 = 0x0082;
+    #[link(name = "comctl32")]
+    extern "system" {
+        fn SetWindowSubclass(hwnd: Hwnd, callback: Subclass, id: usize, data: usize) -> i32;
+        fn RemoveWindowSubclass(hwnd: Hwnd, callback: Subclass, id: usize) -> i32;
+        fn DefSubclassProc(hwnd: Hwnd, message: u32, wparam: usize, lparam: isize) -> isize;
+    }
+    unsafe extern "system" fn client_rect(hwnd: Hwnd, message: u32, wparam: usize, lparam: isize, id: usize, fullscreen: usize) -> isize {
+        if message == WM_NCCALCSIZE && wparam != 0 && fullscreen != 0 { return 0; }
+        if message == WM_NCDESTROY { RemoveWindowSubclass(hwnd, client_rect, id); }
+        DefSubclassProc(hwnd, message, wparam, lparam)
+    }
+    pub fn set(window: &tao::window::Window, on: bool) {
+        unsafe {
+            if SetWindowSubclass(window.hwnd() as Hwnd, client_rect, ID, usize::from(on)) == 0 {
+                crate::log_line("[window] Failed to update fullscreen client bounds");
+            }
+        }
+    }
 }
 
 fn sane(v: Option<f64>, def: f64) -> f64 {

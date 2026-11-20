@@ -111,6 +111,14 @@ try {
   await page.waitForFunction(() => document.body.classList.contains('immersive-reading') && __viewer.immersive && document.body.classList.contains('immersive-chrome-visible'));
   await page.waitForFunction(() => document.getElementById('immersiveTransitionCover').hidden);
   await pause(500);
+  const viewportEdges = await page.evaluate(() => {
+    const rect = selector => { const r = document.querySelector(selector).getBoundingClientRect(); return { top: r.top, left: r.left, right: r.right, bottom: r.bottom }; };
+    return { width: innerWidth, height: innerHeight, main: rect('#main'), reader: rect('#viewer'), spread: rect('.immersive-spread') };
+  });
+  for (const key of ['main', 'reader', 'spread']) {
+    assert.deepEqual(viewportEdges[key], { top: 0, left: 0, right: viewportEdges.width, bottom: viewportEdges.height }, `${key} fills the Book viewport without a footer gap`);
+  }
+  console.log('PASS Book CSS fills the complete viewport: ' + JSON.stringify(viewportEdges));
   const spread = () => page.evaluate(() => {
     const view = __viewer.container.getBoundingClientRect();
     const visible = [...document.querySelectorAll('#viewer .page')].filter(node => {
