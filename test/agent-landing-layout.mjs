@@ -24,6 +24,30 @@ const wait = ms => new Promise(resolve => setTimeout(resolve, ms));
 let browser, page;
 const errors = [], checks = [];
 const pass = label => { checks.push({ label }); console.log(`PASS ${label}`); };
+async function checkActionCards(count, stacked) {
+  const { cards, composer } = await page.evaluate(() => {
+    const box = node => node.getBoundingClientRect().toJSON();
+    const actions = document.querySelectorAll('#agentLaunchActions > button');
+    return { cards: [...actions].filter(node => node.getClientRects().length).map(box),
+      composer: box(document.querySelector('#composer .composer-row')) };
+  });
+  assert.equal(cards.length, count);
+  const near = (a, b) => assert.ok(Math.abs(a - b) <= 1, `card edges differ: ${a}, ${b}`);
+  near(cards[0].left, composer.left);
+  near(cards.at(-1).right, composer.right);
+  cards.forEach((card, i) => {
+    near(card.width, cards[0].width);
+    if (stacked) {
+      near(card.left, composer.left);
+      near(card.right, composer.right);
+      if (i) assert.ok(card.top > cards[i - 1].bottom);
+    } else {
+      near(card.top, cards[0].top);
+      near(card.bottom, cards[0].bottom);
+      if (i) assert.ok(card.left > cards[i - 1].right);
+    }
+  });
+}
 const reader = spawn(process.execPath, [path.join(ROOT, 'server.js')], { windowsHide: true, stdio: 'ignore',
   env: { ...process.env, PORT: String(port), PRT_DATA_DIR: dataDir, PRT_PAPERS_DIR: papersDir,
     PRT_REQUIRE_TOKEN: '0', PRT_DIAGNOSTICS: '1', NO_OPEN: '1', PRT_QUIET_TOKEN: '1' } });
@@ -82,6 +106,7 @@ try {
           cardOverflow: [...document.querySelectorAll('.agent-launch-copy')].some(node => node.scrollWidth > node.clientWidth + 1) };
       });
       const label = `${theme}-${width}-${scale}`;
+      if (width >= 1400 || width === 320) await checkActionCards(2, width === 320);
       assert.ok(geometry.documentWidth <= width + 1, `${label} page overflow ${JSON.stringify(geometry)}`);
       assert.ok(geometry.panel.left >= -1 && geometry.panel.right <= width + 1, `${label} panel overflow ${JSON.stringify(geometry)}`);
       assert.ok(Math.abs(geometry.panel.bottom + geometry.bottomInset - geometry.height) <= 1, `${label} panel does not fill the inset work surface ${JSON.stringify(geometry)}`);
@@ -110,15 +135,19 @@ try {
     const composer = document.getElementById('composer'), card = composer.querySelector('.composer-row');
     const status = document.getElementById('draftStorage'), retry = document.getElementById('draftStorageRetry');
     const before = box(card);
-    status.dataset.status = 'saving'; status.classList.remove('hidden');
-    document.getElementById('draftStorageText').textContent = '正在保存草稿…'; retry.classList.add('hidden');
+    const input = document.querySelector('#chatInput');
+    input.value = 'x'; input.dispatchEvent(new Event('input', { bubbles: true }));
     const saving = box(card);
-    status.dataset.status = 'error'; document.getElementById('draftStorageText').textContent = 'Draft not saved. Retry before closing.';
+    const savingStatus = status.dataset.status;
+    input.value = ''; input.dispatchEvent(new Event('input', { bubbles: true }));
+    status.dataset.status = 'error'; status.classList.remove('hidden');
+    document.getElementById('draftStorageText').textContent = 'Draft not saved. Retry before closing.';
     retry.classList.remove('hidden'); retry.scrollIntoView({ block: 'center' });
     const retryBox = retry.getBoundingClientRect(), hit = document.elementFromPoint(retryBox.x + retryBox.width / 2, retryBox.y + retryBox.height / 2);
-    return { before, saving, error: box(status), card: box(card), action: box(document.getElementById('agentLaunchActions')),
+    return { before, saving, savingStatus, error: box(status), card: box(card), action: box(document.getElementById('agentLaunchActions')),
       retryReachable: hit === retry || retry.contains(hit) };
   });
+  assert.equal(draftGeometry.savingStatus, 'saving');
   assert.deepEqual(draftGeometry.saving, draftGeometry.before);
   pass('routine saving status leaves the narrow enlarged landing composition unchanged');
   assert.ok(draftGeometry.error.bottom <= draftGeometry.card.top && draftGeometry.card.bottom <= draftGeometry.action.top
@@ -147,7 +176,9 @@ try {
   assert.equal(enlarged.agent, 130); assert.equal(enlarged.scale, 1.3);
   assert.equal(enlarged.home, originalPreferences.home); assert.equal(enlarged.fontCss, originalPreferences.fontCss);
   pass('full-agent keyboard zoom changes only the agent preference');
-  await page.reload({ waitUntil: 'networkidle0' });
+  await page.evaluate(() => window.__ctx.flushComposerDrafts());
+  await page.reload({ waitUntil: 'domcontentloaded' });
+  await page.waitForFunction(() => !document.documentElement.hasAttribute('data-startup'));
   await page.click('#homeAgent');
   await page.waitForFunction(() => document.body.classList.contains('agent-landing') && document.querySelector('#rightSide').getAttribute('aria-busy') !== 'true');
   assert.equal((await preferences()).agent, 130); assert.equal((await preferences()).scale, 1.3);
@@ -196,6 +227,14 @@ try {
   await shortcut('Digit0');
   assert.equal((await preferences()).agent, 100); assert.equal((await preferences()).font, afterReading.font);
   pass('expanded conversation restores agent scale and resets without changing reading size');
+  await page.click('#agentNavNew');
+  await page.waitForSelector('#agentLaunchActions > #agentReadingEntry', { visible: true });
+  await page.$eval('#agentLaunchActions', node => Promise.all(node.getAnimations({ subtree: true }).map(a => a.finished.catch(() => {}))));
+  await checkActionCards(3, false);
+  await page.setViewport({ width: 320, height: 940 });
+  await checkActionCards(3, true);
+  await page.setViewport({ width: 1400, height: 940 });
+  pass('after reading a paper, all three actions fit the composer on wide and narrow screens');
   await page.click('#homeBtn');
   await page.waitForSelector('#home', { visible: true });
   const homeBefore = await preferences();
