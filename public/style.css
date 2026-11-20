@@ -3421,7 +3421,6 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 }
 :root[data-theme="glass"] .home-sidebar { background: rgba(var(--glass-panel-rgb, 249, 246, 240), .38); border-color: rgba(var(--glass-edge-rgb, 145, 132, 112), .18); }
 :root[data-theme="glass"] .home-search { background: rgba(255, 255, 255, .66); }
-:root[data-theme="glass"] .home-item:hover { background: rgba(255, 255, 255, .72); }
 :root[data-theme="glass"] .pages { --page-gap: 38px; padding-top: 24px; padding-bottom: 50px; }
 .glass-filter-defs { position: absolute; pointer-events: none; }
 

@@ -29,7 +29,7 @@ try {
   let ready = false;
   for (let i = 0; i < 150 && !ready; i++) { try { ready = (await fetch(`${base}/api/health`)).ok; } catch {} if (!ready) await wait(100); }
   check('isolated service starts', ready);
-  for (const file of ['index.html', 'style.css', 'js/app.js', 'js/windows.js', 'js/locales/en.js']) {
+  for (const file of ['index.html', 'style.css', 'reader-library.css', 'js/app.js', 'js/windows.js', 'js/locales/en.js']) {
     let served = await fetch(`${base}/${file}`).then(r => r.text());
     if (file === 'index.html') served = served.replace(/\n<!-- prt-auth:[\s\S]*?<\/script>\n/, '');
     check(`current asset: ${file}`, served === fs.readFileSync(path.join(ROOT, 'public', file), 'utf8'));
@@ -159,6 +159,20 @@ try {
   check('Ctrl+minus reduces home zoom', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === Math.min(160, initialZoom + 20) - 10);
   for (let i = 0; i < 10; i++) await zoomKey('+');
   check('home zoom has an upper bound', await page.evaluate(() => JSON.parse(localStorage.getItem('reader.ui')).style.homeZoom) === 160);
+  for (const [density, width] of [[2, 1440], [4, 1432]]) {
+    await page.setViewport({ width, height: 960, deviceScaleFactor: density });
+    const cover = await page.waitForFunction(density => {
+      const shelf = document.querySelector('.home-content').getBoundingClientRect();
+      const visible = [...document.querySelectorAll('.hi-preview img')].filter(img => {
+        const rect = img.parentElement.getBoundingClientRect();
+        return rect.top < shelf.bottom && rect.bottom > shelf.top;
+      }).map(img => ({ source: img.naturalWidth, display: Math.floor(img.getBoundingClientRect().width * density) }));
+      return devicePixelRatio === density && visible.length > 0 && visible.every(img => img.display > 0 && img.source >= img.display)
+        && visible[0];
+    }, { timeout: 20000 }, density);
+    const { source, display } = await cover.jsonValue();
+    check(`160% Library zoom at ${density}× density: ${source}px cover for ${display} physical pixels`, source >= display);
+  }
   for (const width of [900, 480, 360]) {
     await page.setViewport({ width, height: 850 });
     check(`enlarged home fits at ${width}px`, await page.evaluate(() => ['#home', '.home-content', '.home-workspace', '.home-list'].every(s => { const n = document.querySelector(s); return n.scrollWidth <= n.clientWidth + 1; })));
@@ -184,6 +198,36 @@ try {
       return field.outlineStyle === 'none' && field.boxShadow === 'none' && field.backgroundColor === 'rgba(0, 0, 0, 0)'
         && shell.outlineStyle === 'none' && shell.boxShadow === 'none';
     }));
+    if (theme !== 'dark') {
+      await page.hover('#homeList .home-item-go');
+      check(`${theme} keeps the area outside the rounded shelf card transparent on hover`, await page.$eval('#homeList .home-item', item =>
+        item.matches(':hover') && getComputedStyle(item).backgroundColor === 'rgba(0, 0, 0, 0)' && getComputedStyle(item).backgroundImage === 'none'));
+    }
+    if (theme === 'light') {
+      const entry = '#homeReadingEntry';
+      await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'no-preference' }]);
+      const restingShadow = await page.$eval(entry, button => {
+        const css = getComputedStyle(button);
+        if (!button.disabled && [css.borderTopLeftRadius, css.borderTopRightRadius,
+          css.borderBottomLeftRadius, css.borderBottomRightRadius].every(radius => parseFloat(radius) > 0)) return css.boxShadow;
+        return 'none';
+      });
+      check('the enabled reading card has four rounded corners and a resting shadow', restingShadow !== 'none');
+      await page.hover(entry);
+      await page.waitForFunction(shadow => getComputedStyle(document.querySelector('#homeReadingEntry')).boxShadow !== shadow, {}, restingShadow);
+      await page.mouse.down();
+      await page.waitForFunction(() => {
+        const transform = getComputedStyle(document.querySelector('#homeReadingEntry')).transform;
+        return transform !== 'none' && new DOMMatrixReadOnly(transform).a < 1;
+      });
+      await page.mouse.move(1, 1); await page.mouse.up();
+      await page.emulateMediaFeatures([{ name: 'prefers-reduced-motion', value: 'reduce' }]);
+      await page.hover(entry); await page.mouse.down();
+      check('the reading card responds to hover and press and stays still with reduced motion', await page.$eval(entry, button =>
+        button.matches(':active') && getComputedStyle(button).transform === 'none'));
+      await page.mouse.move(1, 1); await page.mouse.up();
+      await page.emulateMediaFeatures([]);
+    }
     await page.screenshot({ path: path.join(scratch, `home-${theme}.png`) });
   }
   for (const width of [1920, 1280, 900, 700, 480, 360]) {

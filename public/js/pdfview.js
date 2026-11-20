@@ -286,12 +286,13 @@ export function createPdfPaperAccess({ loadPdfjs = initPdfjs, ...cacheOptions } 
           try { page.cleanup(); } catch { /* A concurrent render may still use this page. */ }
         }
       },
-      async renderPageImage(n, { signal: pageSignal, maxDim = 1400, quality = .82 }) {
+      async renderPageImage(n, { signal: pageSignal, maxDim = 1400, targetWidth = 0, quality = .82 }) {
         const page = await waitForPdfWork(pdf.getPage(n), pageSignal);
         let canvas;
         try {
           const base = page.getViewport({ scale: 1 });
-          const scale = Math.min(2.2, Math.max(.5, maxDim / Math.max(base.width, base.height)));
+          const fit = maxDim / Math.max(base.width, base.height);
+          const scale = targetWidth ? Math.min(targetWidth / base.width, fit) : Math.min(2.2, Math.max(.5, fit));
           const viewport = page.getViewport({ scale });
           const width = Math.max(1, Math.floor(viewport.width)), height = Math.max(1, Math.floor(viewport.height));
           canvas = document.createElement('canvas'); canvas.width = width; canvas.height = height;
@@ -301,7 +302,7 @@ export function createPdfPaperAccess({ loadPdfjs = initPdfjs, ...cacheOptions } 
           const render = page.render({ canvasContext: ctx, viewport, background: '#FFFFFF' });
           await waitForPdfWork(render.promise, pageSignal, () => render.cancel());
           let dataUrl = canvas.toDataURL('image/jpeg', quality);
-          if (dataUrl.length > 900_000) dataUrl = canvas.toDataURL('image/jpeg', .6);
+          if (dataUrl.length > 900_000) dataUrl = canvas.toDataURL('image/jpeg', targetWidth ? .84 : .6);
           return { dataUrl, width, height, page: n, numPages: pdf.numPages };
         } finally {
           if (canvas) { canvas.width = 0; canvas.height = 0; }

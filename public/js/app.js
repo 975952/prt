@@ -3122,6 +3122,8 @@ function paperPromptTitle(paper = state.doc) {
 }
 
 let homeThumbnailObserver = null;
+let homeThumbnailResizeObserver = null;
+let stopHomeThumbnailDensityWatch = null;
 let homeThumbnailGeneration = 0;
 let homeThumbnailQueue = [];
 let homeThumbnailActive = 0;
@@ -3144,6 +3146,10 @@ function stopHomeThumbnailWork() {
   homeThumbnailGeneration++;
   homeThumbnailObserver?.disconnect();
   homeThumbnailObserver = null;
+  homeThumbnailResizeObserver?.disconnect();
+  homeThumbnailResizeObserver = null;
+  stopHomeThumbnailDensityWatch?.();
+  stopHomeThumbnailDensityWatch = null;
   homeThumbnailQueue = [];
   for (const controller of homeThumbnailControllers) controller.abort();
   homeThumbnailControllers.clear();
@@ -3152,23 +3158,23 @@ function stopHomeThumbnailWork() {
 
 function pumpHomeThumbnailQueue(generation) {
   while (generation === homeThumbnailGeneration && homeThumbnailActive < 2 && homeThumbnailQueue.length) {
-    const target = homeThumbnailQueue.shift();
-    if (!target.isConnected) continue;
+    const { target, width } = homeThumbnailQueue.shift();
+    if (!target.isConnected || width !== Number(target.dataset.previewWidth)) continue;
     const cached = homeThumbnailCache.get(target.dataset.cacheKey);
     const img = target.querySelector('img');
     if (cached && img) {
       homeThumbnailCache.delete(target.dataset.cacheKey);
       homeThumbnailCache.set(target.dataset.cacheKey, cached);
       showHomeThumbnail(target, cached);
-      continue;
+      if (cached.width >= width) continue;
     }
     const controller = new AbortController();
     homeThumbnailControllers.add(controller);
     homeThumbnailActive++;
-    renderPdfPageImage(target.dataset.url, 1, { signal: controller.signal, maxDim: 560, quality: .68 })
+    renderPdfPageImage(target.dataset.url, 1, { signal: controller.signal, targetWidth: width, maxDim: 2400, quality: .94 })
       .then(({ dataUrl, numPages }) => {
-        if (generation !== homeThumbnailGeneration || !target.isConnected || !img) return;
-        const thumbnail = { dataUrl, numPages };
+        if (generation !== homeThumbnailGeneration || !target.isConnected || width !== Number(target.dataset.previewWidth)) return;
+        const thumbnail = { dataUrl, numPages, width };
         homeThumbnailCache.set(target.dataset.cacheKey, thumbnail);
         while (homeThumbnailCache.size > 24) homeThumbnailCache.delete(homeThumbnailCache.keys().next().value);
         showHomeThumbnail(target, thumbnail);
@@ -3188,23 +3194,56 @@ function observeHomeThumbnails(list) {
   const generation = homeThumbnailGeneration;
   const targets = [...list.querySelectorAll('.hi-preview[data-url]')];
   if (!targets.length) return;
+  const nearby = new Set();
+  const enqueue = target => {
+    // The image fills the preview's content width. Its bounds include Library zoom.
+    const pixels = target.querySelector('img').getBoundingClientRect().width * Math.max(2, window.devicePixelRatio || 1);
+    const width = Math.min(1792, Math.max(768, Math.ceil(pixels / 128) * 128));
+    if (width <= (Number(target.dataset.previewWidth) || 0)) return;
+    target.dataset.previewWidth = width;
+    homeThumbnailQueue.push({ target, width });
+  };
+  if ('ResizeObserver' in window) {
+    homeThumbnailResizeObserver = new ResizeObserver(entries => {
+      if (generation !== homeThumbnailGeneration) return;
+      for (const entry of entries) enqueue(entry.target);
+      pumpHomeThumbnailQueue(generation);
+    });
+  }
+  const box = window.ResizeObserverEntry && 'devicePixelContentBoxSize' in ResizeObserverEntry.prototype
+    ? { box: 'device-pixel-content-box' } : undefined;
+  const observeSize = target => {
+    nearby.add(target);
+    if (homeThumbnailResizeObserver) homeThumbnailResizeObserver.observe(target, box);
+    else enqueue(target);
+  };
+  // Moving the window between displays can change density without a layout resize.
+  const watchDensity = () => {
+    if (generation !== homeThumbnailGeneration) return;
+    const query = window.matchMedia(`(resolution: ${window.devicePixelRatio || 1}dppx)`);
+    query.addEventListener('change', watchDensity, { once: true });
+    stopHomeThumbnailDensityWatch = () => query.removeEventListener('change', watchDensity);
+    nearby.forEach(enqueue);
+    pumpHomeThumbnailQueue(generation);
+  };
+  watchDensity();
   if (!('IntersectionObserver' in window)) {
-    homeThumbnailQueue.push(...targets.slice(0, 6));
+    targets.forEach(observeSize);
     pumpHomeThumbnailQueue(generation);
     return;
   }
-  homeThumbnailObserver = new IntersectionObserver((entries, observer) => {
+  homeThumbnailObserver = new IntersectionObserver(entries => {
+    if (generation !== homeThumbnailGeneration) return;
     for (const entry of entries) {
-      if (!entry.isIntersecting) continue;
-      observer.unobserve(entry.target);
-      homeThumbnailQueue.push(entry.target);
+      if (entry.isIntersecting) observeSize(entry.target);
+      else {
+        nearby.delete(entry.target);
+        homeThumbnailResizeObserver?.unobserve(entry.target);
+      }
     }
     pumpHomeThumbnailQueue(generation);
   }, { root: $('#home .home-content'), rootMargin: '180px 0px' });
-  for (const target of targets) {
-    if (homeThumbnailCache.has(target.dataset.cacheKey)) homeThumbnailQueue.push(target);
-    else homeThumbnailObserver.observe(target);
-  }
+  targets.forEach(target => homeThumbnailObserver.observe(target));
   pumpHomeThumbnailQueue(generation);
 }
 

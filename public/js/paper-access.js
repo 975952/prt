@@ -282,8 +282,9 @@ export function createPaperAccess({ openDocument, maxDocuments = 4, maxCachedPag
       return scoped(options, signal => withDocument(key, signal, (entry, resource) => {
         if (n > resource.numPages) throw new RangeError(`PDF page ${n} is outside 1–${resource.numPages}`);
         const maxDim = Number(options.maxDim) || 1400, quality = Number(options.quality) || .82;
-        return sharedPage(entry, `image:${n}:${maxDim}:${quality}`, workSignal => resource.renderPageImage(n,
-          { ...options, maxDim, quality, signal: workSignal }), signal);
+        const targetWidth = Math.max(0, Number(options.targetWidth) || 0);
+        return sharedPage(entry, `image:${n}:${maxDim}:${targetWidth}:${quality}`, workSignal => resource.renderPageImage(n,
+          { ...options, maxDim, targetWidth, quality, signal: workSignal }), signal);
       }));
     },
     async release(url) {
