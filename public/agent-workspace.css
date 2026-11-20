@@ -57,8 +57,8 @@ body.agent-full.agent-nav-collapsed #agentNav .agent-nav-button > span:last-chil
 .agent-nav-session:hover, .agent-nav-session[aria-current="true"], .agent-nav-session[aria-current="page"] { color: var(--fg); background: color-mix(in srgb, var(--bg-elev) 72%, transparent); }
 .agent-nav-empty { margin: 2px 11px; max-width: 150px; color: var(--fg-faint); font-size: 12px; line-height: 1.8; }
 body:not(.reading) #home { padding: 8px; gap: 8px; }
-body:not(.reading) #home .home-sidebar { border: 1px solid var(--border-strong); border-radius: 18px; }
-body:not(.reading) #home .home-content { margin: 0; border: 1px solid var(--border-strong); border-radius: 22px; }
+body:not(.reading) #home .home-sidebar { border: 1px solid var(--border-strong); border-radius: 0; }
+body:not(.reading) #home .home-content { margin: 0; border: 1px solid var(--border-strong); border-radius: 22px 0 0 0; }
 body:not(.reading) #home .home-workspace { max-width: 1320px; padding: 34px 48px 30px; }
 body:not(.reading) #home .home-brand, body:not(.reading) #home .home-sidebar-foot { display: none; }
 body:not(.reading) #home .home-head { align-items: center; margin-bottom: 25px; }
