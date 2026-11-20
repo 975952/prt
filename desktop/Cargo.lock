@@ -1754,7 +1754,7 @@ dependencies = [
 
 [[package]]
 name = "prt"
-version = "1.4.2"
+version = "1.4.3"
 dependencies = [
  "dirs",
  "rust-embed",
