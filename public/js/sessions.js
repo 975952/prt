@@ -173,23 +173,9 @@ function sessButton(icon, title, cls, onclick, extra = {}) {
 
 /* ───────────────────────────── 接口 ───────────────────────────── */
 
-/** 列表/元数据请求用的 doc key：全局共用模式由 app 给出（'default'），其余情况就是当前文件夹 */
-function listScopeKey() {
-  return st.ctx?.scopeKey?.() || st.folderKey;
-}
-
-/** 历史行里的 fileKey 是服务端规范化后的存储键：全局模式下 app 传的 'default' 会落成
- *  'default-<hash>'（见 server.js docIdOf）。这里统一判断「是不是当前归属键的副本」。 */
-function isScopeFileKey(fileKey) {
-  const key = String(fileKey || '');
-  if (!key) return false;
-  if (st.ctx?.isScopeFileKey) return !!st.ctx.isScopeFileKey(key);
-  return key === listScopeKey();
-}
-
+/** 新格式：所有会话统一存储，无需按 doc 分类查询 */
 async function fetchSessionRows(scope, limit) {
   const q = new URLSearchParams({
-    doc: listScopeKey(),
     folderPath: st.folderPath,
     scope,
     archived: 'all',

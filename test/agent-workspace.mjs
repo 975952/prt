@@ -70,7 +70,7 @@ const upstream = http.createServer(async (req, res) => {
     }
     if (source.includes('REVIEW_RETRY_SOURCE') && holdReviewRetry) { holdReviewRetry = false; heldGeneric = res; return; }
     if (holdGeneric && source.includes('FULL_GENERIC_QUESTION')) { holdGeneric = false; heldGeneric = res; return; }
-    const sharedMarker = source.match(/SHARED_(PAPER|GLOBAL)_(QUESTION|FOLLOWUP)/)?.[0];
+    const sharedMarker = source.match(/SHARED_(PAPER|GLOBAL|FOLDER|NEW)_(QUESTION|FOLLOWUP)/)?.[0];
     const answer = sharedMarker ? 'ANSWER_' + sharedMarker
       : source.includes('AFTER_PDF_FAILURE_QUESTION') ? 'SYNTHETIC_RECOVERY_REPLY'
       : source.includes('FIRST_NAME_DISMISS_QUESTION') ? 'SYNTHETIC_NAME_DISMISS_REPLY'
@@ -221,31 +221,41 @@ async function chooseGlobal() {
 }
 async function reviewSharedHistory(paper) {
   page = await newPage('paper');
+  const welcomeSkip = await page.$('#agentWelcomeSkip');
+  if (welcomeSkip) await welcomeSkip.click();
   const openPaper = async () => {
     if (!await visible('#home')) await page.locator('#homeBtn').click();
     await page.locator(`#homeList .home-item[data-id=${JSON.stringify(paper.docId)}] .home-item-go`).click();
-    await page.waitForFunction(id => __state.viewerDocId === id && document.body.classList.contains('reading'), {}, paper.docId);
+    await page.waitForFunction(id => __viewer.pdf && __state.viewerDocId === id && document.body.classList.contains('reading'), {}, paper.docId);
+    await settled();
   };
   const ask = async marker => {
     await typeDraft(marker + ': explain the idea in one sentence.');
     await page.locator('#sendBtn').click();
     await page.waitForFunction(marker => !__state.busy && [...document.querySelectorAll('#aiArea .msg.assistant')]
       .some(node => node.textContent.includes('ANSWER_' + marker)), {}, marker);
+    await page.evaluate(() => __ctx.saveSessionNow());
   };
   const row = id => `#sessHistory .sess-hrow[data-sid=${JSON.stringify(id)}]`;
   const openHistoryRow = async id => {
     await history();
     await page.locator(row(id) + ' .sess-hgo').click();
     await page.waitForFunction(id => __ctx.activeSession === id && !document.querySelector('#sessHistory').getClientRects().length, {}, id);
+    await settled();
+  };
+  const assertOwner = async (id, owner) => {
+    const { sessions } = await json('/api/sessions?scope=all&archived=all&limit=500');
+    const fileKey = owner === 'default' ? 'default-9ce67dce' : owner;
+    assert.deepEqual(sessions.filter(item => item.sid === id).map(item => item.fileKey), [fileKey]);
   };
   const assertTranscript = async (id, owner, start, reply) => {
     const saved = await json(sessionUrl(owner, id));
     const entries = saved.entries.map(entry => entry.text);
     for (const marker of [start, reply]) {
-      assert.ok(entries.some(text => text?.startsWith(marker + ':')));
-      assert.ok(entries.some(text => text?.includes('ANSWER_' + marker)));
+      assert.ok(entries.some(text => text?.startsWith(marker + ':')), `missing user message ${marker} in ${owner}/${id}`);
+      assert.ok(entries.some(text => text?.includes('ANSWER_' + marker)), `missing reply ${marker} in ${owner}/${id}`);
     }
-    assert.equal((await json('/api/sessions?scope=all&archived=all&limit=500')).sessions.filter(item => item.sid === id).length, 1);
+    await assertOwner(id, owner);
   };
   await openPaper();
   await page.locator('#sessNew').click();
@@ -261,6 +271,7 @@ async function reviewSharedHistory(paper) {
   await page.locator('.sess-hist-back').click();
   await page.locator(recent).click();
   await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_PAPER_QUESTION'));
+  await assertOwner(paperSid, paper.docId);
   await ask('SHARED_PAPER_FOLLOWUP');
   await openPaper(); await openHistoryRow(paperSid);
   await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_PAPER_FOLLOWUP'));
@@ -272,11 +283,31 @@ async function reviewSharedHistory(paper) {
   assert.ok(globalSid && globalSid !== paperSid);
   await openPaper(); await openHistoryRow(globalSid);
   await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_GLOBAL_QUESTION'));
+  await assertOwner(globalSid, 'default');
   await ask('SHARED_GLOBAL_FOLLOWUP');
+  await page.locator('#sessNew').click();
+  await page.waitForFunction(previous => __ctx.activeSession && __ctx.activeSession !== previous, {}, globalSid);
+  await ask('SHARED_NEW_QUESTION');
+  await assertOwner(await sid(), paper.docId);
+  pass('starting a new chat in the reader uses its paper preference after continuing a global conversation');
   await full({ landing: true }); await openHistoryRow(globalSid);
   await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_GLOBAL_FOLLOWUP'));
   await assertTranscript(globalSid, 'default', 'SHARED_GLOBAL_QUESTION', 'SHARED_GLOBAL_FOLLOWUP');
   pass('a follow-up sent in the reader returns to Alina in the original global conversation');
+
+  const folderSid = 'folder-old';
+  const folderOwner = folderScope(paper.folder);
+  await openHistoryRow(folderSid);
+  await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('FOLDER_PRIVATE_ONLY'));
+  await ask('SHARED_FOLDER_FOLLOWUP');
+  await openPaper(); await openHistoryRow(folderSid);
+  await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_FOLDER_FOLLOWUP'));
+  const savedFolder = await json(sessionUrl(folderOwner, folderSid));
+  assert.equal(savedFolder.folderPath, paper.folder);
+  assert.ok(savedFolder.entries.some(entry => entry.text === 'FOLDER_PRIVATE_ONLY'));
+  assert.ok(savedFolder.entries.some(entry => entry.text === 'ANSWER_SHARED_FOLDER_FOLLOWUP'));
+  await assertOwner(folderSid, folderOwner);
+  pass('a folder conversation opened in both workspaces keeps its original folder and receives the follow-up there');
 }
 async function reviewHistoryDeletion(paper) {
   const owners = ['default', paper.docId, folderScope(paper.folder)];

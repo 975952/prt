@@ -727,6 +727,8 @@ let agentFolderOverride = null;
 let agentPaperOverride = '';
 // Opening reading material must not silently move the conversation that opened it.
 let agentPinnedOwner = null;
+// Each workspace can temporarily display a conversation stored under another owner.
+const historySessionOwners = new Map();
 let agentWorkspaceView = 'closed';
 let agentLandingActive = false;
 // Library temporarily hides the workspace; only an explicit New conversation
@@ -1070,6 +1072,9 @@ function retireDeletedConversation(scope, sid, { copies = false, announce = true
   }
   if (updatedPointers) {
     try { localStorage.setItem(SESSION_KEY, JSON.stringify(pointers)); activeSessionFallback.clear(); } catch { /* memory only */ }
+  }
+  for (const [slot, owner] of historySessionOwners) {
+    if (matches(owner.scope, owner.sid)) historySessionOwners.delete(slot);
   }
   releaseRetiredChatPdfs();
   if (active || matchesKey(displayedChatKey)) {
@@ -2749,8 +2754,8 @@ function setAgentWorkspaceView(view) {
 }
 function updateAgentRecentSessions() {
   if (!agentWorkspace) return;
-  const global = agentWorkspaceView === 'full' && effectiveSessionScopeMode() === 'global';
-  agentWorkspace.setRecentConversations(global ? sessionsGetList() : [], global ? activeSidFor(state.doc?.docId) : '');
+  const full = agentWorkspaceView === 'full';
+  agentWorkspace.setRecentConversations(full ? sessionsGetList() : [], full ? activeSidFor(state.doc?.docId) : '');
 }
 function latestAgentConversation() {
   return sessionsGetList().filter(row => !row.archived && row.count > 0)
@@ -2924,7 +2929,7 @@ async function openAgentPaper(paper, sourceElement = null) {
     await parkAgentConversation();
     if (!agentPinnedOwner && effectiveSessionScopeMode() !== 'global') {
       const mode = effectiveSessionScopeMode();
-      agentPinnedOwner = { scope: sessionScopeKey(), slot: activeSessionSlot(state.doc?.docId),
+      agentPinnedOwner = { scope: workspaceSessionScopeKey(), slot: activeSessionSlot(state.doc?.docId),
         paperId: state.doc?.docId || '', folder: sessionFolderPath() };
       agentSessionOverride = mode;
       if (mode === 'folder') agentFolderOverride = agentPinnedOwner.folder;
@@ -4339,6 +4344,11 @@ async function relocateLibraryFolder(from, request) {
         slot: owner.slot === oldKey ? nextKey : owner.slot };
     };
     agentPinnedOwner = remapOwner(agentPinnedOwner);
+    const remappedSlots = new Map(oldFolders.map(folder => [folderKeyOf(folder), folderKeyOf(remap(folder))]));
+    for (const [slot, owner] of [...historySessionOwners]) {
+      historySessionOwners.delete(slot);
+      historySessionOwners.set(remappedSlots.get(slot) || slot, remapOwner(owner));
+    }
     if (agentFolderOverride !== null) agentFolderOverride = remap(agentFolderOverride);
     if (homeReadingState?.conversation) {
       homeReadingState.conversation = { ...homeReadingState.conversation,
@@ -6778,12 +6788,14 @@ function composerMode() { return rightPanelInCol(1) === 'translate' ? 'translate
 function sameComposerOwner(a, b) { return !!a && !!b && a.docId === b.docId && a.mode === b.mode; }
 function currentComposerOwner(mode = composerMode()) {
   if (mode === 'chat') {
-    const moved = movedSessionDraftOwner(sessionScopeKey(), activeSidFor(state.doc?.docId));
+    const scope = sessionScopeKey(), sid = activeSidFor(state.doc?.docId);
+    const moved = movedSessionDraftOwner(scope, sid);
     if (moved) return moved;
+    if (isAgentGlobalSessionKey(scope)) return { docId: `agent:${scope}:${sid || 'new'}`, mode };
+    const historyOwner = historySessionOwners.get(activeSessionSlot());
+    if (historyOwner) return { docId: historyOwner.paperId, mode };
   }
-  return { docId: mode === 'chat' && effectiveSessionScopeMode() === 'global'
-    ? `agent:default:${activeSidFor(state.doc?.docId) || 'new'}`
-    : (mode === 'chat' && agentPinnedOwner ? agentPinnedOwner.paperId : state.doc?.docId) || '', mode };
+  return { docId: (mode === 'chat' && agentPinnedOwner ? agentPinnedOwner.paperId : state.doc?.docId) || '', mode };
 }
 const movedDraftOwners = new Map();
 const activeSessionFallback = new Map();
@@ -7576,12 +7588,18 @@ function writeSessionScopeMode(mode) {
 }
 /** 问答会话存到哪个 doc 键：folder 按文件夹；paper 真正按论文（docId）；global 统一 default。
  *  传 docId 时按那篇论文算（切换文档过程中 state.doc 可能已经换过，但旧的会话仍要写回旧 scope）。 */
-function sessionScopeKey(docId = '') {
+function workspaceSessionScopeKey(docId = '') {
   if (agentPinnedOwner) return agentPinnedOwner.scope;
   const mode = effectiveSessionScopeMode();
   if (mode === 'global') return 'default';
   if (mode === 'paper') return String(docId || state.doc?.docId || agentPaperOverride || '') || currentFolderKey();
   return folderKeyOf(sessionFolderPath());
+}
+function sessionScopeKey(docId = '') {
+  return historySessionOwners.get(activeSessionSlot(docId))?.scope || workspaceSessionScopeKey(docId);
+}
+function sessionStorageFolderPath() {
+  return historySessionOwners.get(activeSessionSlot())?.folder ?? sessionFolderPath();
 }
 /** 服务端保存会话时会把 doc 参数规范成 docId 形式的键（全局 'default' → 'default-<hash>'，
  *  见 server.js 的 docIdOf）。历史行里的 fileKey 是规范后的键，这里按同一算法判断
@@ -7594,19 +7612,14 @@ function scopeDocIdOf(name) {
   const slug = s.replace(/\.[^.]+$/, '').replace(/[^\w\u4e00-\u9fa5-]+/g, '_').slice(0, 48);
   return `${slug}-${h.toString(16)}`;
 }
+/** 新格式：fileKey 就是 sid，无需 scope 匹配逻辑 */
 function isScopeFileKey(fileKey) {
-  const key = String(fileKey || '');
-  if (!key) return false;
-  if (key === sessionScopeKey()) return true;
-  return scopeDocIdOf(key) === scopeDocIdOf(sessionScopeKey());
+  // 所有会话对所有 scope 都可见，fileKey 就是 sid
+  return true;
 }
 function isAgentGlobalSessionKey(fileKey) {
-  const key = String(fileKey || '');
-  return !!key && [scopeDocIdOf('default'), scopeDocIdOf(LEGACY_GLOBAL_SESSION_DOC)].includes(scopeDocIdOf(key));
-}
-function isAgentGlobalSessionRow(row) {
-  return isAgentGlobalSessionKey(row?.fileKey)
-    || (Array.isArray(row?._copies) && row._copies.some(copy => isAgentGlobalSessionKey(copy?.fileKey)));
+  // 无需再区分，所有会话都共用，但保持接口兼容
+  return true;
 }
 function describeSessionScope(row) {
   const key = scopeDocIdOf(row?.fileKey || sessionScopeKey());
@@ -7655,6 +7668,9 @@ async function moveConversation(row, target) {
     saveComposerDraft();
     const sourceDraft = sourceDraftOwner ? composerDrafts.read(sourceDraftOwner) : null;
     let sourceDraftRevision = sourceDraftOwner ? composerDraftState(sourceDraftOwner).revision : 0;
+    for (const [slot, owner] of historySessionOwners) {
+      if (matchesDeletedConversation(fromDoc, fromSid, false, owner.scope, owner.sid)) historySessionOwners.delete(slot);
+    }
     // The server committed the move. Old queues and parked views must never resurrect it.
     for (const key of new Set([...chatViews.keys(), currentChatKey(), chatOwnerKey(fromDoc, fromSid)])) {
       const [scope, sid] = JSON.parse(key);
@@ -7670,7 +7686,7 @@ async function moveConversation(row, target) {
       try { localStorage.setItem(SESSION_KEY, JSON.stringify(pointers)); activeSessionFallback.delete(sourceSlot); }
       catch { activeSessionFallback.set(sourceSlot, null); }
     }
-    notifySessionSaved({ kind: 'chat', scope: sourceIsCurrent ? sessionScopeKey() : fromDoc, sid: fromSid, deleted: true });
+    notifySessionSaved({ kind: 'chat', scope: fromDoc, sid: fromSid, deleted: true });
     const draftOwner = result.draftOwner || { docId: `session:${scopeDocIdOf(toDoc)}:${toSid}`, mode: 'chat' };
     registerMovedSessionDraft(toDoc, toSid, draftOwner);
     if (sourceDraft) {
@@ -7766,8 +7782,10 @@ function readActiveSessions() {
 }
 /** 活动会话 sid：跟着「会话归属方式」记一格（文件夹 / 每篇论文 / 全局） */
 function activeSidFor(docId) {
-  const map = readActiveSessions();
   const key = activeSessionSlot(docId);
+  const historyOwner = historySessionOwners.get(key);
+  if (historyOwner) return historyOwner.sid;
+  const map = readActiveSessions();
   if (windowId !== 'main' && typeof map[key] !== 'string') {
     map[key] = newSid();
     setActiveSidFor(docId, map[key]);
@@ -7777,6 +7795,7 @@ function activeSidFor(docId) {
 function setActiveSidFor(docId, sid) {
   const map = readActiveSessions();
   const key = activeSessionSlot(docId);
+  historySessionOwners.delete(key);
   // Empty sid is a real legacy conversation, including in secondary windows.
   if (typeof sid === 'string') map[key] = sid; else delete map[key];
   try { localStorage.setItem(SESSION_KEY, JSON.stringify(map)); activeSessionFallback.delete(key); }
@@ -7945,7 +7964,7 @@ function buildSessionPayload() {
     teaching: serializeTeachingState(),
     updatedAt: Date.now(),
     // P0 会话系统 v4：归属文件夹 + 涉及文档（服务端派生 meta、跨文件夹列表要用）
-    folderPath: sessionFolderPath(),
+    folderPath: sessionStorageFolderPath(),
     draftOwner: movedSessionDraftOwner(sessionScopeKey(), activeSidFor(docId)) || undefined,
     docIds: [...new Set(allEntries.filter(e => e.block !== 'translate').map(e => e.docId).filter(Boolean))],
     docTitles: [...new Set(allEntries.filter(e => e.block !== 'translate').map(e => e.docTitle).filter(Boolean))],
@@ -8052,7 +8071,8 @@ async function applyRemoteSessionSaved() {
   const sameSession = () => (state.doc?.docId || '') === docId && state.openSeq === openSeq
     && activeSidFor(docId) === sid && sessionScopeKey(docId) === scope;
   const canApply = () => sameSession() && !state.busy && editVersion === sessionEditVersion;
-  const chat = !sessionsIsEntryMode() && pending.some((e) => e.kind === 'chat' && e.scope === scope && e.sid === sid);
+  const chat = !sessionsIsEntryMode() && pending.some((e) => e.kind === 'chat'
+    && matchesDeletedConversation(scope, sid, false, e.scope, e.sid));
   const translate = !!docId && pending.some((e) => e.kind === 'translate' && e.docId === docId);
   remoteSessionApplying = true;
   try {
@@ -8774,9 +8794,8 @@ function sessionsContext() {
     folderKey: () => folderKeyOf(sessionFolderPath()),
     scopeKey: () => sessionScopeKey(),
     scopeMode: () => effectiveSessionScopeMode(),
-    isAgentWorkspace: () => agentSessionOverride === 'global',
+    isAgentWorkspace: () => agentWorkspaceView === 'full',
     onOpenHistory: () => agentWorkspace?.closePapers(),
-    acceptSessionRow: (row) => agentSessionOverride !== 'global' || isAgentGlobalSessionRow(row),
     // 历史行里的 fileKey 是服务端规范化后的键（全局 default → default-<hash>）：
     // sessions.js 用它在两种排列下判断「这一行是不是当前归属的副本」
     isScopeFileKey: (fk) => isScopeFileKey(fk),
@@ -8791,10 +8810,13 @@ function sessionsContext() {
     moveSession: moveConversation,
     currentSessionMeta: () => ({ fileKey: sessionScopeKey(), sid: activeSidFor(state.doc?.docId),
       count: state.sessionEntries.filter(e => e?.block === 'chat').length,
-      title: $('#sessLabel')?.textContent || '', folderPath: sessionFolderPath() }),
+      title: $('#sessLabel')?.textContent || '', folderPath: sessionStorageFolderPath() }),
     toast,
     createReadingWelcome,
-    adoptList: (rows) => { sessionStore.list = rows; },
+    adoptList: (rows) => {
+      sessionStore.list = rows;
+      if (agentWorkspaceView === 'full') updateAgentRecentSessions();
+    },
     showChatAndRender: () => { showAiBlock('chat'); renderAiArea(); },
     renderAi: () => renderAiArea(),
     continueSession: async (sid, opts) => { await switchSession(sid, opts || {}); setAgentLanding(false); },
@@ -8891,14 +8913,9 @@ async function loadSessionList() {
   if (!hasChatScope()) return [];
   const owner = captureSessionOwner();
   try {
-    // 会话属于「会话归属方式」决定的空间：默认文件夹；全局共用时统一 default
-    const globalWorkspace = agentSessionOverride === 'global';
-    const groups = await Promise.all((globalWorkspace ? ['default', LEGACY_GLOBAL_SESSION_DOC] : [owner.scope]).map(async (scope) => {
-      const r = await fetch(`/api/sessions?${new URLSearchParams({ doc: scope, scope: 'folder', limit: '500' })}`);
-      if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      return (await r.json()).sessions || [];
-    }));
-    const rows = groups.flat().filter(row => !globalWorkspace || isAgentGlobalSessionRow(row));
+    const r = await fetch(`/api/sessions?${new URLSearchParams({ doc: owner.scope, scope: 'folder', limit: '500' })}`);
+    if (!r.ok) throw new Error(`HTTP ${r.status}`);
+    const rows = (await r.json()).sessions || [];
     if (!sessionOwnerCurrent(owner)) return [];
     sessionStore.list = rows;
   } catch { if (sessionOwnerCurrent(owner)) sessionStore.list = []; }
@@ -8995,7 +9012,7 @@ async function toggleSessionMenu() {
 
 /** 把当前会话存盘后，切到另一个 sid（空串 = 老的单会话文件）
  *  force=true：选择卡片里点「继续上次」时即使 sid 相同也要重新重放问答 */
-async function switchSession(sid, { force = false } = {}) {
+async function switchSession(sid, { force = false, storageOwner = null } = {}) {
   if (conversationMoveBusy) return;
   if (!hasChatScope()) return;
   if (state.busy && !chatJobs.has(displayedChatKey)) {
@@ -9005,7 +9022,9 @@ async function switchSession(sid, { force = false } = {}) {
   sessionNavigationSeq += 1;
   const owner = captureSessionOwner();
   const docId = state.doc?.docId || '';
-  if (activeSidFor(docId) === (sid || '') && (!force || chatViews.has(currentChatKey()))) {
+  const targetScope = storageOwner?.scope || sessionScopeKey();
+  const targetKey = chatOwnerKey(targetScope, sid);
+  if (currentChatKey() === targetKey && (chatViews.has(targetKey) || (!force && displayedChatKey === targetKey))) {
     if (chatViews.has(currentChatKey())) mountChatSession();
     closeSessionMenu(); renderSessionBar(); return;
   }
@@ -9019,8 +9038,12 @@ async function switchSession(sid, { force = false } = {}) {
   if (!sessionOwnerCurrent(owner)) return;
   // Forced startup/entry restoration has not loaded this conversation yet.
   // Do not cache that empty placeholder over the session we are about to read.
-  if (!force || displayedChatKey !== chatOwnerKey(sessionScopeKey(), sid) || chatViews.has(displayedChatKey)) parkChatSession();
-  setActiveSidFor(docId, sid || '');
+  if (!force || displayedChatKey !== targetKey || chatViews.has(displayedChatKey)) parkChatSession();
+  if (storageOwner || historySessionOwners.has(activeSessionSlot(docId))) {
+    selectSessionOwner(docId, sid, storageOwner || historySessionOwners.get(activeSessionSlot(docId)));
+  } else {
+    setActiveSidFor(docId, sid || '');
+  }
   activateComposerDraft('chat');
   displayedChatKey = currentChatKey();
   refreshChatJobState();
@@ -9040,155 +9063,49 @@ async function switchSession(sid, { force = false } = {}) {
   renderSessionBar();
   updateSendScope();
   toast(tr("已切换会话"), 'ok', 1600);
-  // 从历史里打开的会话可能刚被 adopt 到当前归属键，当前列表里还没有它：刷新一次，
-  // 会话头 / 快速切换才能显示正确标题（否则会短暂显示「（无标题会话）」）。
-  const known = !sid || (sessionsGetList() || []).some((r) => r.sid === sid);
-  await sessionsOnSessionChanged({ refresh: !known });
+  const known = sessionsGetList().some(r => r.sid === sid && isScopeFileKey(r.fileKey));
+  await sessionsOnSessionChanged({ refresh: !known || owner.scope !== targetScope });
 }
 
-/** 把某个归属键下的会话完整复制到另一个归属键：entries / history / docIds / docTitles /
- *  标题 / 摘要全都保留。用于「换论文时对话怎么接」切模式、以及从历史打开别的归属键下的
- *  旧会话。成功返回 true；源文件不存在或网络失败返回 false（旧文件不动，不会丢数据）。 */
-async function copySessionAcrossScope(fromKey, toKey, sid, { targetSid = sid } = {}) {
-  if (!fromKey || !toKey || (scopeDocIdOf(fromKey) === scopeDocIdOf(toKey) && sid === targetSid)) return false;
-  if (agentSessionOverride === 'global' && (!isAgentGlobalSessionKey(fromKey) || !isAgentGlobalSessionKey(toKey))) return false;
-  const folderPath = sessionFolderPath();
-  const ownerKey = chatOwnerKey(toKey, targetSid), revision = sessionWrites.revision(ownerKey);
-  try {
-    const r = await fetch(`/api/session?${new URLSearchParams({ doc: fromKey, sid })}`);
-    if (!r.ok) return false;
-    const data = await r.json().catch(() => ({}));
-    if (!data || typeof data !== 'object' || !Array.isArray(data.entries) || data.deleted) return false;
-    const body = {
-      entries: data.entries,
-      history: data.history,
-      ops: data.ops,
-      teaching: data.teaching,
-      createdAt: data.createdAt,
-      updatedAt: data.updatedAt,
-      folderPath,
-      docIds: data.docIds,
-      docTitles: data.docTitles,
-      title: data.title || '',
-      titleSource: data.titleSource === 'user' ? 'user' : (data.titleSource === 'ai' ? 'ai' : 'auto'),
-      summary: data.summary,
-      summaryCovered: data.summaryCovered,
-      summaryPrompt: data.summaryPrompt,
-    };
-    const w = await sessionWrites.enqueue(ownerKey, () => fetch(`/api/session?${new URLSearchParams({ doc: toKey, sid: targetSid, merge: '1' })}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    }), revision);
-    return !!w?.ok;
-  } catch {
-    return false;
+function selectSessionOwner(docId, sid, owner) {
+  if (scopeDocIdOf(owner.scope) === scopeDocIdOf(workspaceSessionScopeKey(docId))) {
+    setActiveSidFor(docId, sid);
+  } else {
+    historySessionOwners.set(activeSessionSlot(docId), { ...owner, sid });
   }
 }
 
-/** 跨「会话归属键」打开旧会话：历史里的会话可能属于别的文件夹键（folder/paper/global 切换后），
- *  切过去前把内容复制到当前归属键，这样对话能完整接上；旧文件保留不动（相当于自动备份，不迁移不删除）。 */
-async function adoptRowIntoScope(row) {
-  const globalWorkspace = agentSessionOverride === 'global';
-  const choices = [row, ...(Array.isArray(row?._copies) ? row._copies : [])]
-    .filter(copy => copy?.fileKey && (!globalWorkspace || isAgentGlobalSessionKey(copy.fileKey)));
-  const source = choices.find(copy => isScopeFileKey(copy.fileKey)) || choices[0];
-  if (!source) return null;
-  const sid = String(source.sid ?? row?.sid ?? '');
-  const fromKey = String(source.fileKey);
-  const toKey = sessionScopeKey();
-  if (isScopeFileKey(fromKey)) return sid;
-  // The legacy global default must not replace today's default conversation.
-  const targetSid = !sid && globalWorkspace ? `legacy${fnv1a8(scopeDocIdOf(fromKey))}` : sid;
-  if (!await copySessionAcrossScope(fromKey, toKey, sid, { targetSid })) return null;
-  await loadSessionList();
-  return targetSid;
-}
-
-/** 历史面板里点一条会话：它可能属于别的文件夹 / 别的论文。
- *  「全部做好防护」原则：只要当前这篇论文能接上这段对话（当前指针就是它 / 当前归属键下
- *  有副本 / 会话读过当前论文 / 点的是当前论文分组），就原地切换，绝不换论文；
- *  只有会话确实不涉及当前论文时才按点击的分组或 docIds 打开目标论文。
- *  论文已不在 papers/ 里时给提示（历史行仍保留，不会丢）。 */
+/** 全屏工作区原地打开历史；阅读区按论文分组或会话引用切换 PDF。 */
 async function openSessionFromHistory(row, { force = false, docIdHint = '' } = {}) {
   if (!row || !hasChatScope()) return;
-  if (agentSessionOverride === 'global' && !isAgentGlobalSessionRow(row)) return;
   if (state.busy && !chatJobs.has(displayedChatKey)) {
     toast(tr("正在生成中，先等它跑完或点停止再切换会话"), 'err', 3200);
     return;
   }
   const sid = String(row.sid || '');
-  const owner = captureSessionOwner();
-  const folder = String(row.folderPath || '');
+  const fileKey = row.fileKey || sessionScopeKey();
+  const scope = scopeDocIdOf(fileKey) === scopeDocIdOf('default') ? 'default' : fileKey;
+  const storage = describeSessionScope(row);
+  const folder = storage.folderPath ?? String(row.folderPath || '');
   const ids = Array.isArray(row.docIds) ? row.docIds.map(String).filter(Boolean) : [];
   const currentId = state.doc?.docId || '';
   const hintId = String(docIdHint || '');
-  const globalScope = effectiveSessionScopeMode() === 'global';
-  const copies = Array.isArray(row._copies) ? row._copies : [];
-  const hasScopeCopy = isScopeFileKey(row.fileKey)
-    || copies.some((c) => isScopeFileKey(c?.fileKey));
-  const onCurrentSid = !!sid && activeSidFor(currentId) === sid;
-
-  /** 原地切到这段会话：当前归属键下没有副本时先从旧键复制 → 对齐指针 → 重放 */
-  const switchHere = async () => {
-    const targetSid = hasScopeCopy ? sid : await adoptRowIntoScope(row);
-    if (targetSid === null) {
-      toast(tr("这段会话读取失败（文件可能已被删除），历史列表已刷新"), 'err', 3800);
-      return;
-    }
-    if (!sessionOwnerCurrent(owner)) return;
-    try {
-      await switchSession(targetSid, { force: true });
-    } catch {
-      toast(tr("这段会话读取失败（文件可能已被删除），历史列表已刷新"), 'err', 3800);
-      await loadSessionList().catch(() => {});
-    }
-  };
-
-  // 全局共用：所有论文共用一段对话，切换会话不需要换论文。
-  if (globalScope) { await switchHere(); return; }
-
-  // ① 当前论文能接上：当前就是这段会话 / 当前归属键下有副本 / 会话读过这篇论文 /
-  //    用户点的就是当前论文分组。全部原地切换，绝不跳论文。
-  if (sid && (onCurrentSid || hasScopeCopy || ids.includes(currentId) || hintId === currentId)) {
-    await switchHere();
-    return;
-  }
-
-  // ② 会话确实属于别的论文：按点击的分组（若在 docIds 里）或 docIds 顺序选目标论文。
-  let targetId = '';
-  if (hintId && ids.includes(hintId)) targetId = hintId;
-  if (!targetId) targetId = ids[0] || '';
-  if (!targetId) {
-    // 没有论文信息的旧会话：原地接上
-    await switchHere();
-    return;
-  }
-  const paper = (state.papers || []).find((p) => String(p.docId) === targetId);
-  if (!paper) {
-    const where = `papers/${folder ? `${folder}/` : ''}`;
-    toast(tr("这个会话属于 {0}，论文已不在书架上，无法直接打开；会话记录仍保留", where), 'err', 4600);
-    return;
-  }
-  // 打开论文会顺带切换文件夹（ensureFolderForDoc）。这里已明确指定了要打开的会话，
-  // 过程中不要再按「打开文件夹时」策略弹选择卡片 / 新建会话，打开后直接切到目标会话。
-  if (state.doc?.docId !== targetId) {
+  const stay = agentWorkspaceView === 'full' || effectiveSessionScopeMode() === 'global' || storage.mode === 'global'
+    || isScopeFileKey(scope) || ids.includes(currentId) || hintId === currentId;
+  const paper = stay ? null : [hintId, ...ids, storage.docId]
+    .map(id => state.papers.find(item => item.docId === id)).find(Boolean);
+  if (paper && paper.docId !== currentId) {
     pendingSessionOpen = true;
-    try {
-      await openDoc({ name: paper.name, url: paper.url, docId: paper.docId, path: paper.path });
-    } finally { pendingSessionOpen = false; }
+    try { await openDoc(paper); }
+    finally { pendingSessionOpen = false; }
+    if (state.doc?.docId !== paper.docId || state.viewerDocId !== paper.docId) return;
   }
-  if (state.doc?.docId !== targetId) return;   // 打开失败：不要再把 sid 切到错误文档上
-  // 打开论文后归属键变了：重新判断当前键下有没有副本，没有就先把旧会话复制过来
-  const scopeKeyAfter = sessionScopeKey();
-  const hasCopyAfter = sid && (isScopeFileKey(row.fileKey)
-    || copies.some((c) => isScopeFileKey(c?.fileKey)));
-  if (sid && !hasCopyAfter) await adoptRowIntoScope(row);
-  if (state.doc?.docId !== targetId || sessionScopeKey() !== scopeKeyAfter) return;
-  // openDoc → sessionsOnDocOpened 可能重新亮出选择卡片；这次用户已经指定了会话，收起来再切
   sessionsHideEntryCard();
+  const readingId = state.doc?.docId || '';
+  const paperId = storage.docId || (folderOfDoc(readingId) === folder && readingId) || ids[0] || '';
   try {
-    await switchSession(sid, { force: true });
+    await switchSession(sid, { force: force || !chatViews.has(chatOwnerKey(scope, sid)),
+      storageOwner: { scope, folder, paperId } });
   } catch {
     toast(tr("这段会话读取失败（文件可能已被删除），历史列表已刷新"), 'err', 3800);
     await loadSessionList().catch(() => {});
@@ -13869,7 +13786,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   const scope = sessionScopeKey(), sid = activeSidFor(state.doc?.docId);
   displayedChatKey = chatOwnerKey(scope, sid);
   parkChatSession();
-  const job = { key: displayedChatKey, scope, sid, folder: sessionFolderPath(), docId: pending.docId,
+  const job = { key: displayedChatKey, scope, sid, folder: sessionStorageFolderPath(), docId: pending.docId,
     docTitle: pending.docTitle, reader, controller: ctl, view: chatViews.get(displayedChatKey), pending,
     papers: state.papers.map(paper => ({ ...paper, label: paperTitles.label(paper) })),
     teaching: teachingProgressBlock(), summary: state.sessionSummary, paperMemory: state.paperMemory,
