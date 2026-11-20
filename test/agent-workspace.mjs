@@ -17,7 +17,8 @@ const moveReview = process.argv.includes('--move-review');
 const landingReview = process.argv.includes('--landing-review');
 const sourcesReview = process.argv.includes('--sources-review');
 const historyDeletionReview = process.argv.includes('--history-deletion');
-const includeHistoryDeletion = historyDeletionReview || !(sourcesReview || moveReview || landingReview);
+const sharedHistoryReview = process.argv.includes('--shared-history');
+const includeHistoryDeletion = historyDeletionReview || !(sourcesReview || moveReview || landingReview || sharedHistoryReview);
 const previouslyDeletedSid = 'previouslydeletedsid';
 const executablePath = [process.env.CHROME, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
   'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe']
@@ -69,7 +70,9 @@ const upstream = http.createServer(async (req, res) => {
     }
     if (source.includes('REVIEW_RETRY_SOURCE') && holdReviewRetry) { holdReviewRetry = false; heldGeneric = res; return; }
     if (holdGeneric && source.includes('FULL_GENERIC_QUESTION')) { holdGeneric = false; heldGeneric = res; return; }
-    const answer = source.includes('AFTER_PDF_FAILURE_QUESTION') ? 'SYNTHETIC_RECOVERY_REPLY'
+    const sharedMarker = source.match(/SHARED_(PAPER|GLOBAL)_(QUESTION|FOLLOWUP)/)?.[0];
+    const answer = sharedMarker ? 'ANSWER_' + sharedMarker
+      : source.includes('AFTER_PDF_FAILURE_QUESTION') ? 'SYNTHETIC_RECOVERY_REPLY'
       : source.includes('FIRST_NAME_DISMISS_QUESTION') ? 'SYNTHETIC_NAME_DISMISS_REPLY'
       : source.includes('LOCAL_NEW_QUESTION') ? 'SYNTHETIC_LOCAL_REPLY'
       : source.includes('HANDOFF_AUTOCONTINUE_QUESTION') ? 'SYNTHETIC_HANDOFF_REPLY'
@@ -215,6 +218,65 @@ async function chooseGlobal() {
   await page.click('#sessHistory .sess-hrow[data-sid="global-primary"] .sess-hgo');
   await page.waitForFunction(() => window.__ctx.activeSession === 'global-primary'
     && document.querySelector('#aiArea').textContent.includes('GLOBAL_PRIMARY_ONLY'));
+}
+async function reviewSharedHistory(paper) {
+  page = await newPage('paper');
+  const openPaper = async () => {
+    if (!await visible('#home')) await page.locator('#homeBtn').click();
+    await page.locator(`#homeList .home-item[data-id=${JSON.stringify(paper.docId)}] .home-item-go`).click();
+    await page.waitForFunction(id => __state.viewerDocId === id && document.body.classList.contains('reading'), {}, paper.docId);
+  };
+  const ask = async marker => {
+    await typeDraft(marker + ': explain the idea in one sentence.');
+    await page.locator('#sendBtn').click();
+    await page.waitForFunction(marker => !__state.busy && [...document.querySelectorAll('#aiArea .msg.assistant')]
+      .some(node => node.textContent.includes('ANSWER_' + marker)), {}, marker);
+  };
+  const row = id => `#sessHistory .sess-hrow[data-sid=${JSON.stringify(id)}]`;
+  const openHistoryRow = async id => {
+    await history();
+    await page.locator(row(id) + ' .sess-hgo').click();
+    await page.waitForFunction(id => __ctx.activeSession === id && !document.querySelector('#sessHistory').getClientRects().length, {}, id);
+  };
+  const assertTranscript = async (id, owner, start, reply) => {
+    const saved = await json(sessionUrl(owner, id));
+    const entries = saved.entries.map(entry => entry.text);
+    for (const marker of [start, reply]) {
+      assert.ok(entries.some(text => text?.startsWith(marker + ':')));
+      assert.ok(entries.some(text => text?.includes('ANSWER_' + marker)));
+    }
+    assert.equal((await json('/api/sessions?scope=all&archived=all&limit=500')).sessions.filter(item => item.sid === id).length, 1);
+  };
+  await openPaper();
+  await page.locator('#sessNew').click();
+  await ask('SHARED_PAPER_QUESTION');
+  const paperSid = await sid();
+  assert.ok(paperSid);
+  await full({ landing: true });
+  const recent = `#agentNavRecent [data-agent-session=${JSON.stringify(paperSid)}]`;
+  await page.waitForSelector(recent, { visible: true });
+  await history();
+  await page.waitForSelector(row(paperSid), { visible: true });
+  check('a question sent in the reader is in both Alina recents and Alina history', await page.$eval(row(paperSid), node => node.dataset.fileKey) === paper.docId);
+  await page.locator('.sess-hist-back').click();
+  await page.locator(recent).click();
+  await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_PAPER_QUESTION'));
+  await ask('SHARED_PAPER_FOLLOWUP');
+  await openPaper(); await openHistoryRow(paperSid);
+  await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_PAPER_FOLLOWUP'));
+  await assertTranscript(paperSid, paper.docId, 'SHARED_PAPER_QUESTION', 'SHARED_PAPER_FOLLOWUP');
+  pass('a follow-up sent in Alina returns to the reader in the original paper conversation');
+
+  await full({ landing: true }); await ask('SHARED_GLOBAL_QUESTION');
+  const globalSid = await sid();
+  assert.ok(globalSid && globalSid !== paperSid);
+  await openPaper(); await openHistoryRow(globalSid);
+  await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_GLOBAL_QUESTION'));
+  await ask('SHARED_GLOBAL_FOLLOWUP');
+  await full({ landing: true }); await openHistoryRow(globalSid);
+  await page.waitForFunction(() => document.querySelector('#aiArea').textContent.includes('ANSWER_SHARED_GLOBAL_FOLLOWUP'));
+  await assertTranscript(globalSid, 'default', 'SHARED_GLOBAL_QUESTION', 'SHARED_GLOBAL_FOLLOWUP');
+  pass('a follow-up sent in the reader returns to Alina in the original global conversation');
 }
 async function reviewHistoryDeletion(paper) {
   const owners = ['default', paper.docId, folderScope(paper.folder)];
@@ -541,7 +603,8 @@ try {
   await seed(visionScope, 'folder-old', 'Folder private discussion', 'FOLDER_PRIVATE_ONLY', paperA);
   browser = await puppeteer.launch({ executablePath, headless: true, pipe: true,
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: path.join(scratch, 'browser') });
-  if (historyDeletionReview) await reviewHistoryDeletion(paperA);
+  if (sharedHistoryReview) await reviewSharedHistory(paperA);
+  else if (historyDeletionReview) await reviewHistoryDeletion(paperA);
   else if (sourcesReview) await reviewSources(paperA, paperB);
   else if (moveReview) await reviewMoveCases({ paperA, paperB });
   else {
@@ -583,8 +646,8 @@ try {
   check('no-PDF assistant owns the canonical global scope', await scope() === 'default');
   await history();
   const globalRows = await page.$$eval('#sessHistory .sess-hrow', nodes => nodes.map(node => node.dataset.sid));
-  assert.deepEqual([...new Set(globalRows)].sort(), ['global-primary', 'global-secondary']);
-  pass('full global history excludes paper and folder sessions');
+  assert.deepEqual([...new Set(globalRows)].sort(), ['folder-old', 'global-primary', 'global-secondary', 'paper-a-old', 'paper-b-old']);
+  pass('Alina history includes global, folder and paper conversations');
   await page.keyboard.press('Escape');
   await page.click('#settingsBtn'); await page.waitForSelector('#settingsModal', { visible: true });
   await page.click('#settingsNavAgent');
@@ -1087,6 +1150,7 @@ try {
     && !await visible('#agentLanding') && await visible('#aiArea') && (await chatText()).includes('SYNTHETIC_NAME_DISMISS_REPLY'));
   }
   if (includeHistoryDeletion && !historyDeletionReview) await reviewHistoryDeletion(paperA);
+  if (includeHistoryDeletion && !historyDeletionReview) await reviewSharedHistory(paperA);
   if (historyDeletionReview) check('history deletion needs no model requests', !modelRequests.length);
   else check('only the local synthetic model was used', modelRequests.length >= 1);
   assert.deepEqual(errors, [], 'no uncaught browser errors or external requests');

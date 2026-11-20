@@ -187,48 +187,18 @@ function isScopeFileKey(fileKey) {
   return key === listScopeKey();
 }
 
-async function fetchAgentWorkspaceList(limit) {
-  // Query both global storage families before applying their limits. Fetching
-  // scope=all first could bury global conversations under unrelated local rows.
-  const groups = await Promise.all(['default', '__global__'].map(async (doc) => {
-    const q = new URLSearchParams({ doc, scope: 'folder', archived: 'all', limit: String(limit) });
-    const r = await fetch(`/api/sessions?${q}`);
-    const j = await r.json().catch(() => ({}));
-    if (!r.ok) throw new Error(errorOf(j, r));
-    return normalizeRows(j.sessions);
-  }));
-  // Preserve fileKey: adopting a legacy global conversation needs its real owner.
-  return groups.flat().filter((row) => !st.ctx?.acceptSessionRow || st.ctx.acceptSessionRow(row));
-}
-
-async function fetchFolderList() {
-  if (st.ctx?.isAgentWorkspace?.()) return fetchAgentWorkspaceList(LIST_LIMIT);
+async function fetchSessionRows(scope, limit) {
   const q = new URLSearchParams({
     doc: listScopeKey(),
     folderPath: st.folderPath,
-    scope: 'folder',
+    scope,
     archived: 'all',
-    limit: String(LIST_LIMIT),
+    limit: String(limit),
   });
   const r = await fetch(`/api/sessions?${q}`);
   const j = await r.json().catch(() => ({}));
   if (!r.ok) throw new Error(errorOf(j, r));
-  return normalizeRows(j.sessions).filter((row) => !st.ctx?.acceptSessionRow || st.ctx.acceptSessionRow(row));
-}
-
-async function fetchAllList() {
-  if (st.ctx?.isAgentWorkspace?.()) return fetchAgentWorkspaceList(ALL_LIST_LIMIT);
-  const q = new URLSearchParams({
-    doc: listScopeKey(),
-    folderPath: st.folderPath,
-    scope: 'all',
-    archived: 'all',
-    limit: String(ALL_LIST_LIMIT),
-  });
-  const r = await fetch(`/api/sessions?${q}`);
-  const j = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(errorOf(j, r));
-  return normalizeRows(j.sessions).filter((row) => !st.ctx?.acceptSessionRow || st.ctx.acceptSessionRow(row));
+  return normalizeRows(j.sessions);
 }
 
 /** 行所属文件夹的 session key：优先用服务端给的 fileKey（任意归属模式/旧文件夹的行都能
@@ -253,7 +223,7 @@ async function patchMeta(row, patch) {
     const j = await r.json().catch(() => ({}));
     if (!r.ok) throw new Error(errorOf(j, r));
     if (j.session && typeof j.session === 'object') {
-      Object.assign(row, normalizeRows([j.session])[0] || {}, j.session);
+      Object.assign(row, j.session);
     }
     if (patch.pinned !== undefined) { row.pinned = !!patch.pinned; row.pinnedAt = patch.pinned ? (row.pinnedAt || Date.now()) : 0; }
     if (patch.archived !== undefined) { row.archived = !!patch.archived; row.archivedAt = patch.archived ? (row.archivedAt || Date.now()) : 0; }
@@ -275,7 +245,7 @@ async function patchMeta(row, patch) {
 /** 更新列表里的同一行（PATCH 返回的摘要可能没有 count/updatedAt 等展示字段） */
 function cacheTouched(row) {
   for (const box of [st.list, st.allList]) {
-    const i = box.findIndex((r) => r.sid === row.sid && (r.folderPath || '') === (row.folderPath || ''));
+    const i = box.findIndex((r) => r.sid === row.sid && r.fileKey === row.fileKey);
     if (i >= 0) box[i] = { ...box[i], ...row };
   }
 }
@@ -284,7 +254,7 @@ function cacheTouched(row) {
 let listRequest = 0;
 let allListRequest = 0;
 let docOpenRequest = 0;
-const contextKey = () => JSON.stringify([st.ctx?.doc?.()?.docId || '', listScopeKey(), st.ctx?.currentSid?.() || '']);
+const contextKey = () => JSON.stringify([st.ctx?.doc?.()?.docId || '', listScopeKey(), st.ctx?.currentSid?.() || '', !!st.ctx?.isAgentWorkspace?.()]);
 
 async function refreshList({ force = false, allowWithoutDoc = false } = {}) {
   if (!st.ctx || (!allowWithoutDoc && !st.ctx.hasDoc?.())) return st.list;
@@ -297,7 +267,8 @@ async function refreshList({ force = false, allowWithoutDoc = false } = {}) {
   const current = () => request === listRequest && owner === contextKey();
   st.listLoading = true;
   try {
-    const rows = await fetchFolderList();
+    const shared = st.ctx.isAgentWorkspace?.();
+    const rows = shared ? collapseRows(await fetchSessionRows('all', ALL_LIST_LIMIT)) : await fetchSessionRows('folder', LIST_LIMIT);
     if (!current()) return st.list;
     st.list = rows;
     st.listLoaded = true;
@@ -329,7 +300,7 @@ async function refreshAllList() {
   st.allLoading = true;
   if (st.historyOpen) renderHistoryList();
   try {
-    const rows = await fetchAllList();
+    const rows = await fetchSessionRows('all', ALL_LIST_LIMIT);
     if (!current()) return;
     st.allList = rows;
   } catch (e) {
@@ -349,7 +320,7 @@ async function refreshAllList() {
 function currentRow() {
   // currentSid 为空 = 没有活动会话（旧默认会话的 sid 也是空串，不能靠它匹配）
   if (!st.currentSid) return null;
-  return st.list.find((r) => r.sid === st.currentSid) || null;
+  return st.list.find((r) => r.sid === st.currentSid && hasCurrentOwner(r)) || null;
 }
 
 function headerName() {
@@ -586,7 +557,7 @@ function renderEntryCard(lastRow) {
     el('div', { class: 'entry-heading' },
       el('h3', { class: 'entry-title', text: tr("接着上次聊") }),
       el('button', { type: 'button', class: 'entry-link', text: tr("全部会话"), onclick: openHistory })),
-    el('button', { type: 'button', class: 'entry-primary', title: tr("继续「{0}」", name), onclick: () => chooseSession(lastRow.sid) },
+    el('button', { type: 'button', class: 'entry-primary', title: tr("继续「{0}」", name), onclick: () => chooseSession(lastRow) },
       el('span', { class: 'entry-primary-main', text: name }),
       el('span', { class: 'entry-primary-meta', text: tr("{0} 条消息 · {1}", lastRow.count, relTime(lastRow.updatedAt)) }),
       el('span', { class: 'entry-continue', text: tr("继续对话 →") })),
@@ -594,21 +565,16 @@ function renderEntryCard(lastRow) {
   );
 }
 
-async function chooseSession(sidOrRow, docIdHint = '') {
+async function chooseSession(row, docIdHint = '') {
   if (!guardBusy(tr("切换会话"), { navigation: true })) return;
   // 历史面板的新排列会列出别的文件夹/别的论文的会话：拿到整行才能切文件夹、打开对应论文。
   // docIdHint：按文件排列时用户点的是哪篇论文分组 —— 优先在原论文打开会话，别乱跳。
-  const row = typeof sidOrRow === 'string'
-    ? (st.allList.find((r) => r.sid === sidOrRow) || st.list.find((r) => r.sid === sidOrRow) || null)
-    : (sidOrRow || null);
-  if (row && st.ctx?.acceptSessionRow && !st.ctx.acceptSessionRow(row)) return;
-  const sid = row?.sid ?? (typeof sidOrRow === 'string' ? sidOrRow : '');
   closeQuick();
   closeHistory();
   const force = st.entryVisible;
   hideEntryCard();
-  if (row && st.ctx?.openSessionFromHistory) await st.ctx.openSessionFromHistory(row, { force, docIdHint });
-  else await st.ctx.continueSession(sid, { force });
+  if (st.ctx?.openSessionFromHistory) await st.ctx.openSessionFromHistory(row, { force, docIdHint });
+  else await st.ctx.continueSession(row.sid, { force });
 }
 
 async function doNewSession() {
@@ -757,7 +723,7 @@ function renderQuickList() {
     'aria-current': r.sid === st.currentSid ? 'true' : 'false',
     dataset: { sid: r.sid },
     title: r.title || tr("（无标题会话）"),
-    onclick: () => chooseSession(r.sid),
+    onclick: () => chooseSession(r),
   },
   el('span', { class: 'sess-quick-name', text: r.title || (r.count ? tr("（无标题会话）") : tr("新会话")) }),
   r.pinned ? el('span', { class: 'sess-quick-status', title: tr('置顶'), 'aria-label': tr('置顶'), html: ICONS.pin }) : null,
@@ -862,10 +828,11 @@ function historySourceRows() {
 /** 同一个会话可能因为切换「换论文时对话怎么接」而在多个存储键下留下副本
  *  （切换时会先按旧方式存盘、再把同一段对话复制到新方式）。历史面板是全库列表，
  *  如果不去重，同一段对话会重复出现好几行、每行都标「当前」。这里按 sid 合并成一行：
- *  · 优先当前归属键下那份，其次有标题、置顶/归档的，最后取最近更新的；
+ *  · 优先最近更新的一份，时间相同则优先当前归属；
  *  · 标题、置顶、归档、摘要等可能只写在某一副本上，合并时取更完整的值；
  *  · _copies 记录列表内的归属，用于打开会话和标记当前行。 */
 function preferRow(a, b) {
+  if (a.updatedAt !== b.updatedAt) return a.updatedAt > b.updatedAt;
   const aCur = isScopeFileKey(a.fileKey);
   const bCur = isScopeFileKey(b.fileKey);
   if (aCur !== bCur) return aCur;
@@ -874,7 +841,7 @@ function preferRow(a, b) {
   if (aTitle !== bTitle) return aTitle;
   if (!!a.pinned !== !!b.pinned) return !!a.pinned;
   if (!!a.archived !== !!b.archived) return !!a.archived;
-  return (b.updatedAt || 0) > (a.updatedAt || 0);
+  return false;
 }
 
 function collapseRows(rows) {
@@ -1205,19 +1172,20 @@ function openHistoryMenu(row, trigger) {
   panel.querySelector('[role="menuitem"]')?.focus({ preventScroll: true });
 }
 
+function hasCurrentOwner(row) {
+  return (!row.fileKey && !row._copies?.length) || isScopeFileKey(row.fileKey)
+    || !!row._copies?.some(copy => isScopeFileKey(copy.fileKey));
+}
+
 function historyRow(row, { group = null, renameShown = null, currentShown = null } = {}) {
   // 按文件排列时同一会话可能出现在多个论文分组里；「当前」徽标只标第一次，
   // 否则同一个会话会同时有好几行写「当前」，看起来像有好几个当前会话。
   // 还要防历史数据过期（切换论文/归属模式后旧列表没刷新）：只有这一行确实有当前
   // 归属键下的副本、且（按文件时）就在当前论文分组里，才允许标「当前」。
-  const copies = Array.isArray(row._copies) ? row._copies : [];
-  const hasScopeCopy = !row.fileKey && !copies.length
-    ? true
-    : isScopeFileKey(row.fileKey) || copies.some((c) => isScopeFileKey(c?.fileKey));
   const docNow = String(st.ctx?.doc?.()?.docId || '');
   const groupOk = st.histMode !== 'file' || !group?.id || !docNow || String(group.id) === docNow;
   const canMarkCurrent = !st.entryVisible && !!st.currentSid && row.sid === st.currentSid
-    && hasScopeCopy && groupOk
+    && hasCurrentOwner(row) && groupOk
     && !(currentShown && currentShown.has(row.sid));
   const on = canMarkCurrent;
   if (on && currentShown) currentShown.add(row.sid);
