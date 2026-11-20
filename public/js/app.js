@@ -1712,9 +1712,46 @@ function applyFullscreenUi(on) {
   btn.title = active ? tr("退出全屏（Esc）") : tr("全屏　F11");
 }
 
+let nativeFullscreenRequest = null;
+function waitForNativeFullscreen(want) {
+  return new Promise(resolve => {
+    let acknowledged = false, quietSince = performance.now(), frame = 0, stableFrames = 0;
+    let width = innerWidth, height = innerHeight;
+    const changed = () => { quietSince = performance.now(); stableFrames = 0; };
+    const stateChanged = event => { acknowledged = event.detail?.fullscreen === want; changed(); };
+    const done = ok => {
+      clearTimeout(timeout); cancelAnimationFrame(frame);
+      window.removeEventListener('resize', changed);
+      window.removeEventListener('prt:window-state', stateChanged);
+      resolve(ok);
+    };
+    const check = () => {
+      if (innerWidth !== width || innerHeight !== height) { width = innerWidth; height = innerHeight; changed(); }
+      if (acknowledged && performance.now() - quietSince >= 80 && ++stableFrames >= 2) { done(true); return; }
+      frame = requestAnimationFrame(check);
+    };
+    window.addEventListener('resize', changed);
+    window.addEventListener('prt:window-state', stateChanged);
+    const timeout = setTimeout(() => done(false), 2200);
+    frame = requestAnimationFrame(check);
+  });
+}
 async function toggleFullscreen(force) {
   const want = force === undefined ? !fullscreenActive() : !!force;
-  if (WINDOW_IPC) { windowAction('fullscreen', { on: want }); return; }
+  if (WINDOW_IPC) {
+    if (nativeFullscreenRequest) {
+      if (nativeFullscreenRequest.want === want) return nativeFullscreenRequest.promise;
+      await nativeFullscreenRequest.promise;
+    }
+    if (want === fullscreenActive()) return true;
+    // IPC dispatch is not completion: WebView2 must receive the final native
+    // size before Book view measures and renders its new page layout.
+    const promise = waitForNativeFullscreen(want);
+    const request = nativeFullscreenRequest = { want, promise };
+    windowAction('fullscreen', { on: want });
+    try { return await promise; }
+    finally { if (nativeFullscreenRequest === request) nativeFullscreenRequest = null; }
+  }
   try {
     if (want) {
       if (!document.fullscreenElement && document.documentElement.requestFullscreen) {
@@ -1741,6 +1778,7 @@ document.addEventListener('fullscreenchange', () => {
 window.__prtWindowState = (state) => {
   document.body.classList.toggle('window-maximized', !!(state && state.maximized));
   applyFullscreenUi(!!(state && state.fullscreen));
+  window.dispatchEvent(new CustomEvent('prt:window-state', { detail: state }));
 };
 
 function initWindowChrome() {

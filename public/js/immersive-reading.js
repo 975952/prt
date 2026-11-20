@@ -143,6 +143,8 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
     return activeTransition;
   }
   async function changeActive(on) {
+    const viewer = getViewer();
+    viewer?.beginModeTransition?.();
     transitionCover.hidden = false;
     transitionCover.classList.remove('leaving');
     try {
@@ -157,7 +159,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
         // Escape the fixed reader's stacking context without replacing live chat DOM.
         body.append(columns);
         document.getElementById('immersiveBtn')?.setAttribute('aria-pressed', 'true');
-        await fullscreen;
+        if (await fullscreen === false) throw new Error(tr('全屏切换未完成，请重试'));
         await getViewer().setImmersive(true);
         sync(); reveal(); viewerElement.focus({ preventScroll: true });
       } else {
@@ -169,7 +171,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
         side.classList.remove('reading-qa-card');
         for (const name of ['left', 'right', 'top', 'width', 'height']) side.style.removeProperty(name);
         restoreLayout?.();
-        if (ownedFullscreen) await leaveFullscreen?.();
+        if (ownedFullscreen && await leaveFullscreen?.() === false) throw new Error(tr('全屏切换未完成，请重试'));
         await getViewer().setImmersive(false);
         onExit?.();
       }
@@ -186,6 +188,7 @@ export function createImmersiveReading({ getViewer, enterFullscreen, leaveFullsc
       try { await getViewer()?.setImmersive(false); } catch { /* Keep the normal controls available for retry. */ }
       onError?.(error);
     } finally {
+      viewer?.endModeTransition?.();
       await finishTransition();
     }
   }

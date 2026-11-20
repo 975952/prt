@@ -284,7 +284,6 @@ struct ReaderWindow {
     doc: String,
     title: String,
     closing: CloseRequestState,
-    restore_max: bool,
     pending: Option<(WindowId, String, String)>,
 }
 
@@ -336,7 +335,7 @@ fn create_reader(
     ).build(&window).map_err(|e| e.to_string())?;
     if geometry["maximized"].as_bool() == Some(true) { window.set_maximized(true); }
     Ok(ReaderWindow { webview, window, key: key.into(), doc: doc.into(), title: "prt".into(),
-        closing: CloseRequestState::default(), restore_max: false, pending: None })
+        closing: CloseRequestState::default(), pending: None })
 }
 
 fn save_windows(windows: &HashMap<WindowId, ReaderWindow>) {
@@ -484,14 +483,10 @@ pub fn run(url: String, background: bool) -> ! {
                             WindowAction::Close => request_close(r),
                             WindowAction::Fullscreen(on) => {
                                 let want = on.unwrap_or_else(|| !is_fullscreen(&r.window));
-                                if want && !is_fullscreen(&r.window) {
-                                    r.restore_max = r.window.is_maximized();
-                                    if r.restore_max { r.window.set_maximized(false); }
-                                    set_fullscreen(&r.window, true);
-                                } else if !want && is_fullscreen(&r.window) {
-                                    set_fullscreen(&r.window, false);
-                                    if r.restore_max { r.window.set_maximized(true); r.restore_max = false; }
-                                }
+                                // Tao preserves WINDOWPLACEMENT, including maximized state.
+                                // Unmaximizing first exposes the desktop at the normal window
+                                // size, then causes another resize when entering/exiting Book view.
+                                if want != is_fullscreen(&r.window) { set_fullscreen(&r.window, want); }
                             },
                             _ => {},
                         }

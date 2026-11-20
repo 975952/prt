@@ -406,6 +406,7 @@ export class PdfViewer {
     // work is deferred separately; throttling the fit itself leaves the old
     // paper width visible for 200 ms and makes release visibly snap into place.
     this._onResize = () => {
+      if (this._modeTransition) return;
       if (this._immersive) { this.fitImmersive(); return; }
       if (this._fitMode && this.container.clientWidth !== this._fitViewportWidth) this.fitWidth();
     };
@@ -1008,13 +1009,28 @@ export class PdfViewer {
   }
 
   /** A temporary two-page book view. The caller owns fullscreen and toolbars. */
+  beginModeTransition() {
+    this.commitZoomPreview();
+    this._cancelPrefetch();
+    this._modeTransition = true;
+    if (!this._immersive) this._modeRestore = { twoUp: this._twoUp, scale: this.scale, fitMode: this._fitMode,
+      page: this.current, anchor: this._captureAnchor(), scrollTop: this.container.scrollTop, scrollLeft: this.container.scrollLeft,
+      width: this.container.clientWidth, height: this.container.clientHeight };
+  }
+
+  endModeTransition() {
+    this._modeTransition = false;
+    this._modeRestore = null;
+    this._onResize();
+  }
+
   async setImmersive(on) {
     const next = !!on;
     if (next === this._immersive || (next && !this.pdf)) return;
     this.commitZoomPreview();
     this._cancelPrefetch();
     if (next) {
-      this._immersiveRestore = { twoUp: this._twoUp, scale: this.scale, fitMode: this._fitMode,
+      this._immersiveRestore = this._modeRestore || { twoUp: this._twoUp, scale: this.scale, fitMode: this._fitMode,
         page: this.current, anchor: this._captureAnchor(), scrollTop: this.container.scrollTop, scrollLeft: this.container.scrollLeft,
         width: this.container.clientWidth, height: this.container.clientHeight };
       this._immersive = true;
