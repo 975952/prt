@@ -40,7 +40,8 @@ try {
   const paper = (await fetch(base + '/api/papers').then(r => r.json())).papers[0];
   assert.equal(await page.$eval('#homeReadingEntry', n => n.disabled), true);
   await page.goto(base + '/?document=' + encodeURIComponent(paper.docId), { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId && document.body.classList.contains('reading'));
+  await page.waitForFunction(() => window.__viewer?.pdf && window.__state.viewerDocId === window.__state.doc?.docId
+    && document.body.classList.contains('reading') && !document.querySelector('#startupStatus'));
   const filesRail = '#railLeft [data-rail="files"]';
   if (await page.$eval(filesRail, n => !n.classList.contains('active'))) await page.click(filesRail);
   await page.click(filesRail);
