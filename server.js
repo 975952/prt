@@ -2957,7 +2957,7 @@ async function handle(req, res) {
       }
       next.v = 4;
       if (!sessionTs(next.createdAt)) next.createdAt = sessionTs(previous?.updatedAt) || now;
-      await writeDataFile(file, next);
+      await writeDataFile(await writableSessionFile(file, sid), next);
       return next;
       }); }
       catch (e) {

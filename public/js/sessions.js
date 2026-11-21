@@ -209,7 +209,7 @@ function keyForRow(row) {
 
 async function patchMeta(row, patch) {
   try {
-    const q = new URLSearchParams({ sid: row.sid });
+    const q = new URLSearchParams({ doc: keyForRow(row), sid: row.sid });
     const r = await fetch(`/api/session?${q}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },

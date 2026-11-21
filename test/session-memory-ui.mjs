@@ -15,8 +15,9 @@ const fixture = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <style>body{display:block;padding:24px}#sessBar{display:flex;width:360px;height:34px}</style></head>
 <body><div id="sessBar"><button id="sessMemBtn" type="button" aria-controls="sessionMemoryPanel" aria-expanded="false"></button></div>
 <script type="module">
-import { SessionMemoryManager } from '/js/session-memory.js';
-import { SessionMemoryPanel } from '/js/session-memory-ui.js';
+localStorage.setItem('reader.locale', 'zh-CN');
+const { SessionMemoryManager } = await import('/js/session-memory.js');
+const { SessionMemoryPanel } = await import('/js/session-memory-ui.js');
 const manager = new SessionMemoryManager();
 window.memoryChanges = [];
 manager.onChange(change => window.memoryChanges.push(change.action));

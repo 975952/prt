@@ -853,6 +853,9 @@ let viewer = null;
 let serverState = {};
 let sessionMemoryPanel = null;
 const sessionMemoryWriteChains = new Map();
+const sessionMemoryOwners = new Map();
+const sessionMemoryVersions = new Map();
+const deletedSessionMemoryKeys = new Set();
 
 
 (async function boot() {
@@ -1049,6 +1052,7 @@ function matchesDeletedConversation(scope, sid, copies, otherScope, otherSid) {
   return otherSid === sid && ((copies && !!sid) || scopeDocIdOf(otherScope) === scopeDocIdOf(scope));
 }
 function retireDeletedConversation(scope, sid, { copies = false, announce = true } = {}) {
+  retireSessionMemories(scope, sid);
   const matches = (otherScope, otherSid) => matchesDeletedConversation(scope, sid, copies, otherScope, otherSid);
   const matchesKey = key => key && matches(...JSON.parse(key));
   const active = hasChatScope() && matches(sessionScopeKey(), activeSidFor(state.doc?.docId));
@@ -7674,6 +7678,7 @@ async function moveConversation(row, target) {
       if (matchesDeletedConversation(fromDoc, fromSid, false, owner.scope, owner.sid)) historySessionOwners.delete(slot);
     }
     // The server committed the move. Old queues and parked views must never resurrect it.
+    retireSessionMemories(fromDoc, fromSid);
     for (const key of new Set([...chatViews.keys(), currentChatKey(), chatOwnerKey(fromDoc, fromSid)])) {
       const [scope, sid] = JSON.parse(key);
       if (sid !== fromSid || scopeDocIdOf(scope) !== scopeDocIdOf(fromDoc)) continue;
@@ -8001,6 +8006,7 @@ function buildSessionPayload() {
 /** 保存：文件夹问答 → doc=<folderKey>；本文档译文 → doc=<docId>&sid=__translate（复用现有接口）。
  *  merge=1：服务端按条目 id 合并，多窗口同时写同一会话不会互相覆盖；保存成功后广播给其它窗口。 */
 async function saveSessionNow() {
+  await flushSessionMemoryWrites();
   if (!hasChatScope()) return;
   const owner = captureSessionOwner();
   const editVersion = sessionEditVersion;
@@ -8047,14 +8053,14 @@ function onRemoteSessionSaved(data) {
   if (!data || data.sender === windowId) return;
   if (data.kind === 'memory') {
     const scope = scopeDocIdOf(data.scope) === scopeDocIdOf('default') ? 'default' : data.scope;
-    const owner = captureSessionOwner();
-    if (owner.sid !== data.sid || scopeDocIdOf(owner.scope) !== scopeDocIdOf(scope)) return;
-    fetch('/api/session?' + new URLSearchParams({ sid: data.sid }), { headers: { 'Content-Type': 'application/json' } })
+    const key = sessionMemoryKey(scope, data.sid);
+    const version = sessionMemoryVersions.get(key);
+    fetch('/api/session?' + new URLSearchParams({ doc: scope, sid: data.sid }))
       .then(response => response.ok ? response.json() : null)
       .then(saved => {
-        if (!saved || !sessionOwnerCurrent(owner)) return;
-        sessionMemory.import(data.sid, saved.memories || []);
-        sessionMemoryPanel?.render();
+        if (!saved || version !== sessionMemoryVersions.get(key)) return;
+        if (saved.deleted) { retireDeletedConversation(scope, data.sid, { copies: !!data.sid }); return; }
+        loadSessionMemories(scope, data.sid, saved.memories);
         refreshSavedConversationList(scope, data.sid);
       }).catch(() => {});
     return;
@@ -8587,6 +8593,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     if (!canApply && docId && !agentSessionOverride) await migrateLegacySession(docId);
     if (!current()) return;
     const { sid, scope } = owner;
+    const memoryVersion = sessionMemoryVersions.get(sessionMemoryKey(scope, sid));
     // 当前文件夹的问答会话 + 本文档译文伪会话（文档级）
     const [chatRes, translateRes] = await Promise.all([
       fetch(`/api/session?${sessionQuery(scope, sid)}`),
@@ -8597,7 +8604,9 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     const savedTranslate = translateRes?.ok ? await translateRes.json() : {};
     if (!current()) return;
     if (savedChat.deleted) { retireDeletedConversation(scope, sid); return; }
-    if (only !== 'translate') sessionMemory.import(sid, savedChat.memories || []);
+    if (only !== 'translate' && memoryVersion === sessionMemoryVersions.get(sessionMemoryKey(scope, sid))) {
+      loadSessionMemories(scope, sid, savedChat.memories);
+    }
     if (savedChat.draftOwner && only !== 'translate') {
       registerMovedSessionDraft(scope, sid, savedChat.draftOwner);
       activateComposerDraft('chat');
@@ -9065,7 +9074,7 @@ async function switchSession(sid, { force = false, storageOwner = null } = {}) {
   } else {
     setActiveSidFor(docId, sid || '');
   }
-  sessionMemoryPanel?.setSession(sid || '');
+  setSessionMemoryContext();
   activateComposerDraft('chat');
   displayedChatKey = currentChatKey();
   refreshChatJobState();
@@ -9159,7 +9168,7 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   const sid = newSid();
   sessionMemory.import(sid, []);
   setActiveSidFor(docId, sid);
-  sessionMemoryPanel?.setSession(sid);
+  setSessionMemoryContext();
   if (entryDraft && effectiveSessionScopeMode() === 'global') writeComposerDraft(currentComposerOwner('chat'), entryDraft);
   activateComposerDraft('chat');
   displayedChatKey = currentChatKey();
@@ -9221,34 +9230,111 @@ async function deleteSession(sid, { confirm: askConfirm = true, scope = sessionS
 }
 
 function initSessionMemoryPanel() {
-  const button = $('#sessMemBtn');
-  if (!button) return;
+  const buttons = [$('#sessMemBtn'), $('#agentMemory')].filter(Boolean);
+  if (!buttons.length) return;
   sessionMemoryPanel = new SessionMemoryPanel(sessionMemory);
-  button.replaceChildren(iconEl('note', { size: 15 }));
-  sessionMemoryPanel.init(button);
-  sessionMemory.onChange(({ sid, memory, action }) => {
-    const owner = { docId: state.doc?.docId || '', scope: sessionScopeKey(), sid: String(sid ?? '') };
-    const key = owner.sid;
-    const prior = sessionMemoryWriteChains.get(key) || Promise.resolve();
-    const write = prior.catch(() => {}).then(async () => {
-      const query = new URLSearchParams({ sid: owner.sid });
-      const response = await fetch('/api/session?' + query, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ memoryOp: { action, memory } }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(result?.error?.message || 'HTTP ' + response.status);
-      notifySessionSaved({ kind: 'memory', docId: owner.docId, scope: owner.scope, sid: owner.sid });
-      refreshSavedConversationList(owner.scope, owner.sid);
-    }).catch(error => {
-      toast(tr('记忆保存失败：{0}', error.message), 'err', 5000);
-    });
-    sessionMemoryWriteChains.set(key, write);
-    write.then(() => {
-      if (sessionMemoryWriteChains.get(key) === write) sessionMemoryWriteChains.delete(key);
-    });
+  for (const button of buttons) button.querySelector('.session-memory-icon')?.replaceChildren(iconEl('note', { size: 15 }));
+  sessionMemoryPanel.init(buttons, { retry: key => flushSessionMemoryWrite(key).catch(() => {}) });
+  sessionMemory.onChange(({ sid: key, memory, action }) => {
+    const owner = sessionMemoryOwners.get(key);
+    if (!owner || deletedSessionMemoryKeys.has(key)) return;
+    sessionMemoryVersions.set(key, (sessionMemoryVersions.get(key) || 0) + 1);
+    const queue = sessionMemoryWriteChains.get(key) || { owner, pending: [], task: null };
+    queue.pending.push({ action, memory: memory ? { ...memory } : null });
+    sessionMemoryWriteChains.set(key, queue);
+    flushSessionMemoryWrite(key).catch(error => toast(tr('记忆保存失败：{0}', error.message), 'err', 5000));
   });
+}
+
+// Named conversations share their SID; old unnamed conversations still belong to a scope.
+function sessionMemoryKey(scope, sid) { return sid || 'legacy:' + scopeDocIdOf(scope); }
+
+function retireSessionMemories(scope, sid) {
+  const deletedKey = sessionMemoryKey(scope, sid);
+  const keys = new Set([deletedKey, ...sessionMemoryOwners.keys(), ...sessionMemoryWriteChains.keys()]);
+  for (const key of keys) {
+    const queue = sessionMemoryWriteChains.get(key);
+    const owner = queue?.owner || sessionMemoryOwners.get(key);
+    if (key !== deletedKey && (!owner || !matchesDeletedConversation(scope, sid, !!sid, owner.scope, owner.sid))) continue;
+    deletedSessionMemoryKeys.add(key);
+    sessionMemoryVersions.set(key, (sessionMemoryVersions.get(key) || 0) + 1);
+    if (queue) {
+      queue.retired = true;
+      queue.pending.length = 0;
+      queue.controller?.abort('session-deleted');
+      if (sessionMemoryWriteChains.get(key) === queue) sessionMemoryWriteChains.delete(key);
+    }
+    sessionMemoryOwners.delete(key);
+    sessionMemory.import(key, []);
+    sessionMemoryPanel?.setSaveState(key, '');
+    if (sessionMemoryPanel?.currentSid === key) sessionMemoryPanel.setSession(null);
+  }
+}
+
+function setSessionMemoryContext(available = true) {
+  if (!sessionMemoryPanel) return;
+  if (!available) { sessionMemoryPanel.setSession(null); return; }
+  const owner = { docId: state.doc?.docId || '', scope: sessionScopeKey(), sid: activeSidFor(state.doc?.docId || '') };
+  const key = sessionMemoryKey(owner.scope, owner.sid);
+  if (deletedSessionMemoryKeys.has(key)) { sessionMemoryPanel.setSession(null); return; }
+  sessionMemoryOwners.set(key, owner);
+  sessionMemoryPanel.setSession(key);
+}
+
+function loadSessionMemories(scope, sid, memories) {
+  const key = sessionMemoryKey(scope, sid);
+  // A late read must not discard a local edit that has not reached disk yet.
+  if (deletedSessionMemoryKeys.has(key) || sessionMemoryWriteChains.get(key)?.pending.length) return;
+  sessionMemory.import(key, memories || []);
+  sessionMemoryPanel?.render();
+}
+
+function flushSessionMemoryWrite(key) {
+  const queue = sessionMemoryWriteChains.get(key);
+  if (!queue?.pending.length || queue.retired) return Promise.resolve();
+  if (queue.task) return queue.task;
+  const current = () => sessionMemoryWriteChains.get(key) === queue && !queue.retired;
+  queue.controller = new AbortController();
+  sessionMemoryPanel?.setSaveState(key, 'saving');
+  queue.task = (async () => {
+    const { owner } = queue;
+    while (current() && queue.pending.length) {
+      const { response, result } = await runWithDeadline(async signal => {
+        const response = await fetch('/api/session?' + new URLSearchParams({ doc: owner.scope, sid: owner.sid }), {
+          method: 'PATCH', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ memoryOp: queue.pending[0] }), signal,
+        });
+        return { response, result: await response.json().catch(() => ({})) };
+      }, { signal: queue.controller.signal, timeoutMs: 15000 });
+      if (!current()) return;
+      if (response.status === 409 && (result?.code || result?.error?.code) === 'SESSION_DELETED') {
+        await retireDeletedConversation(owner.scope, owner.sid, { copies: !!owner.sid });
+        return;
+      }
+      if (!response.ok) throw new Error(result?.error?.message || 'HTTP ' + response.status);
+      queue.pending.shift();
+      // Invalidate reads started before this operation reached disk, even if
+      // the pending queue has drained by the time their snapshot arrives.
+      sessionMemoryVersions.set(key, (sessionMemoryVersions.get(key) || 0) + 1);
+    }
+    if (!current()) return;
+    notifySessionSaved({ kind: 'memory', ...owner });
+    refreshSavedConversationList(owner.scope, owner.sid);
+    sessionMemoryPanel?.setSaveState(key, 'saved');
+  })().catch(error => {
+    if (!current()) return;
+    sessionMemoryPanel?.setSaveState(key, 'error');
+    throw error;
+  }).finally(() => {
+    queue.task = null;
+    queue.controller = null;
+    if (current() && !queue.pending.length) sessionMemoryWriteChains.delete(key);
+  });
+  return queue.task;
+}
+
+function flushSessionMemoryWrites() {
+  return Promise.all([...sessionMemoryWriteChains.keys()].map(flushSessionMemoryWrite));
 }
 
 function renderSessionBar() {
@@ -9257,7 +9343,7 @@ function renderSessionBar() {
   if (!bar) return;
   // 会话头只在问答块开着的时候出现（译文页不该挂着会话信息）
   const chatActive = hasChatScope() && rightPanelInCol(1) === 'chat';
-  sessionMemoryPanel?.setSession(chatActive ? activeSidFor(state.doc?.docId || '') : null);
+  setSessionMemoryContext(hasChatScope() && (agentWorkspaceView === 'full' || chatActive));
   bar.classList.toggle('hidden', !chatActive);
   if (chatActive) sessionsRefreshHeader();
   updateAgentRecentSessions();
@@ -15793,7 +15879,9 @@ window.addEventListener('beforeunload', (event) => {
   saveComposerDraft();
   const draftPending = hasUnsavedComposerDrafts();
   flushComposerDrafts().catch(() => {});
-  if (draftPending) { event.preventDefault(); event.returnValue = ''; }
+  const memoryPending = [...sessionMemoryWriteChains.values()].some(queue => queue.pending.length);
+  if (memoryPending) flushSessionMemoryWrites().catch(() => {});
+  if (draftPending || memoryPending) { event.preventDefault(); event.returnValue = ''; }
   // 不能只是 cancel：那样刚翻的那页进度就丢了。用 keepalive fetch 保证送达。
   saveProgress.cancel?.();
   persistSession.flush?.();

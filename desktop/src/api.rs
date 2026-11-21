@@ -1931,6 +1931,133 @@ fn session_content_fingerprint(data: &Value) -> String {
     )
 }
 
+enum SessionMemoryOperation {
+    Add(Value),
+    Edit(Value),
+    Remove(String),
+    Clear,
+}
+
+struct SessionMemoryPatch {
+    replacement: Option<Vec<Value>>,
+    operation: Option<SessionMemoryOperation>,
+}
+
+fn valid_memory_id(id: &str) -> bool {
+    !id.is_empty() && id.len() <= 80
+        && id.bytes().all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'))
+}
+
+fn normalize_session_memory(raw: &Value) -> Result<Value, &'static str> {
+    let id = raw.get("id").filter(|value| truthy(value)).map(js_string).unwrap_or_default();
+    let content = utf16_clip(raw.get("content").and_then(Value::as_str).unwrap_or("").trim(), 2000);
+    if !raw.is_object() || !valid_memory_id(&id) || content.is_empty() {
+        return Err("会话记忆内容不合法");
+    }
+    let category = raw.get("category").filter(|value| truthy(value))
+        .map(js_string).unwrap_or_else(|| "note".to_string());
+    let category = utf16_clip(category.trim(), 50);
+    Ok(json!({
+        "id": id,
+        "content": content,
+        "category": if category.is_empty() { "note" } else { &category },
+        "createdAt": session_ts(raw.get("createdAt")),
+        "updatedAt": session_ts(raw.get("updatedAt")),
+    }))
+}
+
+impl SessionMemoryPatch {
+    fn parse(patch: &Value) -> Result<Self, &'static str> {
+        let replacement = if let Some(raw) = patch.get("memories") {
+            let memories = raw.as_array().filter(|items| items.len() <= 200)
+                .ok_or("会话记忆列表不合法")?;
+            Some(memories.iter().map(normalize_session_memory).collect::<Result<Vec<_>, _>>()?)
+        } else { None };
+        let operation = if let Some(raw) = patch.get("memoryOp") {
+            let operation = match raw.get("action").and_then(Value::as_str) {
+                Some("add") => SessionMemoryOperation::Add(normalize_session_memory(&raw["memory"])?),
+                Some("edit") => SessionMemoryOperation::Edit(normalize_session_memory(&raw["memory"])?),
+                Some("remove") => {
+                    let id = raw.get("memory").and_then(|memory| memory.get("id"))
+                        .filter(|value| truthy(value)).map(js_string).unwrap_or_default();
+                    if !valid_memory_id(&id) { return Err("会话记忆编号不合法"); }
+                    SessionMemoryOperation::Remove(id)
+                }
+                Some("clear") => SessionMemoryOperation::Clear,
+                _ => return Err("会话记忆操作不合法"),
+            };
+            Some(operation)
+        } else { None };
+        Ok(Self { replacement, operation })
+    }
+
+    fn can_create(&self) -> bool {
+        matches!(self.operation, Some(SessionMemoryOperation::Add(_)))
+            || self.replacement.as_ref().is_some_and(|items| !items.is_empty())
+    }
+
+    fn apply(&self, next: &mut Map<String, Value>, now: u64) -> Result<(), &'static str> {
+        let previous = next.get("memories").and_then(Value::as_array).cloned().unwrap_or_default();
+        let mut memories = self.replacement.clone().unwrap_or_else(|| previous.clone());
+        if self.replacement.is_some() {
+            for memory in &mut memories {
+                let old = previous.iter().find(|item| item.get("id") == memory.get("id"));
+                if session_ts(memory.get("createdAt")) == 0 {
+                    let created = session_ts(old.and_then(|item| item.get("createdAt")));
+                    memory["createdAt"] = json!(if created > 0 { created } else { now });
+                }
+                if session_ts(memory.get("updatedAt")) == 0 { memory["updatedAt"] = json!(now); }
+            }
+        }
+        if let Some(operation) = &self.operation {
+            match operation {
+                SessionMemoryOperation::Clear => memories.clear(),
+                SessionMemoryOperation::Remove(id) => memories.retain(|item| item.get("id").and_then(Value::as_str) != Some(id.as_str())),
+                SessionMemoryOperation::Add(memory) | SessionMemoryOperation::Edit(memory) => {
+                    let index = memories.iter().position(|item| item.get("id") == memory.get("id"));
+                    if matches!(operation, SessionMemoryOperation::Edit(_)) && index.is_none() {
+                        return Err("会话记忆不存在或已被删除");
+                    }
+                    let mut saved = memory.clone();
+                    if session_ts(saved.get("createdAt")) == 0 {
+                        let created = session_ts(index.and_then(|i| memories[i].get("createdAt")));
+                        saved["createdAt"] = json!(if created > 0 { created } else { now });
+                    }
+                    saved["updatedAt"] = json!(now);
+                    if let Some(index) = index { memories[index] = saved; } else { memories.push(saved); }
+                    memories.sort_by_key(|item| std::cmp::Reverse(session_ts(item.get("createdAt"))));
+                }
+            }
+        }
+        if self.operation.is_some() || self.replacement.is_some() {
+            if memories.is_empty() { next.remove("memories"); }
+            else { next.insert("memories".to_string(), Value::Array(memories)); }
+            next.insert("updatedAt".to_string(), json!(now));
+            let revision = next.get("contentRev").and_then(Value::as_u64).unwrap_or(0);
+            next.insert("contentRev".to_string(), json!(revision + 1));
+        }
+        Ok(())
+    }
+}
+
+// Chat saves do not carry memory snapshots. Preserve the stored collection even
+// when replacing/clearing the chat payload; explicit memory patches own removal.
+fn merged_session_memories(old: Option<&Value>, payload: &Value) -> Vec<Value> {
+    let mut memories: Vec<Value> = Vec::new();
+    for data in old.into_iter().chain(std::iter::once(payload)) {
+        for memory in data.get("memories").and_then(Value::as_array).into_iter().flatten() {
+            let Some(id) = memory.get("id").and_then(Value::as_str).filter(|id| !id.is_empty()) else { continue; };
+            if let Some(index) = memories.iter().position(|item| item.get("id").and_then(Value::as_str) == Some(id)) {
+                if session_ts(memory.get("updatedAt")) >= session_ts(memories[index].get("updatedAt")) {
+                    memories[index] = memory.clone();
+                }
+            } else { memories.push(memory.clone()); }
+        }
+    }
+    memories.sort_by_key(|item| std::cmp::Reverse(session_ts(item.get("createdAt"))));
+    memories
+}
+
 /// POST /api/session 落盘前的整理：把 meta 补进 payload（与 Node 的 prepareSessionRecord 一致）
 fn prepare_session_record(payload: &Value, old: Option<&Value>) -> Value {
     let now = now_ms();
@@ -2043,6 +2170,9 @@ fn prepare_session_record(payload: &Value, old: Option<&Value>) -> Value {
         + if changed { 1 } else { 0 };
 
     let mut out = payload.as_object().cloned().unwrap_or_default();
+    let memories = merged_session_memories(old, payload);
+    if memories.is_empty() { out.remove("memories"); }
+    else { out.insert("memories".to_string(), Value::Array(memories)); }
     out.insert("v".to_string(), json!(4));
     out.insert("folderPath".to_string(), json!(folder_path));
     out.insert("title".to_string(), json!(title));
@@ -2657,7 +2787,7 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
                 }),
             );
         }
-        // 会话 meta 的小改动（标题 / 置顶 / 归档 / 打开时间），只允许白名单字段
+        // 会话 meta / 记忆的小改动，只允许白名单字段；记忆操作不替换聊天正文。
         Method::Patch => {
             let patch = match parse_json(body) {
                 Ok(v) => v,
@@ -2666,14 +2796,21 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
             if !patch.is_object() {
                 return send_json(rq, 400, &err_json("会话 meta 必须是对象"));
             }
+            let memory_patch = match SessionMemoryPatch::parse(&patch) {
+                Ok(memory_patch) => memory_patch,
+                Err(message) => return send_json(rq, 400, &err_json(message)),
+            };
             let _guard = session_write_lock().lock().unwrap_or_else(|e| e.into_inner());
             let file = session_file_resolved(&doc, &sid);
             if session_was_deleted(&file) || chat_was_deleted(&sid) { return send_json(rq, 409, &deleted_session_response()); }
-            let cur = match store::read_json_opt(&file) {
-                Some(v) if v.is_object() => v,
+            let now = now_ms();
+            let previous = store::read_json_opt(&file).filter(Value::is_object);
+            let storage_doc = session_storage_owner(&file, previous.as_ref(), &doc);
+            let cur = match previous {
+                Some(value) => value,
+                _ if memory_patch.can_create() => json!({"entries":[],"history":[],"ops":[],"createdAt":now,"updatedAt":now}),
                 _ => return send_json(rq, 404, &err_json("会话不存在或已被删除")),
             };
-            let now = now_ms();
             let mut next = cur.as_object().cloned().unwrap_or_default();
             if json_has_key(&patch, "title") {
                 let t = utf16_clip(
@@ -2732,10 +2869,13 @@ pub fn session(rq: Request, method: &Method, raw_query: &str, body: &[u8]) {
                     next.insert("lastOpenedAt".to_string(), json!(t));
                 }
             }
+            if let Err(message) = memory_patch.apply(&mut next, now) {
+                return send_json(rq, 404, &err_json(message));
+            }
             next.insert("v".to_string(), json!(4));
             next.insert("storageSid".to_string(), json!(sid));
             if logical_chat_sid(&sid) {
-                next.insert("storageDoc".to_string(), json!(session_storage_owner(&file, Some(&cur), &doc)));
+                next.insert("storageDoc".to_string(), json!(storage_doc));
             }
             if session_ts(next.get("createdAt")) == 0 {
                 let fallback = session_ts(next.get("updatedAt"));
@@ -4534,6 +4674,72 @@ pub fn ref_search(rq: Request, raw_query: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memory_patches_preserve_chat_and_support_edit_remove_and_clear() {
+        let now = 1795200000000;
+        let mut saved = json!({"entries":[{"id":"question","text":"unchanged"}],"history":[],"contentRev":3})
+            .as_object().unwrap().clone();
+        let apply = |saved: &mut Map<String, Value>, patch: Value| {
+            SessionMemoryPatch::parse(&patch).unwrap().apply(saved, now).unwrap();
+        };
+        apply(&mut saved, json!({"memoryOp":{"action":"add","memory":{"id":"mem-one","content":"First"}}}));
+        apply(&mut saved, json!({"memoryOp":{"action":"add","memory":{"id":"mem-two","content":"Second"}}}));
+        apply(&mut saved, json!({"memoryOp":{"action":"edit","memory":{"id":"mem-one","content":"Edited","category":"reference"}}}));
+        assert_eq!(saved["entries"][0]["text"], "unchanged");
+        assert_eq!(saved["memories"].as_array().unwrap().len(), 2);
+        let edited = saved["memories"].as_array().unwrap().iter().find(|row| row["id"] == "mem-one").unwrap();
+        assert_eq!(edited["content"], "Edited");
+        assert_eq!(edited["category"], "reference");
+        assert_eq!(edited["createdAt"], now);
+        apply(&mut saved, json!({"memoryOp":{"action":"remove","memory":{"id":"mem-one"}}}));
+        assert_eq!(saved["memories"].as_array().unwrap().len(), 1);
+        apply(&mut saved, json!({"memoryOp":{"action":"remove","memory":{"id":"mem-two"}}}));
+        assert!(!saved.contains_key("memories"));
+        apply(&mut saved, json!({"memoryOp":{"action":"add","memory":{"id":"mem-three","content":"Third"}}}));
+        apply(&mut saved, json!({"memoryOp":{"action":"clear"}}));
+        assert!(!saved.contains_key("memories"));
+        assert_eq!(saved["contentRev"], 10);
+    }
+
+    #[test]
+    fn memory_replacement_is_validated_and_creates_only_with_content() {
+        let now = 1795200000000;
+        for patch in [
+            json!({"memoryOp":{"action":"unknown"}}),
+            json!({"memoryOp":{"action":"add","memory":{"id":"bad","content":"  "}}}),
+            json!({"memoryOp":{"action":"remove","memory":{"id":"../bad"}}}),
+            json!({"memories":null}),
+            json!({"memories":[null]}),
+        ] { assert!(SessionMemoryPatch::parse(&patch).is_err(), "{patch}"); }
+        let empty = SessionMemoryPatch::parse(&json!({"memories":[]})).unwrap();
+        assert!(!empty.can_create());
+        let replacement = SessionMemoryPatch::parse(&json!({"memories":[{"id":"mem-one","content":" new "}]})).unwrap();
+        assert!(replacement.can_create());
+        let mut saved = json!({"entries":[],"memories":[{"id":"old","content":"Old"}]}).as_object().unwrap().clone();
+        replacement.apply(&mut saved, now).unwrap();
+        assert_eq!(saved["memories"].as_array().unwrap().len(), 1);
+        assert_eq!(saved["memories"][0]["content"], "new");
+        empty.apply(&mut saved, now).unwrap();
+        assert!(!saved.contains_key("memories"));
+        let edit = SessionMemoryPatch::parse(&json!({"memoryOp":{"action":"edit","memory":{"id":"missing","content":"Value"}}})).unwrap();
+        assert!(!edit.can_create());
+        assert!(edit.apply(&mut saved, now).is_err());
+    }
+
+    #[test]
+    fn chat_replacement_keeps_saved_memories_but_cannot_restore_removed_items() {
+        let old = json!({"entries":[{"id":"question","text":"Old question"}],
+            "memories":[{"id":"mem-one","content":"Remember this","createdAt":1795200000000u64,"updatedAt":1795200000000u64}]});
+        let cleared_chat = prepare_session_record(&json!({"entries":[],"history":[]}), Some(&old));
+        assert_eq!(cleared_chat["memories"], old["memories"]);
+        assert_eq!(cleared_chat["entries"], json!([]));
+        let mut without_memory = cleared_chat.as_object().unwrap().clone();
+        SessionMemoryPatch::parse(&json!({"memoryOp":{"action":"remove","memory":{"id":"mem-one"}}})).unwrap()
+            .apply(&mut without_memory, 1795200000001).unwrap();
+        let saved = prepare_session_record(&json!({"entries":[{"id":"new","text":"New question"}]}), Some(&Value::Object(without_memory)));
+        assert!(saved.get("memories").is_none());
+    }
 
     #[test]
     fn session_regeneration_merge_matches_shared_fixtures() {

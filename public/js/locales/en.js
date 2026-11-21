@@ -1,6 +1,14 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "会话记忆": "Conversation memory", "记忆": "Memory", "会话记忆（{0}）": "Conversation memory ({0})",
+  "搜索记忆": "Search memories", "按分类筛选": "Filter by category", "所有分类": "All categories",
+  "标签": "Tag", "引用": "Reference", "添加一条会话记忆": "Add a memory for this conversation",
+  "记忆内容": "Memory content", "记忆分类": "Memory category", "添加": "Add", "编辑": "Edit",
+  "编辑记忆": "Edit memory", "删除记忆": "Delete memory", "确定删除这条记忆吗？": "Delete this memory?",
+  "还没有会话记忆": "No conversation memories yet", "没有找到符合条件的记忆": "No matching memories",
+  "正在保存记忆…": "Saving memory…", "记忆尚未保存，请重试": "Memory not saved. Please retry.",
+  "重试保存": "Retry save", "记忆保存失败：{0}": "Could not save memory: {0}",
   "阅读侧栏": "Reading sidebar",
   "深色模式": "Dark mode",
   "阅读工具": "Reading tools", "更多阅读工具": "More reading tools", "自定义工具栏": "Customize toolbar",

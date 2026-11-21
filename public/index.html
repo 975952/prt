@@ -294,6 +294,7 @@
       <button type="button" class="agent-nav-button agent-nav-new" id="agentNavNew"><span data-agent-icon="chat-new" aria-hidden="true"></span><span>新对话</span></button>
       <button type="button" class="agent-nav-button" id="agentPapersToggle" aria-expanded="false" aria-controls="agentPaperPicker"><span data-agent-icon="book" aria-hidden="true"></span><span>打开论文</span></button>
       <button type="button" class="agent-nav-button" id="agentHistory"><span data-agent-icon="history" aria-hidden="true"></span><span>历史会话</span></button>
+      <button type="button" class="agent-nav-button session-memory-button" id="agentMemory" aria-label="会话记忆" aria-controls="sessionMemoryPanel" aria-expanded="false" disabled><span class="session-memory-icon" aria-hidden="true"></span><span>会话记忆</span></button>
     </nav>
     <section class="agent-nav-recents" aria-labelledby="agentNavRecentHeading">
       <h2 id="agentNavRecentHeading">最近会话</h2>
@@ -367,7 +368,7 @@
         <span class="agent-session-label">新对话</span>
       </button>
       <button type="button" class="sess-icon-btn session-memory-button" id="sessMemBtn" title="会话记忆（Ctrl+Shift+M）"
-        aria-label="会话记忆" aria-controls="sessionMemoryPanel" aria-expanded="false" disabled></button>
+        aria-label="会话记忆" aria-controls="sessionMemoryPanel" aria-expanded="false" disabled><span class="session-memory-icon" aria-hidden="true"></span><span>记忆</span></button>
       <button type="button" class="sess-icon-btn" id="sessHist" title="会话历史（Ctrl+Shift+H）" aria-label="会话历史" aria-expanded="false">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 6.4h16M4 12h16M4 17.6h16"/></svg>
         <span class="agent-session-label">历史会话</span>
