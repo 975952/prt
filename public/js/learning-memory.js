@@ -17,8 +17,17 @@ const sensitiveFact = /(?:sk-[a-z\d_-]{12,}|bearer\s+[a-z\d._-]{12,}|(?:api[_ -]
 const identityKinds = new Set(['identity']);
 
 /** 用户明确要求「记住」时，名字/称呼走确定性路径：不依赖模型提取也能落盘 */
-const explicitRemember = /(?:请)?记住|记一下|别忘/i;
-const explicitName = /(?:我叫|我的名字(?:是|叫)?|名字叫|请叫我|叫我|称呼我(?:为|是)?)\s*([A-Za-z][\w.\- ]{0,19}|[\u4e00-\u9fa5·]{1,8})/;
+const explicitRemember = /记(?:住|下(?:来)?|一下)|记录(?:下(?:来)?|一下)?|别忘|\bremember\b/i;
+const declinedRemember = /(?:不(?:要|用|必|需要|想|希望)?|别|无需|不能|禁止)[^，,。.!！?？；;\n]{0,24}?(?:记|保存|叫我|称呼我)|忘(?:记|掉)|删(?:掉|除)|清除|\b(?:do\s+not|don['’]?t|never|stop)\s+(?:(?:want|need)\s+(?:you\s+)?to\s+)?(?:remember|record|save|call\s+me)|\bforget\b/i;
+const explicitName = /(?:我叫|我的名字(?:是|叫)?|名字叫|请叫我|叫我|称呼我(?:为|是)?|\bmy name is\b|\bcall me\b)\s*([A-Za-z][\w.\- ]{0,19}|[\u4e00-\u9fa5·]{1,8})/i;
+
+// 引用、示例和代码里的自我介绍不是本轮用户的身份声明。
+function unquotedIdentityText(value) {
+  return String(value || '')
+    .replace(/```[\s\S]*?(?:```|$)|`[^`]*`/g, ' ')
+    .replace(/“[^”]*”|‘[^’]*’|「[^」]*」|『[^』]*』|"[^"]*"|(?:^|[\s:：])'[^'\r\n]+'/g, ' ')
+    .replace(/^\s*>.*$/gm, ' ');
+}
 
 /**
  * 从「我叫 Cyan，请记住」这类明确要求里直接提取身份事实。
@@ -26,13 +35,15 @@ const explicitName = /(?:我叫|我的名字(?:是|叫)?|名字叫|请叫我|叫
  * @returns {Array<object>} 可直接交给 withMemoryObservations 的观察
  */
 export function explicitIdentityFacts(question) {
-  const text = normalText(String(question || '')).slice(0, 400);
-  if (!text || !explicitRemember.test(text) || !identityHint.test(text) || sensitiveFact.test(text)) return [];
-  const m = explicitName.exec(text);
+  const text = normalText(String(question || ''));
+  const direct = normalText(unquotedIdentityText(question));
+  if (!text || text.length > 400 || !explicitRemember.test(direct) || !identityHint.test(direct)
+    || sensitiveFact.test(text) || declinedRemember.test(direct.replace(/别忘(?:了|记)?/g, ''))) return [];
+  const m = explicitName.exec(direct);
   if (!m) return [];
   const value = String(m[1] || '')
     .replace(/[\s，,。.!！?？].*$/s, '')
-    .replace(/(?:请|记得|记住|就行|就好|谢谢|吧|啊|呀|哦|呢).*$/s, '')
+    .replace(/(?:请|记得|记住|记下|记录|就行|就好|谢谢|吧|啊|呀|哦|呢).*$/s, '')
     .trim();
   if (!value || value.length > 20 || sensitiveFact.test(value)) return [];
   return [{
@@ -114,8 +125,9 @@ export function withMemoryObservations(profile, observations, { source = {}, at 
     if (item && observation.signal === 'inferred' && item.basis !== 'model_inferred') continue;
     if (item && item.memory?.evidence === observation.evidence && item.memory?.signal === observation.signal
       && item.level === observation.level && item.boundary === observation.boundary) continue;
-    // 同一个原话不能被重复处理成更高的理解程度；重试不应刷新学习时间。
-    if (item && item.memory?.evidence === observation.evidence && item.source?.docId === source.docId) continue;
+    // 同一个原话不能被重复处理成更高的理解程度；身份更正则以本次明确值为准。
+    if (item && observation.kind !== 'identity' && item.memory?.evidence === observation.evidence
+      && item.source?.docId === source.docId) continue;
     const explicit = ['self_report', 'needs_help', 'preference'].includes(observation.signal);
     const defaults = { self_report: '用户自述理解', needs_help: '仍需讲解', demonstrated: '本次对话中正确运用', inferred: '可能接触过，依据有限', preference: '持续讲解偏好' };
     if (observation.kind === 'identity') defaults.self_report = '用户自述身份';
@@ -153,13 +165,15 @@ export function createLearningMemory({ store, extract }) {
     observe(turn) {
       if (!store.enabled || !shouldExtractMemory(turn.question) || pending >= 8) return queue;
       const snapshot = { ...turn, source: { ...turn.source }, history: (turn.history || []).map((m) => ({ ...m })), at: nowISO() };
+      const editRevision = store.memoryEditRevision || 0;
+      const current = () => editRevision === (store.memoryEditRevision || 0);
       pending++;
       queue = queue.catch(() => {}).then(async () => {
-        if (!store.enabled) return;
+        if (!store.enabled || !current()) return;
         const output = await extract(memoryExtractMessages({ ...snapshot, profile: store.data }));
         const observations = parseMemorySuggestions(output, snapshot.question);
-        if (store.enabled && observations.length) {
-          await store.update((current) => withMemoryObservations(current, observations, snapshot));
+        if (store.enabled && current() && observations.length) {
+          await store.update((profile) => current() ? withMemoryObservations(profile, observations, snapshot) : null);
         }
       }).catch(() => {}).finally(() => { pending--; });
       return queue;

@@ -143,9 +143,16 @@
 
 .memory-time {
   flex: 0 0 auto;
+  margin-left: auto;
   color: var(--fg-faint);
   font-size: var(--ui-fs-2xs, 11px);
 }
+
+.memory-scope { color: var(--fg-faint); font-size: var(--ui-fs-2xs, 11px); white-space: nowrap; }
+.memory-item-topic { margin: 0 0 4px; color: var(--fg-dim); font-size: var(--ui-fs-xs, 12px); font-weight: 600; overflow-wrap: anywhere; }
+.memory-item-boundary { margin: 0 0 5px; color: var(--fg-dim); font-size: var(--ui-fs-xs, 12px); line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.memory-edit-btn:disabled, .memory-delete-btn:disabled, .memory-add-btn:disabled { opacity: .5; cursor: default; }
+.memory-add-category[hidden] { display: none; }
 
 .memory-item-content {
   margin: 0 0 5px;

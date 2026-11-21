@@ -8051,6 +8051,11 @@ function scheduleRemoteSession() {
 }
 function onRemoteSessionSaved(data) {
   if (!data || data.sender === windowId) return;
+  if (data.kind === 'profile') {
+    profileStore.memoryEditRevision++;
+    profileStore.load();
+    return;
+  }
   if (data.kind === 'memory') {
     const scope = scopeDocIdOf(data.scope) === scopeDocIdOf('default') ? 'default' : data.scope;
     const key = sessionMemoryKey(scope, data.sid);
@@ -9232,7 +9237,10 @@ async function deleteSession(sid, { confirm: askConfirm = true, scope = sessionS
 function initSessionMemoryPanel() {
   const buttons = [$('#sessMemBtn'), $('#agentMemory')].filter(Boolean);
   if (!buttons.length) return;
-  sessionMemoryPanel = new SessionMemoryPanel(sessionMemory);
+  sessionMemoryPanel = new SessionMemoryPanel(sessionMemory, { profileStore });
+  profileStore.onChange((_profile, kind) => {
+    if (kind === 'commit') notifySessionSaved({ kind: 'profile' });
+  });
   for (const button of buttons) button.querySelector('.session-memory-icon')?.replaceChildren(iconEl('note', { size: 15 }));
   sessionMemoryPanel.init(buttons, { retry: key => flushSessionMemoryWrite(key).catch(() => {}) });
   sessionMemory.onChange(({ sid: key, memory, action }) => {
@@ -9278,7 +9286,7 @@ function setSessionMemoryContext(available = true) {
   const key = sessionMemoryKey(owner.scope, owner.sid);
   if (deletedSessionMemoryKeys.has(key)) { sessionMemoryPanel.setSession(null); return; }
   sessionMemoryOwners.set(key, owner);
-  sessionMemoryPanel.setSession(key);
+  sessionMemoryPanel.setSession(key, { docId: owner.docId });
 }
 
 function loadSessionMemories(scope, sid, memories) {
@@ -9720,12 +9728,13 @@ function sessionSummaryBlock() {
 }
 
 /** 所有问答 / 教学请求共用的「记忆块」：学习画像 + 长期记忆 + 论文讨论 + 会话摘要 */
-function askProfileBlock(docText = '', question = '', { docId = '', paperMemory = state.paperMemory, summary = state.sessionSummary } = {}) {
+function askProfileBlock(docText = '', question = '', { docId = '', paperMemory = state.paperMemory, summary = state.sessionSummary, memoryWrite = '' } = {}) {
   return [
     buildProfileBlock(profileStore.data, docText, question, { docId }),
     longTermMemoryBlock(),
     paperMemory ? `【这篇论文之前的讨论摘要（由阅读器自动生成，不等于论文原文，不要当证据引用）】\n${String(paperMemory).trim()}` : '',
     summary ? `【本次会话早先内容摘要（由阅读器自动生成，可能不完整；原文仍以最近几轮为准）】\n${String(summary).trim()}` : '',
+    memoryWrite,
   ].filter(Boolean).join('\n\n');
 }
 
@@ -10175,21 +10184,34 @@ const learningMemory = createLearningMemory({
   },
 });
 
-/** 用户明确说「记住」的身份自述：确定性写入，不等模型提取（失败静默） */
-function rememberExplicitIdentity(question, source = null) {
-  if (!Settings.ready || !profileStore.enabled) return Promise.resolve();
+/** 明确要求保存称呼时，回答必须等实际写入结果，不能把模型承诺当保存回执。 */
+async function rememberExplicitIdentity(question, source = null) {
   const facts = explicitIdentityFacts(question);
-  if (!facts.length) return Promise.resolve();
+  if (!facts.length) return '';
+  const heading = '【本轮记忆保存结果】';
+  if (!profileStore.enabled) return heading + '记忆已关闭，本轮未保存；不能声称已记住。';
   const src = source || { docId: state.doc?.docId || '', paper: state.doc?.name || '', capability: 'chat' };
-  return profileStore.update((current) => withMemoryObservations(current, facts, { source: src, at: nowISO() }) || current)
-    .catch(() => {});
+  try {
+    const saved = await profileStore.update((current) => withMemoryObservations(current, facts, { source: src, at: nowISO() }));
+    if (!facts.every(fact => saved.items.some(item => item.memory?.kind === 'identity'
+      && item.memory.scope === 'global' && item.level === fact.level))) {
+      return heading + '保存期间记忆已被修改或删除，本轮称呼当前未保存；不能声称已记住，以当前记忆卡片为准。';
+    }
+    return heading + '已保存到长期记忆，记忆卡片可查看。可以简短确认已记住称呼；不要主动播报时间或解释内部规则。';
+  } catch (error) {
+    toast(tr('记忆保存失败：{0}', error.message), 'err', 5000);
+    return heading + '保存失败，本轮称呼未能保存；应明确告知未保存，不能声称已记住或编造保存时间。';
+  }
 }
 
-function scheduleMemoryExtraction({ question = '', answer = '', history = [], topic = '', source = null, capability = 'chat' } = {}) {
+async function scheduleMemoryExtraction({ question = '', answer = '', history = [], topic = '', source = null, capability = 'chat', identityHandled = false } = {}) {
   if (!Settings.ready || !profileStore.enabled) return Promise.resolve();
   const src = source || { docId: state.doc?.docId || '', paper: state.doc?.name || '', capability };
-  // 「我叫 Cyan，请记住」这类：先确定性记住称呼，再跑常规后台提取
-  rememberExplicitIdentity(question, src);
+  // 已处理的称呼不重复保存/提取，避免用户刚删掉的卡片被回答结束后的任务重新添加。
+  if (explicitIdentityFacts(question).length) {
+    if (!identityHandled) await rememberExplicitIdentity(question, src);
+    return;
+  }
   return learningMemory.observe({ question, answer, history, topic, source: src });
 }
 
@@ -13933,6 +13955,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     docTitle: pending.docTitle, reader, controller: ctl, view: chatViews.get(displayedChatKey), pending,
     papers: state.papers.map(paper => ({ ...paper, label: paperTitles.label(paper) })),
     teaching: teachingProgressBlock(), summary: state.sessionSummary, paperMemory: state.paperMemory,
+    memoryEditRevision: profileStore.memoryEditRevision,
     scanDigest: state.scanDigestDoc === pending.docId ? state.scanDigest : '',
     docText: state.docTextDoc === pending.docId ? state.docText : '', finished: false };
   ctl.__chatJob = job; pending.chatJob = job;
@@ -13947,7 +13970,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
   const assertTaskActive = () => { if (!taskActive()) throw new DOMException(tr("已停止"), 'AbortError'); };
   const tickJob = text => { if (taskActive() && chatJobVisible(job)) setBusy(true, text); };
   // 「我叫 Cyan，请记住」这类明确要求：发送当时就确定性记住，不依赖回答成功或模型提取
-  rememberExplicitIdentity(pending.question, {
+  const memoryWrite = rememberExplicitIdentity(pending.inputValue, {
     docId: pending.docId || '', paper: pending.docTitle || '', capability: 'chat',
   });
   dropSentAttachments(pending, retryDraft);
@@ -14010,6 +14033,8 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // Persist the pending turn before starting the provider request, so another
     // window cannot move this conversation while its answer is being generated.
     await saveChatJob(job);
+    assertTaskActive();
+    job.memoryWrite = await memoryWrite;
     assertTaskActive();
     if (!Settings.ready) { finishModelSetup(); return; }
     const outdatedReplyIntent = pending.reading?.intent !== 'acknowledgement' && !images.length
@@ -14202,7 +14227,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
           context, page: pending.firstPage, pageRole: pending.pageRole, docTitle: paperPromptTitle(pending),
           history: pending.history, reading, references, webResults: sources,
           availablePages: (context || job.initialPageImages?.length) && pending.firstPage ? [pending.firstPage] : [], pageImages: job.initialPageImages || [], screenshotCount: images.length,
-          profileBlock: askProfileBlock(context || '', pending.question, { docId: pending.docId, paperMemory: job.paperMemory, summary: job.summary }),
+          profileBlock: askProfileBlock(context || '', pending.question, { docId: pending.docId, paperMemory: job.paperMemory, summary: job.summary, memoryWrite: job.memoryWrite }),
           teachingBlock: job.teaching,
         },
       });
@@ -14268,7 +14293,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
     // 记忆块：学习画像 + 用户手写长期记忆 + 本篇之前的讨论 + 本次会话滚动摘要。
     // 教学进度（「带我一步步读」）也在这里带上，避免自由追问时模型擅自推进下一步。
     const profileForAsk = askProfileBlock(context || '', pending.question,
-      { docId: pending.docId, paperMemory: job.paperMemory, summary: job.summary });
+      { docId: pending.docId, paperMemory: job.paperMemory, summary: job.summary, memoryWrite: job.memoryWrite });
     // P1.5：可用页码白名单 + 本轮要求（近因指令）+ 本次依据回执，全部由程序算好，不靠模型猜。
     citationMat = citationMaterialsFor({
       docCtx, context, references, scanned: scannedDoc, pending, sources, images, pageRole: pending.pageRole,
@@ -14392,7 +14417,7 @@ async function sendWithDraft(retryPending = null, retryDraft = null) {
       // 用户要求：正常问答的回答下面也要能「重新生成」（复用这条 pending，原地重跑，不新加一轮问答）
       retryLabel: tr("重新生成"), onRetry: () => send(pending),
     });
-    scheduleMemoryExtraction({ question: pending.inputValue, answer: full, history: pending.history,
+    if (job.memoryEditRevision === profileStore.memoryEditRevision) scheduleMemoryExtraction({ question: pending.inputValue, answer: full, history: pending.history, identityHandled: true,
       topic: reading.selection || reading.focus?.text || '',
       source: { docId: pending.sourcePaper?.docId || pending.docId || '', paper: pending.sourcePaper?.path || pending.docTitle || '', capability: 'chat' } });
     // 附件在发送那一刻就已从输入区清掉（dropSentAttachments），成功时无需再处理。

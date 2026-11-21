@@ -138,6 +138,16 @@ export const profileStore = {
   error: '',
   enabled: true,
   writeQueue: Promise.resolve(),
+  memoryEditRevision: 0,
+  listeners: new Set(),
+
+  onChange(callback) { this.listeners.add(callback); },
+  offChange(callback) { this.listeners.delete(callback); },
+  notifyChange(kind) {
+    for (const callback of this.listeners) {
+      try { callback(this.data, kind); } catch (error) { console.error(error); }
+    }
+  },
 
   async load() {
     try {
@@ -145,10 +155,10 @@ export const profileStore = {
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
       const parsed = validateProfile(await r.json());
       if (!parsed.ok) throw new Error(parsed.error);
-      this.data = parsed.data;
+      if (parsed.data.revision >= this.data.revision) this.data = parsed.data;
       this.error = '';
+      this.notifyChange('load');
     } catch (e) {
-      this.data = emptyProfile();
       this.error = tr("学习档案读取失败：{0}", e.message || e);
     }
     this.loaded = true;
@@ -177,8 +187,11 @@ export const profileStore = {
         error.status = r.status;
         throw error;
       }
-      this.data = parsed.data;
+      // A later cross-window load can arrive before this successful write's ACK.
+      // Keep that newer revision instead of restoring the older committed snapshot.
+      if (parsed.data.revision >= this.data.revision) this.data = parsed.data;
       this.error = '';
+      this.notifyChange('commit');
       return this.data;
     } catch (e) {
       throw e;

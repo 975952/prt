@@ -125,6 +125,58 @@ test('明确说「请记住」的名字/称呼走确定性路径，不依赖模�
   assert.match(buildProfileBlock(profile, '', '完全无关的问题'), /Cyan/);
 });
 
+test('明确姓名记忆识别记下来、记录和英文表达，并拒绝否定及引用', () => {
+  for (const question of [
+    '记下来，我叫Cyan', '记录下来，我叫Cyan', '请记录，我叫Cyan', '我叫Cyan，记一下',
+    '我叫Cyan，记下', '别忘记，我叫Cyan', 'Remember, my name is Cyan.',
+    'My name is Cyan, please remember.', 'Please remember to call me Cyan.',
+  ]) assert.equal(explicitIdentityFacts(question)[0]?.level, '称呼：Cyan', question);
+  for (const question of [
+    '不要记下来，我叫Cyan', '别记录我叫Cyan', '不用记住，我叫Cyan',
+    '我叫Cyan，不记录', '请不要把我叫Cyan记下来',
+    '不要叫我Cyan，请记住', '请忘记我叫Cyan的记录', '删除我叫Cyan的记忆',
+    "Don't remember my name is Cyan", 'Do not remember, my name is Cyan',
+    "I don't want you to remember my name is Cyan",
+    'Never remember my name is Cyan', 'Forget that my name is Cyan; remember nothing.',
+    '翻译“记下来，我叫Cyan”', '解释「我叫Cyan，请记住」', '翻译 "Remember, my name is Cyan"',
+    "翻译 'Remember, my name is Cyan'", '例子：`我叫Cyan请记住`',
+    '> 记下来，我叫Cyan\n解释这句话', '```text\n记下来，我叫Cyan\n```',
+  ]) assert.deepEqual(explicitIdentityFacts(question), [], question);
+});
+
+test('重试姓名记忆不重复添加，新称呼更新原条目并保留创建时间', () => {
+  const facts = explicitIdentityFacts('记下来，我叫Cyan');
+  const before = withMemoryObservations(emptyProfile(), facts, { source, at });
+  assert.equal(withMemoryObservations(before, facts, { source, at: '2026-10-25T10:21:00+08:00' }), null);
+  const next = withMemoryObservations(before, explicitIdentityFacts('记录下来，叫我Blue'), {
+    source, at: '2026-10-25T10:22:00+08:00',
+  });
+  assert.equal(next.items.length, 1);
+  assert.equal(next.items[0].id, before.items[0].id);
+  assert.equal(next.items[0].createdAt, at);
+  assert.equal(next.items[0].level, '称呼：Blue');
+  assert.equal(next.items[0].updatedAt, '2026-10-25T10:22:00+08:00');
+  assert.equal(before.items[0].level, '称呼：Cyan');
+});
+
+test('卡片手工改名后再次发送相同记忆原话可恢复本次称呼，同值重试不刷新时间', () => {
+  const facts = explicitIdentityFacts('记下来，我叫Cyan');
+  const before = withMemoryObservations(emptyProfile(), facts, { source, at });
+  const edited = { ...before, items: before.items.map(item => ({ ...item, level: '称呼：Azure' })) };
+  const updatedAt = '2026-10-25T10:23:00+08:00';
+  const next = withMemoryObservations(edited, facts, { source, at: updatedAt });
+  assert.equal(next.items.length, 1);
+  assert.equal(next.items[0].id, before.items[0].id);
+  assert.equal(next.items[0].level, '称呼：Cyan');
+  assert.equal(next.items[0].createdAt, at);
+  assert.equal(next.items[0].updatedAt, updatedAt);
+  assert.equal(withMemoryObservations(next, facts, { source, at: '2026-10-25T10:24:00+08:00' }), null);
+  assert.equal(next.items[0].updatedAt, updatedAt);
+  const knowledge = apply(emptyProfile(), '矩阵乘法我会计算');
+  assert.equal(apply(knowledge, '矩阵乘法我会计算', { level: '完整掌握原理与实现' }), null,
+    '知识自述不能用同一条证据升级理解程度');
+});
+
 test('身份记忆可以自然语言删除，删除后不再注入', () => {  const question = '我叫Cyan请记住';
   const profile = withMemoryObservations(emptyProfile(), parseMemorySuggestions(JSON.stringify([{
     topic: '称呼', kind: 'identity', scope: 'global', signal: 'self_report', level: '称呼：Cyan', evidence: question,
@@ -207,6 +259,36 @@ test('后台串行处理、短回答也提取、论文切换后仍保留原来�
   assert.equal(calls, 2);
   assert.equal(store.data.items.length, 1);
   assert.equal(store.data.items[0].source.docId, 'paper-a');
+});
+
+test('卡片编辑或删除后，仍在提取或等待写入的旧记忆不能覆盖手工修改', async () => {
+  for (const pauseAt of ['extract', 'update']) {
+    let resume;
+    let started;
+    const paused = new Promise(resolve => { started = resolve; });
+    const hold = new Promise(resolve => { resume = resolve; });
+    const question = '矩阵乘法我会计算';
+    const store = {
+      data: emptyProfile(), enabled: true, memoryEditRevision: 0,
+      async update(mutate) {
+        if (pauseAt === 'update') { started(); await hold; }
+        this.data = mutate(this.data) || this.data;
+      },
+    };
+    const memory = createLearningMemory({ store, extract: async () => {
+      if (pauseAt === 'extract') { started(); await hold; }
+      return JSON.stringify([input(question)]);
+    } });
+    const write = memory.observe({ question, source });
+    await paused;
+    store.memoryEditRevision++;
+    store.data = { ...emptyProfile(), selfReport: '用户刚修改过记忆' };
+    resume(); await write;
+    assert.equal(store.data.items.length, 0, `${pauseAt}: 不恢复已删除条目`);
+    assert.equal(store.data.selfReport, '用户刚修改过记忆');
+    await memory.observe({ question, source });
+    assert.equal(store.data.items.length, 1, `${pauseAt}: 新对话仍可保存`);
+  }
 });
 
 test('连续保存合并最新数据；冲突重读重试；写盘失败不制造虚假成功', async () => {

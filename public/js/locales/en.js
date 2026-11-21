@@ -2,6 +2,8 @@
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
   "会话记忆": "Conversation memory", "记忆": "Memory", "会话记忆（{0}）": "Conversation memory ({0})",
+  "身份": "Identity", "偏好": "Preference", "学习": "Learning", "全局": "Global", "本篇论文": "This paper", "本次会话": "This conversation",
+  "这条记忆已被删除，请重新查看": "This memory has been deleted. Refresh the list.",
   "搜索记忆": "Search memories", "按分类筛选": "Filter by category", "所有分类": "All categories",
   "标签": "Tag", "引用": "Reference", "添加一条会话记忆": "Add a memory for this conversation",
   "记忆内容": "Memory content", "记忆分类": "Memory category", "添加": "Add", "编辑": "Edit",
