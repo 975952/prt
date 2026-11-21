@@ -49,6 +49,8 @@ Folder drops preserve nested paths and skip hidden names, system metadata, and f
 
 ## Library, Alina, and the reader
 
+**v1.4.6** improves workspace navigation and document organization. Navigation remains usable without reading history. AI classification checks the first page of papers that remain unclear after regrouping and shows unresolved reasons. When removing a folder containing subfolders, choose to keep the internal structure and move its contents up one level, or move all papers to the library root. Subfolder name conflicts receive a number; conflicting papers or other files keep the original folder to avoid overwrites.
+
 Start in Library by default, or choose the reader or Alina in settings. Alina places the reading, paper search, and resume-chat actions together below the input. New chat stays in the sidebar, with a bubble-plus icon when collapsed. Workspace switches preserve reading position and conversations.
 
 PDF organization uses filenames first, then first-page text or images when needed. It proposes flat topic folders, groups similar documents, and preserves existing organization where appropriate. Each classification replaces previous suggestions; files move only after preview and confirmation. Library has a resizable sidebar and shares Alina's dark background.
