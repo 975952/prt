@@ -4885,11 +4885,24 @@ async function importExternalFolder(entry, parent) {
   if (result.rootPath) {
     if (parent) state.folderOpen.add(parent);
     if (result.createdFolders.length <= 8) {
-      for (const folderPath of result.createdFolders) state.folderOpen.add(folderPath);
+      for (const folderPath of result.createdFolders) {
+        state.folderOpen.add(folderPath);
+        // Also open all parent folders so nested structure is visible
+        const parts = folderPath.split('/');
+        for (let i = 1; i < parts.length; i++) {
+          state.folderOpen.add(parts.slice(0, i).join('/'));
+        }
+      }
     } else {
       state.folderOpen.add(result.rootPath);
+      // Open all parents of root so it's visible
+      const parts = result.rootPath.split('/');
+      for (let i = 1; i < parts.length; i++) {
+        state.folderOpen.add(parts.slice(0, i).join('/'));
+      }
     }
     saveFolderOpen();
+    renderPaperList();
   }
   if (result.queuedFiles > 0) {
     if (result.skippedFiles > 0) {
