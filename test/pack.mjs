@@ -136,6 +136,7 @@ const REQUIRED_PUBLIC = [
   'public/js/prompts/capabilities/teach.js',
   'public/js/app.js',
   'public/js/app-updates.js',
+  'public/js/folder-import.js',
   'public/js/glass-material.js',
   'public/js/i18n.js',
   'public/js/locales/en.js',

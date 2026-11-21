@@ -65,6 +65,7 @@ mod tests {
             "css/session-memory.css",
             // B 线 P1：多标签工作区
             "js/tabs.js",
+            "js/folder-import.js",
             "tabs.css",
         ] {
             assert!(contains(path), "exe 缺少前端文件：{path}（重新跑 desktop\\build.bat）");

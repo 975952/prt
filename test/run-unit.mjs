@@ -5,7 +5,7 @@ import path from 'node:path';
 const suites = ['agent-unit.mjs', 'ai-stream.mjs', 'task-deadline.mjs', 'pdf-lifecycle.mjs', 'paper-access.mjs', 'paper-target.mjs', 'chat-source.mjs', 'session-lifecycle.mjs', 'session-memory.mjs', 'session-memory-lifecycle.mjs', 'session-regeneration.mjs', 'reading-source.mjs', 'output-flow.mjs', 'composer-drafts.mjs',
   'translation-queue.mjs', 'paper-titles.mjs', 'paper-organizer.mjs', 'paper-organizer-ai.mjs', 'paper-organizer-flat.mjs', 'organizer-history.mjs', 'selection-reading-order.mjs', 'pdf-reading-theme.mjs', 'i18n.mjs', 'prompts-manifest.mjs', 'repository-check.mjs'];
 suites.unshift('agent-profile.mjs');
-suites.unshift('import-queue.mjs');
+suites.unshift('import-queue.mjs', 'folder-import.mjs');
 suites.unshift('child-cleanup.mjs');
 for (const suite of suites) {
   console.log(`\nRunning ${suite}`);

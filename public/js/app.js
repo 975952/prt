@@ -8,6 +8,7 @@ import { SessionMemoryPanel } from './session-memory-ui.js';
 import { createAppUpdates } from './app-updates.js';
 import { createImportQueue } from './import-queue.js';
 import { createImportPanel } from './import-panel.js';
+import { collectExternalDrop, scanDirectoryEntry, importScannedFolderTree, isImportableFileName } from './folder-import.js';
 import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
 import { createComposerDraftStore } from './composer-drafts.js';
 import { createDraftPersistence } from './draft-persistence.js';
@@ -3581,7 +3582,7 @@ function renderPaperList() {
 
 /** 从 FileList / DataTransfer 里挑出可导入文件（大小写不敏感） */
 function pdfFilesFrom(files) {
-  return Array.from(files || []).filter((f) => f && /\.(pdf|pptx?)$/i.test(f.name));
+  return Array.from(files || []).filter((f) => f && isImportableFileName(f.name));
 }
 
 /* ───────────────── 文件列表：多选（Ctrl/Shift 点击、左侧细条拖框）+ 批量操作 ───────────────── */
@@ -3802,7 +3803,10 @@ function initFiles() {
     // 这里再兜一次内部 drop，会把文件夹里正常排序的文件误当成「拖到左栏外」移到根目录。
     if (!isExternalFileDrag(e)) return;
     e.preventDefault();
-    importExternalDrop(e.dataTransfer, '');
+    const homeFolderRow = e.target?.closest?.('#homeFolders [data-folder-path]');
+    const target = homeFolderRow ? (homeFolderRow.dataset.folderPath || '')
+      : (!document.body.classList.contains('reading') && homeView.folder ? homeView.folder : '');
+    importExternalDrop(e.dataTransfer, target);
   });
 
   $('#homeOpen')?.addEventListener('click', () => $('#fileInput')?.click());
@@ -4001,9 +4005,13 @@ function bindPaperDrag(list) {
     const filterActive = ($('#fileFilter').value || '').trim() !== '';
     if (filterActive) { toast(tr("请先清空筛选，再进行拖拽排序/移动"), 'err', 3600); return; }
 
-    // 外部拖入（资源管理器）
+    // 外部拖入（资源管理器）：落到文件夹行直接导入该文件夹；落到文件行导入其所在文件夹
     if (!payload) {
-      const target = dropTargetFolder(e);
+      const extFolderLi = e.target.closest?.('li.folder[data-path]');
+      const extRowLi = e.target.closest?.('li[data-path]:not(.folder)');
+      const target = extFolderLi ? extFolderLi.dataset.path
+        : extRowLi ? folderOf(extRowLi.dataset.path)
+        : dropTargetFolder(e);
       return importExternalDrop(e.dataTransfer, target);
     }
 
@@ -4825,79 +4833,73 @@ async function uploadPdfFile(file, folder = '', taskId = '', progress = () => {}
   } finally { stopped = true; clearInterval(timer); }
 }
 
-/** 外部拖入（资源管理器）：PDF 导入目标夹；文件夹建同名夹导入一层（v1 忽略子文件夹） */
+/** 外部拖入（资源管理器）：PDF/PPT 导入目标夹；文件夹递归扫描并按原目录结构导入所有可导入文件 */
 async function importExternalDrop(dt, targetFolder) {
-  const items = dt ? Array.from(dt.items || []).filter((it) => it.kind === 'file') : [];
-  if (!items.length) {
-    // 无 items（兼容老拖拽）：退回纯 PDF 处理
-    const pdfs = pdfFilesFrom(dt?.files);
-    if (pdfs.length) {
-      if (targetFolder) await importPdfsToFolder(pdfs, targetFolder);
-      else await importLocalFiles(pdfs);
-    }
-    return;
-  }
-  const pdfFiles = [];
-  const dirs = [];
-  for (const it of items) {
-    const entry = it.webkitGetAsEntry?.();
-    if (!entry) continue;
-    if (entry.isDirectory) dirs.push(entry);
-    else if (entry.isFile && /\.(pdf|pptx?)$/i.test(entry.name)) {
-      const f = it.getAsFile?.();
-      if (f) pdfFiles.push(f);
-    }
-  }
+  const { files: pdfFiles, dirs, skippedFiles } = collectExternalDrop(dt);
   if (pdfFiles.length) {
     if (targetFolder) await importPdfsToFolder(pdfFiles, targetFolder);
     else await importLocalFiles(pdfFiles);
   }
   for (const dirEntry of dirs) {
-    await importExternalFolder(dirEntry, targetFolder);
+    try { await importExternalFolder(dirEntry, targetFolder); }
+    catch (error) { toast(tr('读取文件夹「{0}」失败：{1}', dirEntry.name, error?.message || String(error)), 'err', 4800); }
+  }
+  if (!pdfFiles.length && !dirs.length && skippedFiles > 0) {
+    toast(tr("支持 PDF、PPT 和 PPTX 文件"), 'err', 3600);
+    return;
   }
   await refreshPaperList();
 }
 
-/** 外部文件夹 → papers/ 下建同名夹（重名自动 (2)），导入直接含有的 PDF（只读一层） */
-async function importExternalFolder(entry, parent) {
-  const name = sanitizeClientFolderName(entry.name);
-  if (!name) { toast(tr("忽略非法文件夹名「{0}」", entry.name), 'err', 3600); return; }
+async function createLibraryFolder(name, parent = '') {
+  const q = new URLSearchParams({ name });
+  if (parent) q.set('parent', parent);
+  const r = await fetch(`/api/folders?${q}`, { method: 'POST' });
   let j = {};
-  try {
-    const q = new URLSearchParams({ name });
-    if (parent) q.set('parent', parent);
-    const r = await fetch(`/api/folders?${q}`, { method: 'POST' });
-    try { j = await r.json(); } catch { /* 非 JSON */ }
-    if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
-  } catch (e) {
-    toast(tr("创建文件夹「{0}」失败：{1}", name, e.message), 'err', 4200);
+  try { j = await r.json(); } catch { /* 非 JSON */ }
+  if (!r.ok) throw new Error(localizedError(j?.error?.message || `HTTP ${r.status}`));
+  return j.path || j.name;
+}
+
+/** 外部文件夹 → 递归扫描所有可导入文件（PDF/PPT/PPTX），按原目录结构在 papers/ 下建夹并批量入队 */
+async function importExternalFolder(entry, parent) {
+  const tree = await scanDirectoryEntry(entry);
+  if (tree.truncatedDirs > 0) {
+    toast(tr("有 {0} 个过深子文件夹超出层级限制，已跳过", tree.truncatedDirs), 'info', 4200);
+  }
+  if (!tree.totalFiles) {
+    toast(tr("「{0}」里没有可导入的文件（支持 PDF、PPT 和 PPTX）", entry.name), 'info', 4200);
     return;
   }
-  const folderPath = j.path || j.name;
-  const reader = entry.createReader();
-  const entries = await new Promise((res) => {
-    const acc = [];
-    const readAll = () => {
-      reader.readEntries((batch) => {
-        if (!batch.length) { res(acc); return; }
-        acc.push(...batch);
-        readAll();
-      }, () => res(acc));
-    };
-    readAll();
+  const result = await importScannedFolderTree(tree, parent, {
+    createFolder: createLibraryFolder,
+    enqueueFiles: (files, folderPath) => importPdfsToFolder(files, folderPath),
   });
-  const pdfs = [];
-  let subdirs = 0;
-  for (const en of entries) {
-    if (en.isFile && /\.(pdf|pptx?)$/i.test(en.name)) {
-      const f = await new Promise((res) => en.file(res, () => res(null)));
-      if (f) pdfs.push(f);
-    } else if (en.isDirectory) {
-      subdirs += 1;
+  for (const failure of result.failedFolders) {
+    if (failure.reason === 'invalid-name') {
+      toast(tr("忽略非法文件夹名「{0}」", failure.name), 'err', 3600);
+    } else {
+      toast(tr("创建文件夹「{0}」失败：{1}", failure.name, failure.error), 'err', 4200);
     }
   }
-  if (pdfs.length) await importPdfsToFolder(pdfs, folderPath);
-  if (subdirs) toast(tr("「{0}」里有 {1} 个子文件夹，v1 只导入一层，已忽略", name, subdirs), 'info', 4200);
+  if (result.rootPath) {
+    if (parent) state.folderOpen.add(parent);
+    if (result.createdFolders.length <= 8) {
+      for (const folderPath of result.createdFolders) state.folderOpen.add(folderPath);
+    } else {
+      state.folderOpen.add(result.rootPath);
+    }
+    saveFolderOpen();
+  }
+  if (result.queuedFiles > 0) {
+    if (result.skippedFiles > 0) {
+      toast(tr("已按目录结构加入导入队列：{0} 个文件（{1} 个文件夹），跳过 {2} 个不支持的文件",
+        result.queuedFiles, result.createdFolders.length, result.skippedFiles), 'info', 4800);
+    } else {
+      toast(tr("已按目录结构加入导入队列：{0} 个文件（{1} 个文件夹）",
+        result.queuedFiles, result.createdFolders.length), 'info', 4200);
+    }
+  }
 }
 
 async function importPdfsToFolder(pdfs, folder) {
