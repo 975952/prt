@@ -32,7 +32,9 @@ The interface starts in **English**. Open **Settings → Language / 语言** to 
 
 The **To** selector in Translation is independent. Changing the interface language does not change an existing translation target.
 
-## Import PowerPoint files (main branch)
+## Import folders and PowerPoint files
+
+Drop an entire folder to recursively import PDF, PPT, and PPTX files with its original structure. Drop onto a folder row in Library or the reader sidebar to select a destination. Hidden names, system metadata, and folders without importable files are skipped; matching folder names receive a number. The destination’s ancestors expand after import so the nested location is visible immediately.
 
 The import panel stays visible with queued, converting, completed and failed tasks. You can keep adding files while a conversion runs; they wait their turn. Pending duplicates are skipped. Completed items offer **Open PDF**, and failed items offer **Retry**. Use **Clear finished** to dismiss results. Waiting time does not count toward the two-minute conversion deadline.
 

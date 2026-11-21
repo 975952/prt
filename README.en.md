@@ -6,7 +6,7 @@
 
 [简体中文](README.md) · **English**
 
-prt is a local PDF reader for Windows with built-in AI chat. Organize papers and lecture notes in Library, translate a passage or ask about a figure in the reader, and pick up the same conversation in Alina. The two workspaces share conversation history. When comparing papers, follow page references back to each source.
+prt is a local PDF reader for Windows with built-in AI chat. Drop an entire course or research folder to recursively import PDF, PPT, and PPTX files while preserving its structure. Organize papers and lecture notes in Library, translate a passage or ask about a figure in the reader, and pick up the same conversation in Alina. The two workspaces share conversation history. When comparing papers, follow page references back to each source.
 
 [![Release](https://img.shields.io/github/v/release/975952/prt?style=flat-square)](https://github.com/975952/prt/releases/latest)
 [![MIT](https://img.shields.io/badge/license-MIT-586976?style=flat-square)](LICENSE)
@@ -35,7 +35,7 @@ When a paper or slide is hard to follow, you often copy text or take a screensho
 | Use case | In prt |
 | --- | --- |
 | **Exam revision** | Import PDF handouts and PPT/PPTX slides, ask AI to organize concepts and explain difficult passages, and discuss several documents together |
-| **Document organization** | Keep course material, books, and papers in one library; preview and adjust AI classification before moving files, with organization history you can roll back |
+| **Document organization** | Import entire folders of PDF, PPT, and PPTX files with their original structure; preview and adjust AI classification before moving files, with organization history you can roll back |
 | **Research reading** | Translate selections, explain passages, and ask whole-document questions; select screenshots or long captures to discuss equations, figures, and scanned pages |
 | **Cross-file search and comparison** | Search a document, folder, or the whole library; ask cross-file questions with separate page references, jump to the source, and compare documents in tabs or tiled windows |
 | **Paper and reference lookup** | Find local papers by title, research topic, or a description; search online, browse references, and manually import online results that have an available PDF link |
@@ -44,6 +44,8 @@ When a paper or slide is hard to follow, you often copy text or take a screensho
 | **Reading comfort** | Continuous reading, two-page Book view, and single-page landscape slides; Glass, Rice paper, and Dark themes, Chinese/English UI, and separate answer and translation languages |
 
 PPT/PPTX import requires **Microsoft PowerPoint installed locally on Windows** to convert slides to PDF for reading; it does not provide native slide editing. AI features use your configured model service. Figures, screenshots, and scanned-page questions require a vision-capable model.
+
+Folder drops preserve nested paths and skip hidden names, system metadata, and folders without importable files. Drop onto a folder row in Library or the reader sidebar to choose the destination. Conflicting folder names receive a number. After import, the destination’s ancestors expand and the file tree refreshes to show its nested location.
 
 ## Library, Alina, and the reader
 
@@ -60,7 +62,7 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 ## Get started
 
 1. Download **prt-setup.exe** from [Releases](https://github.com/975952/prt/releases/latest) and install it for your Windows account. Administrator privileges are not required.
-2. Open **prt** from the Start menu or desktop shortcut and import or drag in a PDF. Reading, search, and notes work without an AI service.
+2. Open **prt** from the Start menu or desktop shortcut and import PDF or PowerPoint files, or drag in an entire folder. Reading, search, and notes work without an AI service.
 3. For AI features, enter an OpenAI-compatible service URL, model name, and API key in Settings. Image questions require a vision-capable model.
 4. The interface starts in **English**. Use **Settings → Language / 语言** to switch between English and Simplified Chinese. The answer language and translation target can be set separately.
 
