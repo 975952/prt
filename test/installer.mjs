@@ -66,6 +66,9 @@ const uninstall = label => {
   const uninstaller = path.join(installDir, 'unins000.exe');
   inside(uninstaller);
   if (!fs.existsSync(uninstaller)) return;
+  // Inno's self-delete helper can briefly leave unins000.exe behind after a
+  // successful uninstall. Its removed registration means cleanup is complete.
+  if (run('reg.exe', ['query', `HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\${id}_is1`]).status !== 0) return;
   const result = run(uninstaller, ['/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART',
     `/LOG=${path.join(scratch, label + '.log')}`]);
   assert.equal(result.status, 0, `${label} uninstall failed`);
@@ -75,6 +78,16 @@ const registryVersion = () => {
   assert.equal(result.status, 0, 'Isolated uninstall registration exists');
   return result.stdout.match(/DisplayVersion\s+REG_SZ\s+([^\r\n]+)/)?.[1].trim();
 };
+const registryFingerprint = (key, value = '') => {
+  const result = run('reg.exe', ['query', key, ...(value ? ['/v', value] : ['/s'])]);
+  return { status: result.status, hash: crypto.createHash('sha256').update(result.stdout).digest('hex') };
+};
+const realAssociations = () => [
+  registryFingerprint('HKCU\\Software\\Classes\\prt.Reader.PDF'),
+  registryFingerprint('HKCU\\Software\\prt\\Capabilities'),
+  registryFingerprint('HKCU\\Software\\Classes\\.pdf\\OpenWithProgids', 'prt.Reader.PDF'),
+  registryFingerprint('HKCU\\Software\\RegisteredApplications', 'prt'),
+];
 const tree = directory => {
   const result = {};
   const visit = (folder, rel = '') => {
@@ -98,6 +111,7 @@ const seed = (targetData, targetPapers) => {
 };
 
 let child;
+const existingAssociations = realAssociations();
 try {
   const setup = build('current');
   const baseline = previousExe ? build('previous', previousExe, previousVersion) : setup;
@@ -106,6 +120,10 @@ try {
   assert(fs.existsSync(path.join(installDir, 'prt-installed.flag')));
   assert.equal(registryVersion(), previousVersion || version);
   pass('fresh setup creates the app, installed marker and isolated uninstall registration');
+  assert.equal(run('reg.exe', ['query', `HKCU\\Software\\Classes\\${id}.PDF\\shell\\open\\command`]).status, 0);
+  assert.equal(run('reg.exe', ['query', `HKCU\\Software\\${id}\\Capabilities`]).status, 0);
+  assert.deepEqual(realAssociations(), existingAssociations);
+  pass('test setup uses isolated PDF associations and preserves the real reader registration');
 
   const programs = execFileSync('powershell.exe', ['-NoProfile', '-Command', "[Environment]::GetFolderPath('Programs')"], { encoding: 'utf8', windowsHide: true }).trim();
   const shortcutDir = path.join(programs, appName);
@@ -142,7 +160,16 @@ try {
   const library = await fetch(base + '/api/papers').then(r => r.json());
   assert.equal(library.papers.length, 1);
   assert.equal(library.papers[0].name, 'fixture.pdf');
-  await stopChild(child); child = null;
+  const preservedFiles = [path.join(data, 'config.json'), path.join(data, 'session-fixture.json'),
+    path.join(papers, 'course', 'fixture.pdf')].map(file => [file, sha(file)]);
+  assert.equal(install(setup, 'upgrade-running', ['/CLOSEAPPLICATIONS']).status, 0);
+  for (let i = 0; child.exitCode === null && i < 100; i++) await new Promise(resolve => setTimeout(resolve, 50));
+  assert.notEqual(child.exitCode, null, 'manual setup closes its own isolated running reader without test-side termination');
+  assert.equal(sha(path.join(installDir, 'prt.exe')), sha(executable));
+  assert.equal(registryVersion(), version);
+  for (const [file, hash] of preservedFiles) assert.equal(sha(file), hash);
+  child = null;
+  pass('manual upgrade normally closes the isolated running app and preserves saved settings, conversations and papers');
   pass('installed executable serves its isolated PDF library after upgrade');
 
   const beforeUninstall = { data: tree(data), papers: tree(papers) };
@@ -180,9 +207,12 @@ try {
   assert.deepEqual({ data: tree(migratedData), papers: tree(migratedPapers) }, occupied);
   assert.deepEqual(tree(legacy), original);
   pass('uninstall after migration still retains imported and original files');
+  assert.deepEqual(realAssociations(), existingAssociations);
+  pass('setup, upgrade and uninstall leave the real app associations unchanged');
   fs.writeFileSync(path.join(scratch, 'evidence.json'), JSON.stringify({ version, previousVersion, appId: id, checks, errors: [] }, null, 2) + '\n', 'utf8');
   console.log(`installer: ${checks.length}/${checks.length} passed; ${scratch}`);
 } finally {
   await stopChild(child);
   uninstall('cleanup');
+  assert.deepEqual(realAssociations(), existingAssociations);
 }

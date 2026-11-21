@@ -22,6 +22,7 @@ mod relaunch;
 mod server;
 mod shell_pdf;
 mod store;
+mod updater;
 mod util;
 mod window;
 
@@ -99,6 +100,8 @@ fn parse_port(args: &[String]) -> Option<u16> {
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
+    // The update helper must not open the library, acquire its lock, or start UI.
+    if let Some(code) = updater::handle_cli(&args) { std::process::exit(code); }
     let want_help = args.iter().any(|a| a == "--help" || a == "-h");
     let console = want_help || args.iter().any(|a| a == "--console" || a == "-c");
     // 验收 / 自动化专用：窗口不显示、不抢焦点、不占任务栏。

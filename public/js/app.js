@@ -5,6 +5,7 @@ import { iconEl, iconHTML, hasIcon } from './icons.js';
 import { initReaderToolbar, placeToolMenu } from './reader-toolbar.js';
 import { sessionMemory } from './session-memory.js';
 import { SessionMemoryPanel } from './session-memory-ui.js';
+import { createAppUpdates } from './app-updates.js';
 import { createImportQueue } from './import-queue.js';
 import { createImportPanel } from './import-panel.js';
 import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
@@ -852,6 +853,7 @@ const state = {
 let viewer = null;
 let serverState = {};
 let sessionMemoryPanel = null;
+let appUpdates = null;
 const sessionMemoryWriteChains = new Map();
 const sessionMemoryOwners = new Map();
 const sessionMemoryVersions = new Map();
@@ -907,6 +909,7 @@ const deletedSessionMemoryKeys = new Set();
       persistSession.cancel?.(); saveProgress.cancel?.();
       if (sessionSaveInFlight) await runWithDeadline(() => sessionSaveInFlight, { signal, timeoutMs: 0 });
       await runWithDeadline(() => saveSessionNow(), { signal, timeoutMs: 0 });
+      await runWithDeadline(() => profileStore.writeQueue.catch(() => {}), { signal, timeoutMs: 0 });
       await runWithDeadline(() => saveProgressNow({ silent: true }), { signal, timeoutMs: 0 });
       tabsPersist();
       try { await runWithDeadline(() => flushComposerDrafts(), { signal, timeoutMs: 0 }); }
@@ -927,6 +930,12 @@ const deletedSessionMemoryKeys = new Set();
   initRegion();
   initSearch();
   initSettings();
+  appUpdates = createAppUpdates({ root: $('#settingsPaneUpdates'),
+    notify: (version) => toastAction(tr('发现新版本 {0}', version), tr('查看更新'), async () => {
+      await openSettings(); showSettingsPane('updates');
+    }, 'ok', 12000),
+  });
+  void appUpdates.start();
   // 设置页那两个「默认发送范围」偏好也是即时生效控件（第 2 步起范围回到发送框，两个入口必须同一套语义）
   ['cfgUseFullText', 'cfgUseWeb']
     .forEach((id) => document.getElementById(id)?.addEventListener('input', applyUiSettingsFromControls));
@@ -15447,7 +15456,7 @@ function resetSettings() {
 }
 
 const SETTINGS_PANE_KEY = 'reader.settings.pane';
-const SETTINGS_PANES = ['language', 'model', 'agent', 'appearance', 'behavior', 'session', 'memory', 'library'];
+const SETTINGS_PANES = ['language', 'model', 'agent', 'appearance', 'behavior', 'session', 'memory', 'updates', 'library'];
 
 /**
  * 设置弹窗两栏切换：左列竖排分类，右侧只显示对应面板。
@@ -15470,6 +15479,7 @@ function showSettingsPane(name) {
   $('#saveSettings').textContent = pane === 'model' ? tr("保存并测试") : tr("保存");
   try { localStorage.setItem(SETTINGS_PANE_KEY, pane); } catch (e) { /* 隐私模式写不了，忽略 */ }
   if (pane === 'library') void renderOrganizerHistory();
+  if (pane === 'updates') void appUpdates?.refresh();
   if (pane === 'memory') {
     setSessionMemoryContext(hasChatScope());
     void profileStore.load();

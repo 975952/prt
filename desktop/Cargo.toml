@@ -1,6 +1,6 @@
 [package]
 name = "prt"
-version = "1.4.3"
+version = "1.4.4"
 edition = "2021"
 rust-version = "1.77"
 description = "prt —— 本地桌面壳（wry + tao + 内置 HTTP 服务，前端资源内嵌）"
@@ -34,6 +34,7 @@ rust-embed = "8"
 serde_json = { version = "1", features = ["float_roundtrip", "preserve_order"] }
 dirs = "6"
 url = "2"
+sha2 = "0.10"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.61", features = ["Win32_Security", "Win32_Storage_FileSystem", "Win32_System_IO", "Win32_System_Pipes", "Win32_UI_WindowsAndMessaging"] }

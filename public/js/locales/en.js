@@ -1,6 +1,18 @@
 // Source-language keys keep Chinese copy readable at each call site.
 // Parameters are positional and never translated, including user names and paper text.
 export const en = {
+  "应用更新": "Updates", "自动检查更新": "Automatically check for updates", "检查更新": "Check for updates",
+  "自动检查新版本，一键更新并重启，保留论文、记忆和设置。": "Automatically check for new versions. Update and restart with your papers, memories and settings preserved.",
+  "更新下载进度": "Update download progress", "更新并重启": "Update and restart", "正在重启…": "Restarting…",
+  "当前版本：{0}（{1}）": "Current version: {0} ({1})", "安装版": "Installed", "便携版": "Portable",
+  "请使用 Windows 桌面版进行应用更新。": "Use the Windows desktop app to update prt.",
+  "正在保存并重启，更新完成后会自动打开。": "Saving and restarting. prt will reopen when the update is complete.",
+  "正在检查更新…": "Checking for updates…", "正在下载更新…": "Downloading the update…",
+  "更新已下载并校验，随时可以重启完成升级。": "The update is downloaded and verified, ready to restart.",
+  "发现新版本 {0}": "New version {0} is available", "查看更新": "View update", "当前已是最新版本。": "You are up to date.",
+  "更新失败：{0}": "Update failed: {0}", "请稍后重试。": "Please try again later.",
+  "更新会保留论文、记忆和设置。": "Updates keep your papers, memories and settings.",
+  "更新未完成，请重试。当前资料仍保留。": "The update did not finish. Your data is kept; please try again.",
   "会话记忆": "Conversation memory", "记忆": "Memory", "会话记忆（{0}）": "Conversation memory ({0})",
   "已保存的记忆": "Saved memories",
   "查看和管理已记住的信息，也可以补充个人背景与回答偏好。": "Review and manage remembered information, and add personal background and response preferences.",

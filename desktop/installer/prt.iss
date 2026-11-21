@@ -10,6 +10,14 @@
 #ifndef AppName
   #define AppName "prt"
 #endif
+#if AppId == "975952.prt"
+  #define AppProgId "prt.Reader.PDF"
+  #define AppRegistrationKey "prt"
+#else
+  ; Isolated setup lifecycle tests must not overwrite the real reader's associations.
+  #define AppProgId AppId + ".PDF"
+  #define AppRegistrationKey AppId
+#endif
 #ifndef DefaultDir
   #define DefaultDir "{localappdata}\Programs\prt"
 #endif
@@ -47,7 +55,7 @@ UninstallDisplayName={#AppName}
 UninstallDisplayIcon={app}\prt.exe
 Uninstallable=yes
 ChangesAssociations=yes
-CloseApplications=no
+CloseApplications=yes
 RestartApplications=no
 RestartIfNeededByRun=no
 SetupLogging=yes
@@ -60,13 +68,13 @@ LicenseFile=..\..\LICENSE
 Name: "english"; MessagesFile: "compiler:Default.isl"
 
 [Registry]
-Root: HKCU; Subkey: "Software\Classes\prt.Reader.PDF"; ValueType: string; ValueName: ""; ValueData: "prt PDF"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\Classes\prt.Reader.PDF\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\prt.exe"" ""%1"""
-Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "prt.Reader.PDF"; ValueData: ""; Flags: uninsdeletevalue
-Root: HKCU; Subkey: "Software\prt\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "prt"; Flags: uninsdeletekey
-Root: HKCU; Subkey: "Software\prt\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "prt PDF reader"
-Root: HKCU; Subkey: "Software\prt\Capabilities\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "prt.Reader.PDF"
-Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "prt"; ValueData: "Software\prt\Capabilities"; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\Classes\{#AppProgId}"; ValueType: string; ValueName: ""; ValueData: "prt PDF"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\Classes\{#AppProgId}\shell\open\command"; ValueType: string; ValueName: ""; ValueData: """{app}\prt.exe"" ""%1"""
+Root: HKCU; Subkey: "Software\Classes\.pdf\OpenWithProgids"; ValueType: string; ValueName: "{#AppProgId}"; ValueData: ""; Flags: uninsdeletevalue
+Root: HKCU; Subkey: "Software\{#AppRegistrationKey}\Capabilities"; ValueType: string; ValueName: "ApplicationName"; ValueData: "{#AppName}"; Flags: uninsdeletekey
+Root: HKCU; Subkey: "Software\{#AppRegistrationKey}\Capabilities"; ValueType: string; ValueName: "ApplicationDescription"; ValueData: "prt PDF reader"
+Root: HKCU; Subkey: "Software\{#AppRegistrationKey}\Capabilities\FileAssociations"; ValueType: string; ValueName: ".pdf"; ValueData: "{#AppProgId}"
+Root: HKCU; Subkey: "Software\RegisteredApplications"; ValueType: string; ValueName: "{#AppRegistrationKey}"; ValueData: "Software\{#AppRegistrationKey}\Capabilities"; Flags: uninsdeletevalue
 
 [Tasks]
 Name: "desktopicon"; Description: "Create a desktop shortcut"; GroupDescription: "Shortcuts:"; Flags: unchecked

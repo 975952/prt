@@ -1754,11 +1754,12 @@ dependencies = [
 
 [[package]]
 name = "prt"
-version = "1.4.3"
+version = "1.4.4"
 dependencies = [
  "dirs",
  "rust-embed",
  "serde_json",
+ "sha2 0.10.9",
  "tao",
  "tiny_http",
  "ureq",

@@ -13,6 +13,7 @@ let hooks = {};
 const CLOSE_SAVE_TIMEOUT_MS = 30000;
 let closeAttempt = null;
 let closed = false;
+let updateBodyInert = null;
 let ready = false;
 let layoutPage = null;
 const bus = typeof BroadcastChannel === 'function' ? new BroadcastChannel('prt.reader.windows') : null;
@@ -133,6 +134,10 @@ function completeRequest(message) {
   if (message.ok) request.resolve(); else request.reject(new Error(message.error || tr("新窗口打开失败")));
 }
 async function closeWindow(message) {
+  if (message?.updating && updateBodyInert === null && document.body) {
+    updateBodyInert = document.body.inert;
+    document.body.inert = true;
+  }
   const request = Number.isSafeInteger(message?.request) && message.request > 0 ? message.request : null;
   if (closeAttempt?.request === request) return;
   // The shell can retry when a prior event or acknowledgement was lost. An old
@@ -168,6 +173,21 @@ async function closeWindow(message) {
   }
 }
 window.addEventListener('prt-desktop', ({ detail }) => {
+  if (detail.type === 'update-error') {
+    // The native shell kept this window after a cancelled update or a helper
+    // launch failure. Retire any in-flight save before restoring normal editing.
+    const attempt = closeAttempt;
+    closeAttempt = null;
+    closed = false;
+    if (updateBodyInert !== null) {
+      if (document.body) document.body.inert = updateBodyInert;
+      updateBodyInert = null;
+    }
+    if (attempt) {
+      clearTimeout(attempt.timer);
+      attempt.controller.abort();
+    }
+  }
   if (detail.type === 'place') { layoutPage = hooks.page?.(); nativePost('window-place', detail); }
   if (detail.type === 'placed') setTimeout(() => { if (layoutPage) hooks.restorePage?.(layoutPage); layoutPage = null; }, 450);
   if (detail.type === 'open-result') completeRequest(detail);

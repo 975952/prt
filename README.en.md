@@ -76,6 +76,8 @@ Updated appearance defaults include 17px reading text, 140% home zoom, 16% page 
 
 Conversations are managed per paper by default, with history ordered by time. Choose folder sharing in Settings to continue a discussion across papers in the same folder; ungrouped files then share a common root-folder conversation space.
 
+Use **Settings → Memory** to view, edit, or delete saved names, preferences, learning records, and memories for the current conversation. `Ctrl+Shift+M` opens the same page. Memory cards use the actual saved records; a failed write is not reported as saved.
+
 This release also includes recent reading fixes: clearer input highlights and shadows, a 92%–100% background brightness range, up to three translations generating at once in submission order, correct selection boundaries in narrow-column papers, and readable pastel diagram backgrounds in dark mode. **Search paper in browser** opens the default browser with a Bing query from citation cards and reference lists.
 
 ## Your data
@@ -88,7 +90,9 @@ This release also includes recent reading fixes: clearer input highlights and sh
 
 The installed app follows the Windows Documents folder, including redirected locations or OneDrive. Close prt before backing up both the library and data folders. Uninstalling preserves them. Migration copies into empty destinations and refuses to merge or overwrite existing data. Import requires ordinary local source and destination directories; links, junctions, and cloud placeholder paths stop the import with an explanation. Do not publish your data folder or attach it to an issue.
 
-To upgrade the installed app, close prt and run the latest **prt-setup.exe**. For the portable app, replace **prt.exe** in its original folder and keep `papers/` and `data/`. Releases include a source archive and `SHA256SUMS.txt`.
+prt checks for updates at startup, at least a day apart, and shows a notice when a new version is available. Open **Settings → Updates** and choose **Update and restart** to download and verify the update, save window state, and restart with the new version. Installed and portable copies both keep papers, conversations, and settings. If the network request fails, keep using the current version and retry later.
+
+**Upgrading an older release for the first time:** run the new **prt-setup.exe** over the existing installation; **you do not need to uninstall**. Future updates are available inside the app. For an older portable copy, close prt and replace **prt.exe** in its original folder, keeping `papers/` and `data/`. Manual upgrades remain available. Releases include a source archive and `SHA256SUMS.txt`.
 
 The local service listens on `127.0.0.1`. AI requests send the relevant text, images, and conversation context to your configured provider. Online search sends queries to search services. Verify important claims against the original paper.
 

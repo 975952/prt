@@ -33,7 +33,7 @@ const server = http.createServer(async (req, res) => {
   }
   if (pathname === '/') {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end('<!doctype html><meta charset="utf-8"><button id="homeBtn">Home</button><textarea id="draft"></textarea>'); return;
+    res.end('<!doctype html><meta charset="utf-8"><button id="homeBtn">Home</button><div id="relaunchField"><select id="relaunchAction"><option value="new">New window</option><option value="focus">Focus window</option></select></div><textarea id="draft"></textarea>'); return;
   }
   const file = path.resolve(publicRoot, `.${pathname}`);
   if (!file.startsWith(publicRoot + path.sep) || !file.endsWith('.js') || !fs.existsSync(file)) { res.writeHead(404); res.end(); return; }
@@ -88,7 +88,9 @@ try {
     });
     await test.save('Previously durable draft');
   });
-  const request = id => page.evaluate(request => window.dispatchEvent(new CustomEvent('prt-desktop', { detail: { type: 'close-request', request } })), id);
+  const request = (id, updating = false) => page.evaluate((request, updating) => window.dispatchEvent(new CustomEvent('prt-desktop', {
+    detail: { type: 'close-request', request, updating },
+  })), id, updating);
   const outcome = (request, type) => page.waitForFunction(({ request, type }) => window.__closeTest.ipc.some(message => message.request === request && message.type === type), {}, { request, type });
   const snapshot = () => page.evaluate(async () => ({ ipc: window.__closeTest.ipc, notices: window.__closeTest.notices,
     calls: window.__closeTest.calls.length, closed: window.__closeTest.closed(), text: document.querySelector('#draft').value,
@@ -128,6 +130,43 @@ try {
   assert.equal((await snapshot()).closed, false);
   await page.evaluate(() => { window.__closeTest.failCommit = false; }); await request(8); await outcome(8, 'close-commit');
   pass('IPC delivery failure restores the open state and permits closing again');
+
+  const updateError = () => page.evaluate(() => window.dispatchEvent(new CustomEvent('prt-desktop', {
+    detail: { type: 'update-error', message: 'Synthetic update cancellation' },
+  })));
+  assert.equal((await snapshot()).closed, true);
+  await updateError();
+  assert.equal((await snapshot()).closed, false, 'installer launch failure restores the retained window');
+  await page.evaluate(() => { document.querySelector('#draft').value = 'Edited after update launch failure'; });
+  await request(9, true); await outcome(9, 'close-commit');
+  assert.equal((await snapshot()).durable, 'Edited after update launch failure');
+  assert.equal(await page.evaluate(() => document.body.inert), true, 'saved update window cannot accept unsaved edits while other windows close');
+  await updateError();
+  assert.equal(await page.evaluate(() => document.body.inert), false, 'failed update restores the original editability');
+  pass('a failed update after successful saving restores editing and allows a fresh durable close');
+
+  await page.evaluate(() => { window.__closeTest.mode = 'hold'; document.querySelector('#draft').value = 'Draft retained after another window cancels update'; });
+  await request(10, true);
+  await page.waitForFunction(() => !!window.__closeTest.holds[window.__closeTest.calls.length - 1]);
+  await updateError();
+  assert.equal((await snapshot()).closed, false);
+  assert.equal(await page.evaluate(() => document.body.inert), false);
+  assert.equal(await page.evaluate(() => window.__closeTest.calls.at(-1).signal.aborted), true);
+  await page.evaluate(() => window.__closeTest.holds[window.__closeTest.calls.length - 1]());
+  await wait(30);
+  state = await snapshot();
+  assert.equal(state.closed, false);
+  assert.equal(state.text, 'Draft retained after another window cancels update');
+  assert.ok(!state.ipc.some(message => message.request === 10), 'late completion after update cancellation sends no close acknowledgement');
+  await page.evaluate(() => { window.__closeTest.mode = 'save'; });
+  await request(11); await outcome(11, 'close-commit');
+  assert.equal((await snapshot()).durable, 'Draft retained after another window cancels update');
+  pass('cancelling an update aborts pending close work and ignores its late completion without losing drafts');
+  await page.evaluate(() => { document.body.inert = true; });
+  await request(12, true); await outcome(12, 'close-commit');
+  await updateError();
+  assert.equal(await page.evaluate(() => document.body.inert), true, 'update cancellation preserves an existing unrelated inert state');
+  await page.evaluate(() => { document.body.inert = false; });
 
   holdStateRead = true;
   await page.evaluate(() => {

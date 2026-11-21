@@ -519,9 +519,22 @@
         <button type="button" class="settings-nav-item" id="settingsNavBehavior" data-pane="behavior" role="tab" aria-selected="false" aria-controls="settingsPaneBehavior">阅读与问答</button>
         <button type="button" class="settings-nav-item" id="settingsNavSession" data-pane="session" role="tab" aria-selected="false" aria-controls="settingsPaneSession">会话</button>
         <button type="button" class="settings-nav-item" id="settingsNavMemory" data-pane="memory" role="tab" aria-selected="false" aria-controls="settingsPaneMemory">记忆</button>
+        <button type="button" class="settings-nav-item" id="settingsNavUpdates" data-pane="updates" role="tab" aria-selected="false" aria-controls="settingsPaneUpdates">应用更新</button>
         <button type="button" class="settings-nav-item" id="settingsNavLibrary" data-pane="library" role="tab" aria-selected="false" aria-controls="settingsPaneLibrary">PDF 整理</button>
       </nav>
       <div class="settings-panes">
+        <section class="settings-pane hidden" id="settingsPaneUpdates" data-pane="updates" role="tabpanel" aria-labelledby="settingsNavUpdates">
+          <div class="settings-pane-title">应用更新</div>
+          <div class="settings-pane-sub">自动检查新版本，一键更新并重启，保留论文、记忆和设置。</div>
+          <div class="update-version" id="updateVersion"></div>
+          <label class="field inline"><input type="checkbox" id="updateAutoCheck" checked><span>自动检查更新</span></label>
+          <p class="update-status" id="updateStatus" role="status" aria-live="polite"></p>
+          <progress class="update-progress" id="updateProgress" hidden aria-label="更新下载进度"></progress>
+          <div class="update-actions">
+            <button type="button" class="model-profile-button" id="updateCheck">检查更新</button>
+            <button type="button" class="model-profile-button" id="updateInstall" hidden>更新并重启</button>
+          </div>
+        </section>
         <section class="settings-pane hidden" id="settingsPaneLibrary" data-pane="library" role="tabpanel" aria-labelledby="settingsNavLibrary">
           <div class="settings-pane-title">整理与回退</div>
           <p class="settings-pane-sub">新分类会替换旧分类，清理旧空目录。保留最近 10 次整理记录，可逐次回退。</p>

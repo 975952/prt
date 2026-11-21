@@ -39,6 +39,7 @@ fn body_limit(path: &str) -> usize {
         "/api/attachment" => limits::BODY_ATTACHMENT,
         // 学习档案：正常几 KB，上限与 server.js 的 BODY_LIMITS.profile 一致
         "/api/profile" => limits::BODY_PROFILE,
+        "/api/update" | "/api/update/check" | "/api/update/download" => 1024,
         _ => MAX_BODY,
     }
 }
@@ -169,6 +170,26 @@ fn handle(mut rq: Request, ctx: &Ctx) {
     }
 
     match path.as_str() {
+        "/api/update" | "/api/update/check" | "/api/update/download" => {
+            let expected = if path == "/api/update" { Method::Get } else { Method::Post };
+            if method != expected {
+                return send_json(rq, 405, &err_json("Method Not Allowed"));
+            }
+            // Updates only use the release already selected by the updater.
+            // No caller-controlled URL, executable, or destination is accepted.
+            if !raw_query.is_empty() || (!body.is_empty() && body.iter().any(|b| !b.is_ascii_whitespace())) {
+                return send_json(rq, 400, &err_json("更新接口不接受参数"));
+            }
+            let result = match path.as_str() {
+                "/api/update/check" => crate::updater::check(),
+                "/api/update/download" => crate::updater::download(),
+                _ => Ok(crate::updater::status()),
+            };
+            return match result {
+                Ok(status) => send_json(rq, 200, &status),
+                Err(error) => send_json(rq, 400, &err_json(&error)),
+            };
+        }
         "/api/chat" => {
             if method != Method::Post {
                 return send_text(rq, 405, "Method Not Allowed");

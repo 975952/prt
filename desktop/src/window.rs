@@ -7,7 +7,7 @@
 //!
 //! 窗口尺寸记在 data/window.json；关闭窗口直接结束进程（tao 的 run() 不会返回）。
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use serde_json::json;
@@ -57,6 +57,7 @@ enum WindowAction {
     Place { x: i32, y: i32, width: u32, height: u32 },
     List,
     Quit,
+    UpdateInstall,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +92,7 @@ fn parse_action(msg: &str) -> Option<WindowAction> {
             height: u32::try_from(v.get("height")?.as_u64()?).ok()?.clamp(300, 20000),
         }),
         "windows-quit" => Some(WindowAction::Quit),
+        "update-install" if v.as_object()?.len() == 1 => Some(WindowAction::UpdateInstall),
         "window-open-cancel" => Some(WindowAction::CancelOpen(v.get("request")?.as_str()?.to_string())),
         "window-focus" => Some(WindowAction::Focus(v.get("key")?.as_str()?.to_string())),
         "window-ready" => Some(WindowAction::Ready {
@@ -316,6 +318,36 @@ impl CloseRequestState {
     }
 }
 
+struct UpdateCloseState<K> {
+    started: Option<Instant>,
+    pending: HashSet<K>,
+}
+
+impl<K> Default for UpdateCloseState<K> {
+    fn default() -> Self { Self { started: None, pending: HashSet::new() } }
+}
+
+impl<K: Eq + std::hash::Hash> UpdateCloseState<K> {
+    fn active(&self) -> bool { self.started.is_some() }
+    fn begin(&mut self, now: Instant, windows: impl IntoIterator<Item = K>) {
+        self.started = Some(now);
+        self.pending = windows.into_iter().collect();
+    }
+    fn deadline(&self) -> Option<Instant> { self.started.map(|at| at + CLOSE_ACK_TIMEOUT) }
+    fn expired(&self, now: Instant) -> bool { self.deadline().is_some_and(|at| now >= at) }
+    fn cancel(&mut self) { self.started = None; self.pending.clear(); }
+    fn acknowledge(&mut self, window: &K) {
+        if self.active() { self.pending.remove(window); }
+    }
+    fn finish(&mut self, launch: impl FnOnce() -> Result<(), String>) -> Result<bool, String> {
+        if !self.active() || !self.pending.is_empty() { return Ok(false); }
+        // Keep every saved window until the helper has actually started. A failed
+        // or cancelled update can then restore the entire workspace without loss.
+        self.cancel();
+        launch().map(|()| true)
+    }
+}
+
 // Each webview owns its JS state; the service and authentication stay in one process.
 struct ReaderWindow {
     webview: wry::WebView,
@@ -394,10 +426,27 @@ fn save_windows(windows: &HashMap<WindowId, ReaderWindow>) {
     store::write_json("reader-windows.json", &json!({"windows":rows}));
 }
 
-fn request_close(reader: &mut ReaderWindow) {
-    let Some(request) = reader.closing.begin(Instant::now()) else { return; };
-    if !try_emit(reader, json!({"type":"close-request", "request":request})) {
+fn request_close(reader: &mut ReaderWindow) -> bool {
+    request_close_for(reader, false)
+}
+
+fn request_close_for(reader: &mut ReaderWindow, updating: bool) -> bool {
+    let Some(request) = reader.closing.begin(Instant::now()) else { return true; };
+    if !try_emit(reader, json!({"type":"close-request", "request":request, "updating":updating})) {
         reader.closing.cancel(request);
+        return false;
+    }
+    true
+}
+
+fn cancel_update_close(windows: &mut HashMap<WindowId, ReaderWindow>, updating: &mut UpdateCloseState<WindowId>,
+    quitting: &mut bool, message: &str) {
+    updating.cancel();
+    *quitting = false;
+    for reader in windows.values_mut() {
+        // Invalidate every old acknowledgement, including those already in flight.
+        reader.closing.pending = None;
+        emit(reader, json!({"type":"update-error", "message":message}));
     }
 }
 
@@ -452,14 +501,19 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
     });
     let mut last_save = Instant::now();
     let mut quitting = false;
+    let mut updating = UpdateCloseState::default();
     event_loop.run(move |event, target, control_flow| {
-        *control_flow = ControlFlow::Wait;
+        if updating.expired(Instant::now()) {
+            cancel_update_close(&mut windows, &mut updating, &mut quitting,
+                "窗口保存未及时完成，更新已取消。请确认保存状态后重试。");
+        }
+        *control_flow = updating.deadline().map(ControlFlow::WaitUntil).unwrap_or(ControlFlow::Wait);
         match event {
             Event::WindowEvent { window_id, event: WindowEvent::Focused(true), .. } => {
                 last_focused = window_id;
             }
             Event::UserEvent(WindowMessage::IconLaunch) => {
-                if focus_on_launch || windows.len() >= 10 {
+                if updating.active() || focus_on_launch || windows.len() >= 10 {
                     if let Some(r) = windows.get(&last_focused).or_else(|| windows.values().next()) {
                         if !background {
                             if r.window.is_minimized() { r.window.set_minimized(false); }
@@ -476,6 +530,10 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
                 }
             }
             Event::UserEvent(WindowMessage::ShellPdf(path)) => {
+                if updating.active() {
+                    cancel_update_close(&mut windows, &mut updating, &mut quitting,
+                        "打开新文档时已取消更新，请完成操作后重试。");
+                }
                 let key = (1..).map(|n| format!("shell-{n}")).find(|k| windows.values().all(|r| &r.key != k)).unwrap();
                 match create_reader(target, &mut context, proxy.clone(), &url, &origin, &key, "", &json!({"shellPdf":path}), background) {
                     Ok(r) => { windows.insert(r.window.id(), r); }
@@ -498,11 +556,17 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
                         }
                     }
                     WindowAction::CancelOpen(request) => {
+                        if updating.active() {
+                            cancel_update_close(&mut windows, &mut updating, &mut quitting,
+                                "窗口状态已改变，更新已取消。请重试。");
+                        }
                         windows.retain(|_, r| !r.pending.as_ref().map(|(parent, req, _)| *parent == source && *req == request).unwrap_or(false));
                         save_windows(&windows);
                     },
                     WindowAction::Open { key, doc, request } => {
-                        let result = if windows.len() >= 10 {
+                        let result = if updating.active() {
+                            Err("正在保存窗口以安装更新，请稍候".to_string())
+                        } else if windows.len() >= 10 {
                             Err("最多同时打开 10 个窗口".to_string())
                         } else if windows.values().any(|r| r.key == key) {
                             Err("窗口标识重复，请重试".to_string())
@@ -530,7 +594,13 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
                                     "error":"文档未能加载，原标签已保留"}));
                             }
                         }
-                        if failed { windows.remove(&source); save_windows(&windows); }
+                        if failed {
+                            if updating.active() {
+                                cancel_update_close(&mut windows, &mut updating, &mut quitting,
+                                    "窗口未能完成加载，更新已取消。请重试。");
+                            }
+                            windows.remove(&source); save_windows(&windows);
+                        }
                         let rows: Vec<_> = windows.values().map(|r| json!({"key":r.key,"title":r.title})).collect();
                         for r in windows.values() { emit(r, json!({"type":"windows","windows":rows})); }
                     },
@@ -568,18 +638,57 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
                         }
                     },
                     WindowAction::Quit => {
+                        if updating.active() {
+                            cancel_update_close(&mut windows, &mut updating, &mut quitting, "更新已取消。");
+                        }
                         save_windows(&windows); quitting = true;
                         for r in windows.values_mut() { request_close(r); }
                     },
+                    WindowAction::UpdateInstall => {
+                        if updating.active() { return; }
+                        if !crate::updater::is_ready() {
+                            emit(&windows[&source], json!({"type":"update-error", "message":"更新尚未准备好，请先下载更新。"}));
+                            return;
+                        }
+                        save_windows(&windows);
+                        quitting = true;
+                        updating.begin(Instant::now(), windows.keys().copied());
+                        *control_flow = ControlFlow::WaitUntil(updating.deadline().unwrap());
+                        let mut delivered = true;
+                        for reader in windows.values_mut() {
+                            // An earlier normal close cannot stand in for the update's
+                            // edit freeze and fresh final save of every window.
+                            reader.closing.pending = None;
+                            delivered &= request_close_for(reader, true);
+                        }
+                        if !delivered {
+                            cancel_update_close(&mut windows, &mut updating, &mut quitting,
+                                "无法请求窗口保存，更新已取消。请重试。");
+                        }
+                    },
                     WindowAction::CommitClose(request) => {
                         if !windows[&source].closing.accepts(request, Instant::now()) { return; }
+                        if updating.active() {
+                            updating.acknowledge(&source);
+                            match updating.finish(crate::updater::launch_installer) {
+                                Ok(true) => { windows.clear(); *control_flow = ControlFlow::Exit; }
+                                Ok(false) => {}
+                                Err(error) => cancel_update_close(&mut windows, &mut updating, &mut quitting, &error),
+                            }
+                            return;
+                        }
                         if windows.len() == 1 && !quitting { save_windows(&windows); }
                         windows.remove(&source);
                         if windows.is_empty() { *control_flow = ControlFlow::Exit; }
                         else if !quitting { save_windows(&windows); }
                     },
                     WindowAction::CancelClose(request) => {
-                        if windows.get_mut(&source).unwrap().closing.cancel(request) { quitting = false; }
+                        if windows.get_mut(&source).unwrap().closing.cancel(request) {
+                            if updating.active() {
+                                cancel_update_close(&mut windows, &mut updating, &mut quitting,
+                                    "窗口取消了关闭或尚未保存，更新已取消。请保存后重试。");
+                            } else { quitting = false; }
+                        }
                     },
                     other => {
                         let r = windows.get_mut(&source).unwrap();
@@ -588,7 +697,7 @@ pub fn run(url: String, background: bool, shell_launch: bool) -> ! {
                             WindowAction::Resize(dir) => { let _ = r.window.drag_resize_window(dir); },
                             WindowAction::Minimize => r.window.set_minimized(true),
                             WindowAction::Maximize => r.window.set_maximized(!r.window.is_maximized()),
-                            WindowAction::Close => request_close(r),
+                            WindowAction::Close => { request_close(r); },
                             WindowAction::Fullscreen(on) => {
                                 let want = on.unwrap_or_else(|| !is_fullscreen(&r.window));
                                 // Tao preserves WINDOWPLACEMENT, including maximized state.
@@ -666,6 +775,7 @@ mod tests {
         assert!(matches!(parse_action(r#"{"type":"minimize"}"#), Some(WindowAction::Minimize)));
         assert!(matches!(parse_action(r#"{"type":"maximize"}"#), Some(WindowAction::Maximize)));
         assert!(matches!(parse_action(r#"{"type":"close"}"#), Some(WindowAction::Close)));
+        assert!(matches!(parse_action(r#"{"type":"update-install"}"#), Some(WindowAction::UpdateInstall)));
         assert!(matches!(parse_action(r#"{"type":"close-commit","request":7}"#), Some(WindowAction::CommitClose(7))));
         assert!(matches!(parse_action(r#"{"type":"close-cancel","request":7}"#), Some(WindowAction::CancelClose(7))));
         assert!(matches!(parse_action(r#"{"type":"drag"}"#), Some(WindowAction::Drag)));
@@ -694,6 +804,8 @@ mod tests {
             r#"{"type":"close-cancel","request":0}"#,
             r#"{"type":"close-commit","request":-1}"#,
             r#"{"type":"close-commit","request":"7"}"#,
+            r#"{"type":"update-install","path":"C:\\untrusted.exe"}"#,
+            r#"{"type":"update-install","url":"https://example.com/setup.exe"}"#,
             r#"not json"#,
             "",
         ] {
@@ -719,5 +831,47 @@ mod tests {
         assert_ne!(second, third);
         assert!(!state.cancel(second));
         assert!(state.accepts(third, expired));
+    }
+
+    #[test]
+    fn update_only_launches_after_the_last_saved_window() {
+        let mut update = UpdateCloseState::default();
+        update.begin(Instant::now(), [1, 2, 3]);
+        let mut launched = 0;
+        update.acknowledge(&1);
+        assert!(!update.finish(|| { launched += 1; Ok(()) }).unwrap());
+        update.acknowledge(&1); // Duplicate acknowledgement cannot count twice.
+        update.acknowledge(&2);
+        assert!(!update.finish(|| { launched += 1; Ok(()) }).unwrap());
+        assert_eq!(launched, 0);
+        assert!(update.active());
+        update.acknowledge(&3);
+        assert!(update.finish(|| { launched += 1; Ok(()) }).unwrap());
+        assert_eq!(launched, 1);
+        assert!(!update.active());
+    }
+
+    #[test]
+    fn cancelled_or_failed_update_never_keeps_stale_install_intent() {
+        let now = Instant::now();
+        let mut update = UpdateCloseState::default();
+        update.begin(now, [1, 2]);
+        update.acknowledge(&1);
+        assert!(!update.expired(now + Duration::from_secs(1)));
+        assert!(update.expired(now + CLOSE_ACK_TIMEOUT));
+        update.cancel();
+        update.acknowledge(&2); // A late saved-window message cannot revive cancellation.
+        assert!(!update.finish(|| panic!("cancelled update must not install")).unwrap());
+        update.begin(now, [1, 2]);
+        update.acknowledge(&1); update.acknowledge(&2);
+        assert_eq!(update.finish(|| Err("helper could not start".to_string())),
+            Err("helper could not start".to_string()));
+        assert!(!update.active());
+        update.begin(now, [1, 2]);
+        update.acknowledge(&1);
+        assert!(!update.finish(|| panic!("retry needs every window to save again")).unwrap());
+        update.acknowledge(&2);
+        assert!(update.finish(|| Ok(())).unwrap());
+        assert!(!update.active());
     }
 }

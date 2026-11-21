@@ -2,7 +2,7 @@
 
 [Home](../README.en.md) · [中文指南](使用说明书.md)
 
-This guide covers [v1.3.0](https://github.com/975952/prt/releases/tag/v1.3.0), including Windows installation, migration from portable copies, file locations, workspace navigation, cross-file questions, and background generation.
+This guide covers the current main branch (v1.4.4), including Windows installation, migration from portable copies, in-app updates, memory management, file locations, cross-file questions, and background generation. Available downloads are listed in [Releases](https://github.com/975952/prt/releases/latest).
 
 Name an imported file and page in your question to read it without opening it on screen. Comparisons can specify a different page for each file. “Next page” follows the previous source; “current page” refers to the visible file. Use a full path when names or editions are ambiguous. Page numbers initially refer to PDF positions; printed book numbers may require checking an offset. Stopping rejects late output, and regenerating replaces both the answer and its corresponding conversation history.
 
@@ -58,6 +58,14 @@ With the right sidebar closed, translations appear in a floating card. Drag its 
 
 Translate successive selections without waiting for earlier results. Sidebar entries stay in submission order, with up to three translations generating at once and additional tasks queued. Closing the floating card only hides it; its task continues in the sidebar. A new selection owns the next card, so an earlier response cannot overwrite it. Use an entry's trash icon to cancel and delete that translation.
 
+## Manage memory
+
+Open **Settings → Memory**, or press `Ctrl+Shift+M`. Saved names, preferences, and learning records appear as cards with their global, paper, or conversation scope. Global memory remains available when no conversation is open. Memory is managed from Settings.
+
+For example, “Remember, my name is Cyan” saves the name and displays it here when the write succeeds. Editing or deleting a card changes the actual record used in later answers, and the change survives reloading. Failed saves are shown with a retry action; an assistant's promise alone is not a save receipt.
+
+With a conversation open, you can also add a conversation memory as a note, tag, reference, or question. **Personal background and preferences** lets you supply additional background and response preferences; click **Save** at the bottom of Settings after editing it. Memories help adapt explanations and do not establish facts about a paper.
+
 ## Adjust the appearance
 
 Choose Glass, Rice paper, or Dark in **Settings → Appearance**. Adjust transparency, blur, background brightness, lighting, and motion to taste. Dark mode defaults to 95% text brightness and 65% colored-text saturation. Pale diagram backgrounds become darker shades of their original hue so light labels remain readable. Photographs and saturated graphics keep their original colors; image-only PDF pages retain their original white background and square corners.
@@ -78,6 +86,12 @@ The installed app places its program in `%LOCALAPPDATA%\Programs\prt`, papers in
 
 To import a portable copy, close the old reader and select its folder in the setup wizard. Migration copies both `papers/` and `data/`, leaving the original intact. Destinations must be empty: existing data is never silently merged or overwritten. If the old reader is running or copying fails, setup reports the failure so you can correct it and retry. The original portable copy and the installed app do not automatically synchronize afterward.
 
-Close all reader windows before backing up both the library and data folders. Upgrade an installed app by running the latest **prt-setup.exe**; for a portable app, replace **prt.exe** while keeping both folders. Uninstalling via Windows keeps personal papers and data. Do not publish the data folder: it contains API keys and private conversations. Releases include checksums; the current packages are not commercially code-signed.
+Close all reader windows before backing up both the library and data folders. Uninstalling via Windows keeps personal papers and data. Do not publish the data folder: it contains API keys and private conversations. Releases include checksums; the current packages are not commercially code-signed.
+
+prt automatically checks for a new release at startup, at least a day apart, and shows a notice without interrupting reading or starting installation. Follow the notice or open **Settings → Updates** to see the current version, check manually, or turn off automatic checks. Choose **Update and restart** to download the update and verify its SHA256 checksum. The app saves conversations, drafts, and reading state in every window before closing, then updates and restarts. Installed and portable copies both keep their papers and data.
+
+If checking, downloading, or verification fails, the current version stays in place and you can retry later. Updating does not proceed while window state has not been saved successfully; resolve the reported problem and retry. The Node development server shows an unsupported-update message without contacting the release service.
+
+**First upgrade from an older version:** if the installed app has no Updates page, download the new **prt-setup.exe**, close prt, and run it over the current installation. **Uninstalling is unnecessary.** Later updates can run inside the app. For an older portable copy, close prt and replace **prt.exe** in its original folder, keeping `papers/` and `data/`. Manual upgrades remain available.
 
 If an AI request fails, check the provider URL, model availability, credentials, quota, and network connection. For a bug report, include the version, steps, expected behavior, and a public or synthetic example. Remove personal information from screenshots. [Report a bug](https://github.com/975952/prt/issues/new/choose).
