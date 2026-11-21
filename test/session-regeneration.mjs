@@ -38,7 +38,7 @@ try {
   } else merge = createRequire(import.meta.url)('../server.js').__test.mergeSessionPayload;
   for (const [i, test] of cases.entries()) {
     let saved = {};
-    const url = `${base}/api/session?doc=regeneration-test-${i}&sid=case&merge=1`;
+    const url = `${base}/api/session?doc=regeneration-test-${i}&sid=case-${i}&merge=1`;
     for (const write of test.writes) {
       if (network) {
         const response = await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(write) });

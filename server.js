@@ -2446,6 +2446,22 @@ function prepareSessionRecord(payload, oldData, now) {
   else if (payload?.titleSource === 'ai') titleSource = 'ai';
   else if (payload?.titleSource === 'auto') titleSource = 'auto';
   else titleSource = oldSource;
+  // 记忆系统：合并新旧记忆，按 id 去重（取更新的版本）
+  const memoryIndex = new Map();
+  const allMemories = [
+    ...(Array.isArray(old?.memories) ? old.memories : []),
+    ...(Array.isArray(payload?.memories) ? payload.memories : [])
+  ];
+  for (const mem of allMemories) {
+    const memId = String(mem?.id || '');
+    if (!memId) continue;
+    const existing = memoryIndex.get(memId);
+    if (!existing || (mem?.updatedAt || 0) >= (existing.updatedAt || 0)) {
+      memoryIndex.set(memId, mem);
+    }
+  }
+  const memories = [...memoryIndex.values()].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+
   return {
     ...payload,
     v: 4,
@@ -2457,6 +2473,7 @@ function prepareSessionRecord(payload, oldData, now) {
     updatedAt,
     lastOpenedAt: sessionTs(payload?.lastOpenedAt) || sessionTs(old?.lastOpenedAt) || updatedAt,
     pinned,
+    memories: memories.length ? memories : undefined,
     pinnedAt: pinned ? (sessionTs(old?.pinnedAt) || sessionTs(payload?.pinnedAt) || updatedAt) : 0,
     archived,
     archivedAt: archived ? (sessionTs(old?.archivedAt) || sessionTs(payload?.archivedAt) || updatedAt) : 0,
@@ -2826,16 +2843,54 @@ async function handle(req, res) {
       if (!patch || typeof patch !== 'object' || Array.isArray(patch)) {
         return sendJson(res, 400, { error: { message: '会话 meta 必须是对象' } });
       }
+      const hasMemories = Object.prototype.hasOwnProperty.call(patch, 'memories');
+      if (hasMemories && (!Array.isArray(patch.memories) || patch.memories.length > 200)) {
+        return sendJson(res, 400, { error: { message: '会话记忆列表不合法' } });
+      }
+      let memoryOp = null;
+      if (Object.prototype.hasOwnProperty.call(patch, 'memoryOp')) {
+        const candidate = patch.memoryOp;
+        const action = String(candidate?.action || '');
+        if (!candidate || typeof candidate !== 'object' || Array.isArray(candidate)
+          || !['add', 'edit', 'remove', 'clear'].includes(action)) {
+          return sendJson(res, 400, { error: { message: '会话记忆操作不合法' } });
+        }
+        if (action === 'add' || action === 'edit') {
+          const raw = candidate.memory;
+          const id = String(raw?.id || '');
+          const content = typeof raw?.content === 'string' ? raw.content.trim().slice(0, 2000) : '';
+          if (!raw || typeof raw !== 'object' || Array.isArray(raw) || !/^[\w-]{1,80}$/.test(id) || !content) {
+            return sendJson(res, 400, { error: { message: '会话记忆内容不合法' } });
+          }
+          memoryOp = { action, memory: {
+            id,
+            content,
+            category: String(raw.category || 'note').trim().slice(0, 50) || 'note',
+            createdAt: sessionTs(raw.createdAt),
+            updatedAt: sessionTs(raw.updatedAt),
+          } };
+        } else if (action === 'remove') {
+          const id = String(candidate.memory?.id || '');
+          if (!/^[\w-]{1,80}$/.test(id)) return sendJson(res, 400, { error: { message: '会话记忆编号不合法' } });
+          memoryOp = { action, id };
+        } else {
+          memoryOp = { action };
+        }
+      }
       let next;
       try { next = await queueSessionWrites([file, ...chatLockKeys(sid)], async () => {
       const file = await resolveSessionFileName(doc, sid);
       if (await sessionWasDeleted(file, sid)) return SESSION_DELETED;
       const cur = await readDataFile(file, null);
-      if (!cur || typeof cur !== 'object' || Array.isArray(cur)) return null;
       const now = Date.now();
-      const next = { ...cur };
+      const canCreate = memoryOp?.action === 'add' || (hasMemories && patch.memories.length > 0);
+      if ((!cur || typeof cur !== 'object' || Array.isArray(cur)) && !canCreate) return null;
+      const previous = cur && typeof cur === 'object' && !Array.isArray(cur) ? cur : null;
+      const next = previous ? { ...previous } : { entries: [], history: [], ops: [], createdAt: now, updatedAt: now };
       next.storageSid = sid;
-      next.storageDoc = sessionStorageOwner(file.slice('session-'.length, -5), sid, cur);
+      next.storageDoc = previous
+        ? sessionStorageOwner(file.slice('session-'.length, -5), sid, previous)
+        : docIdOf(doc);
       if (Object.prototype.hasOwnProperty.call(patch, 'title')) {
         const t = collapsWs(patch.title).slice(0, SESSION_TITLE_MAX);
         // 带 titleSource='ai' 的是自动标题；普通改名保持 user（手动最优先）
@@ -2848,19 +2903,61 @@ async function handle(req, res) {
       }
       if (Object.prototype.hasOwnProperty.call(patch, 'pinned')) {
         next.pinned = patch.pinned === true;
-        next.pinnedAt = next.pinned ? (sessionTs(cur.pinnedAt) || now) : 0;
+        next.pinnedAt = next.pinned ? (sessionTs(previous?.pinnedAt) || now) : 0;
       }
       if (Object.prototype.hasOwnProperty.call(patch, 'archived')) {
         next.archived = patch.archived === true;
-        next.archivedAt = next.archived ? (sessionTs(cur.archivedAt) || now) : 0;
+        next.archivedAt = next.archived ? (sessionTs(previous?.archivedAt) || now) : 0;
       }
       if (Object.prototype.hasOwnProperty.call(patch, 'lastOpenedAt')) {
         const t = sessionTs(patch.lastOpenedAt);
         if (t) next.lastOpenedAt = t;
       }
+      if (hasMemories) {
+        const oldById = new Map((Array.isArray(previous?.memories) ? previous.memories : []).map(memory => [String(memory?.id || ''), memory]));
+        const memories = patch.memories.filter(memory => memory && typeof memory === 'object' && !Array.isArray(memory))
+          .map(memory => {
+            const id = String(memory.id || '');
+            const content = typeof memory.content === 'string' ? memory.content.trim().slice(0, 2000) : '';
+            if (!/^[\w-]{1,80}$/.test(id) || !content) return null;
+            const oldMemory = oldById.get(id);
+            return {
+              id,
+              content,
+              category: String(memory.category || 'note').trim().slice(0, 50) || 'note',
+              createdAt: sessionTs(memory.createdAt) || sessionTs(oldMemory?.createdAt) || now,
+              updatedAt: sessionTs(memory.updatedAt) || now,
+            };
+          }).filter(Boolean);
+        if (memories.length !== patch.memories.length) return null;
+        next.memories = memories.length ? memories : undefined;
+      }
+      if (memoryOp) {
+        const memories = Array.isArray(next.memories) ? [...next.memories] : [];
+        if (memoryOp.action === 'clear') next.memories = undefined;
+        else if (memoryOp.action === 'remove') {
+          next.memories = memories.filter(memory => String(memory?.id || '') !== memoryOp.id);
+          if (!next.memories.length) next.memories = undefined;
+        } else {
+          const index = memories.findIndex(memory => String(memory?.id || '') === memoryOp.memory.id);
+          if (memoryOp.action === 'edit' && index < 0) return null;
+          const oldMemory = index >= 0 ? memories[index] : null;
+          const saved = {
+            ...memoryOp.memory,
+            createdAt: memoryOp.memory.createdAt || sessionTs(oldMemory?.createdAt) || now,
+            updatedAt: now,
+          };
+          if (index >= 0) memories[index] = saved;
+          else memories.push(saved);
+          memories.sort((a, b) => b.createdAt - a.createdAt);
+          next.memories = memories;
+        }
+        next.updatedAt = now;
+        next.contentRev = (Number(previous?.contentRev) || 0) + 1;
+      }
       next.v = 4;
-      if (!sessionTs(next.createdAt)) next.createdAt = sessionTs(cur.updatedAt) || now;
-      await writeDataFile(await writableSessionFile(file, sid), next);
+      if (!sessionTs(next.createdAt)) next.createdAt = sessionTs(previous?.updatedAt) || now;
+      await writeDataFile(file, next);
       return next;
       }); }
       catch (e) {

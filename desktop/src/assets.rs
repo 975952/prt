@@ -58,6 +58,10 @@ mod tests {
             // A 线 P1.5 / P2.5 新增的独立模块（同样靠 build.bat touch 才会重编）
             "js/citation-validator.js",
             "js/agent.js",
+            // 会话记忆 UI：新增文件需由 desktop\\build.bat 强制触发内嵌重编译
+            "js/session-memory.js",
+            "js/session-memory-ui.js",
+            "css/session-memory.css",
             // B 线 P1：多标签工作区
             "js/tabs.js",
             "tabs.css",

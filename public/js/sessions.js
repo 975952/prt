@@ -209,7 +209,7 @@ function keyForRow(row) {
 
 async function patchMeta(row, patch) {
   try {
-    const q = new URLSearchParams({ doc: keyForRow(row), sid: row.sid });
+    const q = new URLSearchParams({ sid: row.sid });
     const r = await fetch(`/api/session?${q}`, {
       method: 'PATCH',
       headers: { 'Content-Type': 'application/json' },
@@ -225,6 +225,10 @@ async function patchMeta(row, patch) {
     if (patch.title !== undefined) {
       row.title = String(patch.title || '');
       row.titleSource = patch.title ? 'user' : 'auto';
+    }
+    // 记忆更新回显：仅更新本地状态，服务端会合并
+    if (patch.memories !== undefined && st.ctx?.onMemoriesChanged) {
+      st.ctx.onMemoriesChanged(patch.memories);
     }
     cacheTouched(row);
     renderHeader();

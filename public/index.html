@@ -86,6 +86,7 @@
 <link rel="stylesheet" href="/immersive-viewer.css" />
 <link rel="stylesheet" href="/immersive-reading.css" />
 <link rel="stylesheet" href="/reader-library.css" />
+<link rel="stylesheet" href="/css/session-memory.css" />
 <!-- 公式渲染：本地内置 KaTeX，不联网 -->
 <link rel="stylesheet" href="/vendor/katex/katex.min.css" />
 <link rel="icon" type="image/svg+xml" href="/icon.svg" />
@@ -365,6 +366,8 @@
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M12 5.2v13.6M5.2 12h13.6"/></svg>
         <span class="agent-session-label">新对话</span>
       </button>
+      <button type="button" class="sess-icon-btn session-memory-button" id="sessMemBtn" title="会话记忆（Ctrl+Shift+M）"
+        aria-label="会话记忆" aria-controls="sessionMemoryPanel" aria-expanded="false" disabled></button>
       <button type="button" class="sess-icon-btn" id="sessHist" title="会话历史（Ctrl+Shift+H）" aria-label="会话历史" aria-expanded="false">
         <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" aria-hidden="true" focusable="false"><path d="M4 6.4h16M4 12h16M4 17.6h16"/></svg>
         <span class="agent-session-label">历史会话</span>

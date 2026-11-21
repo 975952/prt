@@ -45,7 +45,7 @@ window.fetch = async (input, options = {}) => {
     const selected = empty ? [] : rows.filter(row => url.searchParams.get('scope') === 'all' || row.fileKey === doc);
     return Response.json({sessions:selected});
   }
-  const row = rows.find(row => row.sid === url.searchParams.get('sid') && row.fileKey === url.searchParams.get('doc'));
+  const row = rows.find(row => row.sid === url.searchParams.get('sid'));
   if(method === 'PATCH' && row) { Object.assign(row,JSON.parse(options.body)); return Response.json({session:row}); }
   if(method === 'DELETE' && row) { rows.splice(rows.indexOf(row),1); return Response.json({ok:true}); }
   return Response.json({error:'Unexpected fixture request'},{status:400});

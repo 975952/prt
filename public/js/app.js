@@ -3,6 +3,8 @@ import { windowStorage as localStorage, storageKey, windowId, startWindows, fini
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
 import { initReaderToolbar, placeToolMenu } from './reader-toolbar.js';
+import { sessionMemory } from './session-memory.js';
+import { SessionMemoryPanel } from './session-memory-ui.js';
 import { createImportQueue } from './import-queue.js';
 import { createImportPanel } from './import-panel.js';
 import { completedMarkdownEnd, splitAnswerSections, unfinishedDisplayMathStart } from './output-flow.js';
@@ -849,6 +851,8 @@ const state = {
 
 let viewer = null;
 let serverState = {};
+let sessionMemoryPanel = null;
+const sessionMemoryWriteChains = new Map();
 
 
 (async function boot() {
@@ -931,6 +935,8 @@ let serverState = {};
   initPageRefs();
   // 会话系统 P0：会话头 / 快速切换 / 历史面板 / 进文件夹选择卡片（sessions.js 需要 app.js 注入回调）
   initSessions(sessionsContext());
+  initSessionMemoryPanel();
+  renderSessionBar();
   initAgentWorkspace();
   initReadingTools();
 
@@ -8004,6 +8010,7 @@ async function saveSessionNow() {
   const sid = activeSidFor(docId);
   const scope = sessionScopeKey();
   const headers = { 'Content-Type': 'application/json' };
+
   const chatURL = `/api/session?${sessionQuery(scope, sid)}&merge=1`;
   const translateURL = `/api/session?${sessionQuery(docId, TRANSLATE_SID)}&merge=1`;
   const writeChat = !sessionsIsEntryMode() && !sessionMutationPending(chatOwnerKey(scope, sid)) && sessionHasChatContent();
@@ -8038,6 +8045,20 @@ function scheduleRemoteSession() {
 }
 function onRemoteSessionSaved(data) {
   if (!data || data.sender === windowId) return;
+  if (data.kind === 'memory') {
+    const scope = scopeDocIdOf(data.scope) === scopeDocIdOf('default') ? 'default' : data.scope;
+    const owner = captureSessionOwner();
+    if (owner.sid !== data.sid || scopeDocIdOf(owner.scope) !== scopeDocIdOf(scope)) return;
+    fetch('/api/session?' + new URLSearchParams({ sid: data.sid }), { headers: { 'Content-Type': 'application/json' } })
+      .then(response => response.ok ? response.json() : null)
+      .then(saved => {
+        if (!saved || !sessionOwnerCurrent(owner)) return;
+        sessionMemory.import(data.sid, saved.memories || []);
+        sessionMemoryPanel?.render();
+        refreshSavedConversationList(scope, data.sid);
+      }).catch(() => {});
+    return;
+  }
   if (data.kind === 'chat' && data.deleted) {
     retireDeletedConversation(data.scope, data.sid, { copies: !!data.copies });
     refreshConversationList();
@@ -8576,6 +8597,7 @@ async function restoreSession(docId, { only = 'all', skipReplayIfSame = false, c
     const savedTranslate = translateRes?.ok ? await translateRes.json() : {};
     if (!current()) return;
     if (savedChat.deleted) { retireDeletedConversation(scope, sid); return; }
+    if (only !== 'translate') sessionMemory.import(sid, savedChat.memories || []);
     if (savedChat.draftOwner && only !== 'translate') {
       registerMovedSessionDraft(scope, sid, savedChat.draftOwner);
       activateComposerDraft('chat');
@@ -9043,6 +9065,7 @@ async function switchSession(sid, { force = false, storageOwner = null } = {}) {
   } else {
     setActiveSidFor(docId, sid || '');
   }
+  sessionMemoryPanel?.setSession(sid || '');
   activateComposerDraft('chat');
   displayedChatKey = currentChatKey();
   refreshChatJobState();
@@ -9133,7 +9156,10 @@ async function newSession({ silent = false, fromEntry = false } = {}) {
   parkChatSession();
   saveComposerDraft();
   const entryDraft = fromEntry ? composerDrafts.read(currentComposerOwner('chat')) : null;
-  setActiveSidFor(docId, newSid());
+  const sid = newSid();
+  sessionMemory.import(sid, []);
+  setActiveSidFor(docId, sid);
+  sessionMemoryPanel?.setSession(sid);
   if (entryDraft && effectiveSessionScopeMode() === 'global') writeComposerDraft(currentComposerOwner('chat'), entryDraft);
   activateComposerDraft('chat');
   displayedChatKey = currentChatKey();
@@ -9194,12 +9220,44 @@ async function deleteSession(sid, { confirm: askConfirm = true, scope = sessionS
   return true;
 }
 
+function initSessionMemoryPanel() {
+  const button = $('#sessMemBtn');
+  if (!button) return;
+  sessionMemoryPanel = new SessionMemoryPanel(sessionMemory);
+  button.replaceChildren(iconEl('note', { size: 15 }));
+  sessionMemoryPanel.init(button);
+  sessionMemory.onChange(({ sid, memory, action }) => {
+    const owner = { docId: state.doc?.docId || '', scope: sessionScopeKey(), sid: String(sid ?? '') };
+    const key = owner.sid;
+    const prior = sessionMemoryWriteChains.get(key) || Promise.resolve();
+    const write = prior.catch(() => {}).then(async () => {
+      const query = new URLSearchParams({ sid: owner.sid });
+      const response = await fetch('/api/session?' + query, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ memoryOp: { action, memory } }),
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result?.error?.message || 'HTTP ' + response.status);
+      notifySessionSaved({ kind: 'memory', docId: owner.docId, scope: owner.scope, sid: owner.sid });
+      refreshSavedConversationList(owner.scope, owner.sid);
+    }).catch(error => {
+      toast(tr('记忆保存失败：{0}', error.message), 'err', 5000);
+    });
+    sessionMemoryWriteChains.set(key, write);
+    write.then(() => {
+      if (sessionMemoryWriteChains.get(key) === write) sessionMemoryWriteChains.delete(key);
+    });
+  });
+}
+
 function renderSessionBar() {
   windowReady();
   const bar = $('#sessBar');
   if (!bar) return;
   // 会话头只在问答块开着的时候出现（译文页不该挂着会话信息）
   const chatActive = hasChatScope() && rightPanelInCol(1) === 'chat';
+  sessionMemoryPanel?.setSession(chatActive ? activeSidFor(state.doc?.docId || '') : null);
   bar.classList.toggle('hidden', !chatActive);
   if (chatActive) sessionsRefreshHeader();
   updateAgentRecentSessions();
@@ -15561,6 +15619,12 @@ function initShortcuts() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'm'
+      && sessionMemoryPanel && !$('#sessMemBtn')?.disabled) {
+      e.preventDefault();
+      sessionMemoryPanel.toggle();
+      return;
+    }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k'
       && !document.body.matches('.reading, .agent-full') && !e.defaultPrevented
       && ![...document.querySelectorAll('[role="dialog"], [aria-modal="true"], dialog[open]')].some(dialog => dialog.getClientRects().length)) {
@@ -15574,6 +15638,7 @@ function initShortcuts() {
     if (e.key === 'Escape') {
       if (document.body.classList.contains('reading-capture-active')) { e.preventDefault(); state.stopRegion?.(); return; }
       if (!$('#settingsModal').classList.contains('hidden')) { closeSettings(); return; }
+      if (sessionMemoryPanel?.isOpen) { e.preventDefault(); sessionMemoryPanel.toggle(false); return; }
       if (!$('#noteBox').classList.contains('hidden')) { saveNoteBox(); return; }
       if (immersiveReading?.active) {
         e.preventDefault();
