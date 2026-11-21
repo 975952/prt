@@ -15,7 +15,7 @@ prt is a local PDF reader for Windows with built-in AI chat. Drop an entire cour
 
 </div>
 
-## Three workspaces in dark mode
+## Three workspaces · v1.4.6 in dark mode
 
 ![Library with folders, search, and recently read papers](docs/assets/library-dark-16x10-en.png)
 

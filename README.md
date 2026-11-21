@@ -16,7 +16,7 @@ prt 是一款带 AI 问答的 Windows 本地 PDF 阅读器，支持整份课程�
 
 </div>
 
-## 三个工作区 · 深色模式
+## 三个工作区 · v1.4.6 深色模式
 
 ![书架首页：继续阅读、文件夹与搜索](docs/assets/library-dark-16x10-zh.png)
 
@@ -27,14 +27,6 @@ prt 是一款带 AI 问答的 Windows 本地 PDF 阅读器，支持整份课程�
 ![阅读工作区：对照 Transformer 结构图阅读右侧讲解](docs/assets/reader-dark-16x10-zh.png)
 
 <sub>论文为 [Attention Is All You Need](https://arxiv.org/abs/1706.03762)；右侧问答是演示内容。</sub>
-
-<details>
-<summary>查看项目海报 · 用课件中的一张图提问</summary>
-
-![项目介绍海报，以正态分布曲线为例展示截图提问和返回引用页](docs/assets/prt-overview-zh.png)
-
-</details>
-
 
 ## 主要功能
 
