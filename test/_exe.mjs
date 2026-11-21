@@ -47,12 +47,25 @@ export function spawnReader(exe, { args = [], env = {} } = {}) {
   });
 }
 
-/** 只结束本测试自己启动的子进程 */
+/** 只结束本测试自己启动的子进程；POSIX 上也必须释放仍占用事件循环的服务器。 */
 export async function stopChild(child, timeoutMs = 8000) {
-  if (!child || child.exitCode !== null || !child.pid) return;
-  try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore' }); } catch { /* 已经退了 */ }
-  const start = Date.now();
-  while (child.exitCode === null && Date.now() - start < timeoutMs) await sleep(100);
+  const exited = () => child.exitCode !== null || child.signalCode != null;
+  if (!child || !child.pid || exited()) return;
+  const waitForExit = async () => {
+    const start = Date.now();
+    while (!exited() && Date.now() - start < timeoutMs) await sleep(Math.min(50, timeoutMs));
+    return exited();
+  };
+  if (process.platform === 'win32') {
+    try { execFileSync('taskkill', ['/PID', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true }); }
+    catch { /* The child may already have exited. */ }
+  } else {
+    try { child.kill('SIGTERM'); } catch { /* Recheck the actual exit state below. */ }
+  }
+  if (await waitForExit()) return;
+  // A child can ignore SIGTERM. SIGKILL is the bounded fallback for our own handle only.
+  try { child.kill('SIGKILL'); } catch { /* Report a cleanup failure instead of pretending it exited. */ }
+  if (!await waitForExit()) throw new Error(`Test child ${child.pid} did not exit after cleanup`);
 }
 
 /**

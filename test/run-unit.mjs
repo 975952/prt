@@ -6,6 +6,7 @@ const suites = ['agent-unit.mjs', 'ai-stream.mjs', 'task-deadline.mjs', 'pdf-lif
   'translation-queue.mjs', 'paper-titles.mjs', 'paper-organizer.mjs', 'paper-organizer-ai.mjs', 'paper-organizer-flat.mjs', 'organizer-history.mjs', 'selection-reading-order.mjs', 'pdf-reading-theme.mjs', 'i18n.mjs', 'prompts-manifest.mjs', 'repository-check.mjs'];
 suites.unshift('agent-profile.mjs');
 suites.unshift('import-queue.mjs');
+suites.unshift('child-cleanup.mjs');
 for (const suite of suites) {
   console.log(`\nRunning ${suite}`);
   const result = spawnSync(process.execPath, [path.join(import.meta.dirname, suite)], { stdio: 'inherit' });
