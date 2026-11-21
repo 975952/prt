@@ -139,14 +139,18 @@ const send = async (question, waitForMemory = true) => {
   if (waitForMemory) await page.evaluate(() => window.__ctx.memoryIdle());
 };
 const openMemory = async () => {
-  if (!await page.$eval('#sessionMemoryPanel', node => !!node.getClientRects().length)) {
-    await page.click('#sessMemBtn');
+  if (!await page.$eval('#settingsModal', node => !!node.getClientRects().length)) {
+    await page.click('#settingsBtn');
   }
+  await page.waitForSelector('#settingsModal', { visible: true });
+  await page.click('#settingsNavMemory');
   await page.waitForSelector('#sessionMemoryPanel', { visible: true });
+  assert.equal(await page.$$eval('#agentMemory, #sessMemBtn', nodes => nodes.length), 0);
+  assert(await page.$eval('#sessionMemoryPanel', node => !!node.closest('#settingsPaneMemory')));
 };
 const closeMemory = async () => {
-  if (await page.$eval('#sessionMemoryPanel', node => !!node.getClientRects().length)) {
-    await page.click('.memory-close-btn');
+  if (await page.$eval('#settingsModal', node => !!node.getClientRects().length)) {
+    await page.click('#closeSettings');
   }
 };
 const memoryTexts = () => page.$$eval('.memory-item-content', nodes => nodes.map(node => node.textContent));

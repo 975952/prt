@@ -1,4 +1,4 @@
-/** Real application + real storage regression for visible session memory controls.
+/** Real application + real storage regression for memory inside Settings.
  * node test/session-memory-integration.mjs [--desktop]
  * Runs only isolated background services and a headless browser; no model calls.
  */
@@ -13,8 +13,9 @@ import { stageExe, spawnReader, stopChild, waitForBase } from './_exe.mjs';
 import { writeTitlePdf } from './fixtures/make-title-pdf.mjs';
 
 const desktop = process.argv.includes('--desktop');
-const executablePath = [process.env.CHROME, 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe',
-  'C:/Program Files/Google/Chrome/Application/chrome.exe'].find(file => file && fs.existsSync(file));
+const executablePath = [process.env.CHROME, 'C:/Program Files (x86)/Google/Chrome/Application/chrome.exe',
+  'C:/Program Files/Google/Chrome/Application/chrome.exe', 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe']
+  .find(file => file && fs.existsSync(file));
 assert(executablePath, 'Chromium is available');
 fs.mkdirSync(SANDBOX, { recursive: true });
 const scratch = fs.mkdtempSync(path.join(SANDBOX, `session-memory-integration-${desktop ? 'desktop' : 'node'}-`));
@@ -65,12 +66,24 @@ const fill = (selector, value) => page.$eval(selector, (node, value) => {
   node.value = value; node.dispatchEvent(new Event('input', { bubbles: true }));
 }, value);
 const closePanel = async () => {
-  if (await visible('#sessionMemoryPanel')) await page.click('.memory-close-btn');
+  if (await visible('#settingsModal')) await page.click('#closeSettings');
 };
-const openPanel = async selector => {
-  await clickable(selector);
-  if (!await visible('#sessionMemoryPanel')) await page.click(selector);
+const assertSettingsOnly = async () => {
+  assert.equal(await page.$$eval('#agentMemory, #sessMemBtn', nodes => nodes.length), 0,
+    'home, Alina and the reader do not expose standalone memory controls');
+  assert(await page.$eval('#sessionMemoryPanel', node => !!node.closest('#settingsPaneMemory')
+    && getComputedStyle(node).position !== 'fixed'), 'memory is embedded in the Settings memory page');
+};
+const sessionItems = '.memory-item[data-source="session"]';
+const openPanel = async () => {
+  if (!await visible('#settingsModal')) {
+    await clickable('#settingsBtn');
+    await page.click('#settingsBtn');
+  }
+  await page.waitForSelector('#settingsModal', { visible: true });
+  await page.locator('#settingsNavMemory').click();
   await page.waitForSelector('#sessionMemoryPanel', { visible: true });
+  await assertSettingsOnly();
 };
 const selectSession = async sid => {
   await closePanel();
@@ -103,6 +116,13 @@ try {
     entries: [{ id: sid + '-question', block: 'chat', kind: 'user', status: 'user', text }], history: [], ops: [] });
   await seed('memory-primary', 'Memory primary conversation');
   await seed('memory-secondary', 'Memory secondary conversation');
+  const at = new Date().toISOString();
+  await json('/api/profile', { version: 1, revision: 1, updatedAt: at, selfReport: '', selfReportAt: '', items: [{
+    id: 'existing-global-name', topic: '称呼', aliases: [], level: '称呼：Cyan', boundary: '', note: '',
+    status: 'confirmed', basis: 'user_self_report', createdAt: at, updatedAt: at, lastConfirmedAt: at,
+    source: { docId: '', paper: '', capability: 'chat' },
+    memory: { kind: 'identity', scope: 'global', signal: 'self_report', evidence: '记下来，我叫Cyan' },
+  }] });
   browser = await puppeteer.launch({ executablePath, headless: true,
     args: ['--no-sandbox', '--disable-gpu'], userDataDir: path.join(scratch, 'browser') });
   page = await browser.newPage();
@@ -139,70 +159,81 @@ try {
   await page.goto(base + '/', { waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.__ctx && window.__state?.papers.length === 1);
   await page.waitForSelector('html:not([data-startup])');
+  await assertSettingsOnly();
+  await openPanel();
+  assert.match(await page.$eval('.memory-item[data-memory-id="existing-global-name"] .memory-item-content', node => node.textContent), /Cyan/);
+  assert.equal(await page.$$eval(sessionItems, items => items.length), 0);
+  await page.screenshot({ path: path.join(scratch, 'home-settings-memory.png') });
+  await closePanel();
+  assert.equal(await visible('#sessionMemoryPanel'), false);
+  pass('home Settings shows an existing global identity without opening a conversation');
   await page.click('#homeAgent'); await settled();
   await page.waitForSelector('body.agent-full.agent-landing', { visible: true });
-  await clickable('#agentMemory');
-  assert.match(await page.$eval('#agentMemory', node => node.textContent), /会话记忆/);
-  assert.equal(await visible('#sessBar'), false, 'the old hidden header is not the only memory entrance');
+  await assertSettingsOnly();
   await page.screenshot({ path: path.join(scratch, 'landing-entry.png') });
-  await openPanel('#agentMemory');
+  await openPanel();
   const landingSid = await page.evaluate(() => __ctx.activeSession);
   await fill('.memory-add-input', 'Memory created before the first question');
   await page.click('.memory-add-btn');
   await untilSaved(landingSid, items => items.some(item => item.content === 'Memory created before the first question'), 'landing add');
   await page.screenshot({ path: path.join(scratch, 'landing-memory-open.png') });
-  pass('Alina landing has a labelled visible control and can persist the first memory before any chat');
+  pass('Alina has no separate memory entry and Settings can persist a memory before the first question');
 
   await closePanel();
   await page.click('#agentSidebarToggle');
   await page.waitForSelector('body.agent-nav-collapsed');
-  await openPanel('#agentMemory');
+  await openPanel();
   await closePanel();
   await page.click('#agentSidebarToggle');
   await page.setViewport({ width: 320, height: 844 });
-  await clickable('#agentMemory');
-  assert(await page.$eval('#agentMemory > span:last-child', node => node.scrollWidth <= node.clientWidth + 1),
-    'the memory label is readable without truncation at 320px');
   await page.screenshot({ path: path.join(scratch, 'mobile-entry.png') });
-  await openPanel('#agentMemory');
+  await openPanel();
   assert(await page.$eval('#sessionMemoryPanel', node => {
-    const r = node.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 1 && r.bottom <= innerHeight + 1;
+    const r = node.getBoundingClientRect(); return r.left >= 0 && r.right <= innerWidth + 1;
   }));
+  await page.locator(sessionItems + ' .memory-edit-btn').click();
+  await fill('.memory-add-input', 'Memory edited on a small screen');
+  await page.locator('.memory-add-btn').click();
+  await untilSaved(landingSid, items => items.some(item => item.content === 'Memory edited on a small screen'), 'mobile edit');
   await page.screenshot({ path: path.join(scratch, 'mobile-memory-open.png') });
   await closePanel();
   await page.setViewport({ width: 1400, height: 940 });
-  pass('memory control works with a collapsed sidebar and at a 320px viewport');
+  pass('Settings memory works with a collapsed sidebar and at a 320px viewport');
 
   await selectSession('memory-primary');
   assert(!await visible('#agentLanding'), 'history selects a real conversation');
-  await openPanel('#agentMemory');
+  await openPanel();
   await fill('.memory-add-input', 'Primary memory');
   await page.click('.memory-add-btn');
   await untilSaved('memory-primary', items => items.length === 1 && items[0].content === 'Primary memory', 'primary add');
-  await page.click('.memory-edit-btn');
+  await page.click(sessionItems + ' .memory-edit-btn');
   await fill('.memory-add-input', 'Edited primary memory');
   await page.select('.memory-add-category', 'reference');
   await page.click('.memory-add-btn');
   await untilSaved('memory-primary', items => items.length === 1 && items[0].content === 'Edited primary memory'
     && items[0].category === 'reference', 'primary edit');
   await selectSession('memory-secondary');
-  await openPanel('#agentMemory');
-  assert.equal(await page.$$eval('.memory-item', items => items.length), 0, 'empty session does not show another session memory');
-  await selectSession('memory-primary'); await openPanel('#agentMemory');
-  assert.match(await page.$eval('.memory-item-content', node => node.textContent), /Edited primary memory/);
+  await openPanel();
+  assert.equal(await page.$$eval(sessionItems, items => items.length), 0, 'empty session does not show another session memory');
+  assert.match(await page.$eval('.memory-item[data-source="profile"] .memory-item-content', node => node.textContent), /Cyan/);
+  await selectSession('memory-primary'); await openPanel();
+  assert.match(await page.$eval(sessionItems + ' .memory-item-content', node => node.textContent), /Edited primary memory/);
   await page.screenshot({ path: path.join(scratch, 'conversation-memory-open.png') });
   pass('full conversation edits persist once and switching sessions isolates memory lists');
 
   await page.reload({ waitUntil: 'domcontentloaded' });
   await page.waitForFunction(() => !!window.__ctx);
   await page.waitForSelector('html:not([data-startup])');
-  await selectSession('memory-primary'); await openPanel('#agentMemory');
-  assert.equal(await page.$$eval('.memory-item-content', nodes => nodes.map(node => node.textContent).join('|')), 'Edited primary memory');
+  await selectSession('memory-primary'); await openPanel();
+  assert.equal(await page.$$eval(sessionItems + ' .memory-item-content', nodes => nodes.map(node => node.textContent).join('|')), 'Edited primary memory');
   await closePanel();
   await page.keyboard.down('Control'); await page.keyboard.down('Shift');
   await page.keyboard.press('KeyM'); await page.keyboard.up('Shift'); await page.keyboard.up('Control');
   await page.waitForSelector('#sessionMemoryPanel', { visible: true });
-  pass('reloading restores saved memory and Ctrl+Shift+M opens the real panel');
+  assert.equal(await visible('#settingsModal'), true);
+  assert.equal(await page.$eval('#settingsNavMemory', node => node.getAttribute('aria-selected')), 'true');
+  await assertSettingsOnly();
+  pass('reloading restores saved memory and Ctrl+Shift+M opens the Settings memory page');
 
   rejectMemoryWrite = true;
   await fill('.memory-add-input', 'Retained after failed save'); await page.click('.memory-add-btn');
@@ -218,23 +249,22 @@ try {
   await closePanel();
   await page.evaluate(() => __ctx.openAgentPaper(__state.papers[0]));
   await page.waitForSelector('body.agent-docked'); await settled();
-  await clickable('#sessMemBtn');
-  assert.match(await page.$eval('#sessMemBtn', node => node.textContent), /记忆/);
+  await assertSettingsOnly();
   await page.screenshot({ path: path.join(scratch, 'docked-entry.png') });
-  await openPanel('#sessMemBtn');
-  assert.equal(await page.$$eval('#sessionMemoryPanel', nodes => nodes.length), 1, 'full and docked controls share a single panel');
-  assert.equal(await page.$$eval('.memory-item', nodes => nodes.length), 2);
+  await openPanel();
+  assert.equal(await page.$$eval('#sessionMemoryPanel', nodes => nodes.length), 1, 'Settings owns a single embedded memory panel');
+  assert.equal(await page.$$eval(sessionItems, nodes => nodes.length), 2);
   await page.screenshot({ path: path.join(scratch, 'docked-memory-open.png') });
-  await page.click('.memory-delete-btn');
+  await page.click(sessionItems + ' .memory-delete-btn');
   await untilSaved('memory-primary', items => items.length === 1, 'first delete');
-  await page.click('.memory-delete-btn');
+  await page.click(sessionItems + ' .memory-delete-btn');
   await untilSaved('memory-primary', items => items.length === 0, 'last delete');
   await page.evaluate(() => __ctx.saveSessionNow());
   assert.equal((await json(query('memory-primary'))).memories?.length || 0, 0);
   assert.equal(readDisk('memory-primary').memories?.length || 0, 0);
-  pass('reader has a labelled memory button and deleting the last item survives the normal chat save');
+  pass('reader memory is managed only in Settings and deleting the last session item survives the chat save');
 
-  await selectSession('memory-secondary'); await openPanel('#agentMemory');
+  await selectSession('memory-secondary'); await openPanel();
   rejectMemoryWrite = true;
   await fill('.memory-add-input', 'Failed memory in a conversation being deleted');
   await page.click('.memory-add-btn');
@@ -271,12 +301,11 @@ try {
   await page.waitForFunction(() => !!window.__ctx);
   await page.waitForSelector('html:not([data-startup])');
   await page.click('#homeAgent'); await settled();
-  await clickable('#agentMemory');
-  assert.match(await page.$eval('#agentMemory', node => node.textContent), /Conversation memory/);
-  await openPanel('#agentMemory');
-  assert.match(await page.$eval('.memory-panel-header', node => node.textContent), /Conversation memory/);
+  await assertSettingsOnly();
+  await openPanel();
+  assert.match(await page.$eval('#settingsNavMemory', node => node.textContent), /Memory|memory/);
   await page.screenshot({ path: path.join(scratch, 'english-memory-open.png') });
-  pass('English landing exposes a translated memory control that opens the same panel');
+  pass('English Settings has a translated memory page without an extra main-screen entry');
   assert.deepEqual(errors, []);
   assert.deepEqual(forbiddenRequests, []);
   pass('the complete app loads without browser errors or model requests');

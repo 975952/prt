@@ -9235,14 +9235,13 @@ async function deleteSession(sid, { confirm: askConfirm = true, scope = sessionS
 }
 
 function initSessionMemoryPanel() {
-  const buttons = [$('#sessMemBtn'), $('#agentMemory')].filter(Boolean);
-  if (!buttons.length) return;
+  const container = $('#settingsMemoryContent');
+  if (!container) return;
   sessionMemoryPanel = new SessionMemoryPanel(sessionMemory, { profileStore });
   profileStore.onChange((_profile, kind) => {
     if (kind === 'commit') notifySessionSaved({ kind: 'profile' });
   });
-  for (const button of buttons) button.querySelector('.session-memory-icon')?.replaceChildren(iconEl('note', { size: 15 }));
-  sessionMemoryPanel.init(buttons, { retry: key => flushSessionMemoryWrite(key).catch(() => {}) });
+  sessionMemoryPanel.init([], { container, retry: key => flushSessionMemoryWrite(key).catch(() => {}) });
   sessionMemory.onChange(({ sid: key, memory, action }) => {
     const owner = sessionMemoryOwners.get(key);
     if (!owner || deletedSessionMemoryKeys.has(key)) return;
@@ -15471,6 +15470,10 @@ function showSettingsPane(name) {
   $('#saveSettings').textContent = pane === 'model' ? tr("保存并测试") : tr("保存");
   try { localStorage.setItem(SETTINGS_PANE_KEY, pane); } catch (e) { /* 隐私模式写不了，忽略 */ }
   if (pane === 'library') void renderOrganizerHistory();
+  if (pane === 'memory') {
+    setSessionMemoryContext(hasChatScope());
+    void profileStore.load();
+  }
 }
 
 async function openSettings(hint) {
@@ -15711,6 +15714,12 @@ async function openModelKeySettings() {
   }, 80);
 }
 
+async function openMemorySettings() {
+  if ($('#settingsModal').classList.contains('hidden')) await openSettings();
+  showSettingsPane('memory');
+  $('#settingsNavMemory')?.focus({ preventScroll: true });
+}
+
 function checkConfigWarning() {
   const warn = $('#welcomeWarn');
   if (!warn) return;
@@ -15730,10 +15739,9 @@ function initShortcuts() {
   document.addEventListener('keydown', (e) => {
     const tag = (e.target.tagName || '').toLowerCase();
     const typing = tag === 'input' || tag === 'textarea' || tag === 'select' || e.target.isContentEditable;
-    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'm'
-      && sessionMemoryPanel && !$('#sessMemBtn')?.disabled) {
+    if ((e.ctrlKey || e.metaKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'm') {
       e.preventDefault();
-      sessionMemoryPanel.toggle();
+      void openMemorySettings();
       return;
     }
     if ((e.ctrlKey || e.metaKey) && !e.altKey && !e.shiftKey && e.key.toLowerCase() === 'k'
@@ -15749,7 +15757,6 @@ function initShortcuts() {
     if (e.key === 'Escape') {
       if (document.body.classList.contains('reading-capture-active')) { e.preventDefault(); state.stopRegion?.(); return; }
       if (!$('#settingsModal').classList.contains('hidden')) { closeSettings(); return; }
-      if (sessionMemoryPanel?.isOpen) { e.preventDefault(); sessionMemoryPanel.toggle(false); return; }
       if (!$('#noteBox').classList.contains('hidden')) { saveNoteBox(); return; }
       if (immersiveReading?.active) {
         e.preventDefault();

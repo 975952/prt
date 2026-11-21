@@ -14,6 +14,7 @@ const fixture = `<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">
 <link rel="stylesheet" href="/style.css"><link rel="stylesheet" href="/css/session-memory.css">
 <style>body{display:block;padding:24px}#sessBar{display:flex;width:360px;height:34px}</style></head>
 <body><div id="sessBar"><button id="sessMemBtn" type="button" aria-controls="sessionMemoryPanel" aria-expanded="false"></button></div>
+<section id="settingsMemoryHost"></section>
 <script type="module">
 localStorage.setItem('reader.locale', 'zh-CN');
 const { SessionMemoryManager } = await import('/js/session-memory.js');
@@ -25,8 +26,14 @@ await profileStore.load();
 window.memoryChanges = [];
 manager.onChange(change => window.memoryChanges.push(change.action));
 window.panel = new SessionMemoryPanel(manager, { profileStore });
-window.panel.init(document.querySelector('#sessMemBtn'));
-window.panel.setSession('fixture-sid');
+if (location.pathname === '/embedded') {
+  document.querySelector('#sessBar').remove();
+  window.panel.init([], { container: document.querySelector('#settingsMemoryHost') });
+  window.panel.setSession(null);
+} else {
+  window.panel.init(document.querySelector('#sessMemBtn'));
+  window.panel.setSession('fixture-sid');
+}
 window.ready = true;
 </script></body></html>`;
 let profile = { version: 1, revision: 0, updatedAt: '', selfReport: '', selfReportAt: '', items: [] };
@@ -61,7 +68,9 @@ const server = http.createServer((req, res) => {
     } else res.end(JSON.stringify(profile));
     return;
   }
-  if (url.pathname === '/') { res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(fixture); return; }
+  if (url.pathname === '/' || url.pathname === '/embedded') {
+    res.setHeader('Content-Type', 'text/html; charset=utf-8'); res.end(fixture); return;
+  }
   const publicDir = path.join(ROOT, 'public');
   const target = path.resolve(publicDir, `.${decodeURIComponent(url.pathname)}`);
   if (!target.startsWith(publicDir + path.sep) || !fs.existsSync(target) || fs.statSync(target).isDirectory()) {
@@ -222,8 +231,73 @@ try {
   });
   assert(panelRect.left >= 0 && panelRect.right <= 390 && panelRect.width <= 374);
   assert.equal(panelRect.display, 'flex');
+
+  profile = { ...profile, revision: profile.revision + 1, items: [
+    item('identity', 'identity', 'global', '', '称呼：Cyan'),
+    item('paper-a', 'knowledge', 'paper', 'doc-a', 'Only paper A'),
+    item('paper-b', 'knowledge', 'paper', 'doc-b', 'Only paper B'),
+  ] };
+  await page.goto(`http://127.0.0.1:${server.address().port}/embedded`);
+  await page.waitForFunction(() => window.ready);
+  await page.evaluate(() => { window.confirm = () => true; });
+  assert.equal(await page.$eval('#sessionMemoryPanel', node => node.parentElement.id), 'settingsMemoryHost');
+  assert.equal(await page.$$eval('#sessionMemoryPanel', nodes => nodes.length), 1, 'settings owns the only memory panel');
+  assert.equal(await page.$eval('#sessionMemoryPanel', node => node.getAttribute('role')), 'region');
+  assert.equal(await page.$eval('#sessionMemoryPanel', node => node.classList.contains('memory-panel-embedded')), true);
+  assert.notEqual(await page.$eval('#sessionMemoryPanel', node => getComputedStyle(node).position), 'fixed',
+    'the embedded memory section does not float over the main interface');
+  assert.equal(await page.$('.memory-close-btn'), null);
+  assert.equal(await page.$('#sessMemBtn'), null);
+  assert.equal(await page.$eval('.memory-panel-header h2', node => node.textContent), '已保存的记忆');
+  assert.equal(await page.evaluate(() => window.panel.currentSid), null);
+  assert.equal(await page.$$eval('.memory-item', nodes => nodes.length), 1, 'global identity is available with no active conversation');
+  assert.equal(await page.$eval('.memory-item-content', node => node.textContent), '称呼：Cyan');
+  assert.equal(await page.$eval('.memory-add-input', node => node.hidden && node.disabled), true);
+  assert.equal(await page.$eval('.memory-add-controls', node => node.hidden), true);
+  assert.match(await page.$eval('.memory-context-note', node => node.textContent), /开始或选择会话/);
+
+  failNextWrite = true;
+  await page.click('.memory-edit-btn');
+  assert.equal(await page.$eval('.memory-add-input', node => node.hidden || node.disabled), false);
+  assert.equal(await page.$eval('.memory-add-btn', node => node.disabled), false);
+  await page.$eval('.memory-add-input', node => { node.value = '称呼：Sky'; });
+  await page.click('.memory-add-btn');
+  await page.waitForSelector('.memory-save-status[data-status="error"]');
+  assert.equal(await page.$eval('.memory-add-input', node => node.value), '称呼：Sky');
+  await page.click('.memory-retry-btn');
+  await page.waitForFunction(() => !window.panel.profileWrite && window.profileStore.data.items[0].level === '称呼：Sky');
+  assert.equal(profile.items[0].level, '称呼：Sky', 'global identity can be edited in settings without a conversation');
+  assert.equal(await page.$eval('.memory-add-input', node => node.hidden), true);
+  failNextWrite = true;
+  await page.click('.memory-delete-btn');
+  await page.waitForSelector('.memory-save-status[data-status="error"]');
+  assert.equal(await page.$$eval('.memory-item', nodes => nodes.length), 1);
+  assert.equal(await page.$eval('.memory-retry-btn', node => node.hidden), false);
+  await page.click('.memory-retry-btn');
+  await page.waitForFunction(() => !window.panel.profileWrite && !window.profileStore.data.items.some(item => item.id === 'identity'));
+  assert(!profile.items.some(item => item.id === 'identity'), 'global identity deletion works without a conversation');
+  await page.evaluate(() => window.profileStore.load());
+  assert.equal(await page.$$eval('.memory-item', nodes => nodes.length), 0);
+
+  await page.evaluate(() => window.panel.setSession('settings-session', { docId: 'doc-a' }));
+  assert.equal(await page.$eval('.memory-add-input', node => node.hidden || node.disabled), false);
+  assert.equal(await page.$eval('.memory-item-content', node => node.textContent), 'Only paper A');
+  await page.type('.memory-add-input', 'Session note inside settings');
+  await page.click('.memory-add-btn');
+  assert.equal(await page.$$eval('.memory-item', nodes => nodes.length), 2);
+  assert.equal(await page.evaluate(() => window.panel.sessionMemory.getMemories('settings-session')[0].content), 'Session note inside settings');
+  await page.evaluate(() => window.panel.setSession('different-session', { docId: 'doc-b' }));
+  assert.equal(await page.$$eval('.memory-item', nodes => nodes.length), 1);
+  assert.equal(await page.$eval('.memory-item-content', node => node.textContent), 'Only paper B');
+  await page.evaluate(() => window.panel.setSession(null));
+  assert.equal(await page.$eval('#sessionMemoryPanel', node => node.classList.contains('hidden')), false);
+  await page.evaluate(() => { document.querySelector('#settingsMemoryHost').hidden = true; });
+  assert.equal(await page.$eval('#sessionMemoryPanel', node => node.getClientRects().length), 0,
+    'closing settings hides the memory section without a second overlay');
+  await page.evaluate(() => { document.querySelector('#settingsMemoryHost').hidden = false; });
+  assert(await page.$eval('#sessionMemoryPanel', node => node.getClientRects().length > 0));
   assert.deepEqual(errors, []);
-  console.log('PASS memory UI: session CRUD, saved profile visibility, scope/filter/count, profile edit/delete retry, late read/commit protection, safe rendering, and mobile bounds');
+  console.log('PASS memory UI: standalone compatibility, settings embed, no-session global edit/delete, restored session notes, scope/filter/count, retries, late response protection, safe rendering, and mobile bounds');
 } finally {
   await browser?.close();
   await new Promise(resolve => server.close(resolve));

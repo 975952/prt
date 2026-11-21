@@ -18,6 +18,21 @@
 
 #sessionMemoryPanel.hidden { display: none; }
 
+#sessionMemoryPanel.memory-panel-embedded {
+  position: static;
+  z-index: auto;
+  width: 100%;
+  min-height: 0;
+  max-height: none;
+  margin-bottom: 24px;
+  border-color: var(--border);
+  border-radius: 12px;
+  box-shadow: none;
+}
+.memory-panel-embedded .memory-list { flex: 0 1 auto; max-height: min(320px, 42dvh); }
+.memory-context-note { margin: 0; color: var(--fg-faint); font-size: var(--ui-fs-xs); line-height: 1.6; }
+.memory-add-input[hidden], .memory-add-controls[hidden], .memory-context-note[hidden] { display: none; }
+
 .memory-panel-header {
   display: flex;
   flex: 0 0 auto;
@@ -211,15 +226,12 @@
 .memory-delete-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .session-memory-button { position: relative; }
-#sessMemBtn { width: auto; height: 30px; padding: 4px 7px; gap: 5px; color: var(--fg-dim); font-size: var(--ui-fs-2xs); white-space: nowrap; }
 .session-memory-icon { display: inline-flex; align-items: center; flex: 0 0 auto; }
-#agentMemory .session-memory-icon svg { width: 20px; height: 20px; }
 .memory-save-row { display: flex; align-items: center; gap: 8px; min-height: 20px; font-size: var(--ui-fs-xs); color: var(--fg-faint); }
 .memory-save-status[data-status="error"] { color: var(--err-text, var(--fg)); }
 .memory-retry-btn { border: 0; padding: 2px 4px; color: var(--accent); background: transparent; font: inherit; cursor: pointer; }
 .memory-retry-btn[hidden] { display: none; }
 .memory-retry-btn:focus-visible { outline: 2px solid var(--accent); }
-#agentMemory[data-count]:not([data-count="0"])::after { top: 5px; right: 5px; }
 .session-memory-button[data-count]:not([data-count="0"])::after {
   position: absolute;
   top: -3px;
@@ -236,14 +248,7 @@
   text-align: center;
 }
 
-@media (max-width: 440px) {
-  #agentMemory .session-memory-icon { display: none; }
-  #agentMemory[data-count]:not([data-count="0"])::after { top: -2px; right: 0; }
-}
-
 @media (max-width: 520px) {
-  #sessMemBtn { padding-inline: 4px; }
-  #sessMemBtn .session-memory-icon { display: none; }
   #sessionMemoryPanel {
     top: 56px;
     right: 8px;

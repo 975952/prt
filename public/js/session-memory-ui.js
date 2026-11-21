@@ -19,29 +19,31 @@ class SessionMemoryPanel {
     this.profileWrite = null;
   }
 
-  init(toggleButtons, { retry = () => {} } = {}) {
+  init(toggleButtons, { retry = () => {}, container = null } = {}) {
     if (this.panelEl) return;
     this.toggleButtons = (Array.isArray(toggleButtons) ? toggleButtons : [toggleButtons]).filter(Boolean);
     this.retry = retry;
+    this.container = container;
     this.createPanel();
     this.sessionMemory.onChange(({ sid }) => {
       if (String(sid ?? '') === this.currentSid) this.render();
     });
     this.profileStore?.onChange(() => this.render());
     for (const button of this.toggleButtons) button.addEventListener('click', () => this.toggle());
+    this.render();
   }
 
   createPanel() {
     const panel = document.createElement('section');
     panel.id = 'sessionMemoryPanel';
-    panel.className = 'session-memory-panel hidden';
-    panel.setAttribute('role', 'dialog');
-    panel.setAttribute('aria-label', '会话记忆');
-    panel.setAttribute('aria-hidden', 'true');
+    panel.className = 'session-memory-panel ' + (this.container ? 'memory-panel-embedded' : 'hidden');
+    panel.setAttribute('role', this.container ? 'region' : 'dialog');
+    panel.setAttribute('aria-label', this.container ? '已保存的记忆' : '会话记忆');
+    if (!this.container) panel.setAttribute('aria-hidden', 'true');
     panel.innerHTML = `
       <header class="memory-panel-header">
-        <h2>会话记忆</h2>
-        <button type="button" class="memory-close-btn" title="关闭" aria-label="关闭"></button>
+        <h2>${this.container ? '已保存的记忆' : '会话记忆'}</h2>
+        ${this.container ? '' : '<button type="button" class="memory-close-btn" title="关闭" aria-label="关闭"></button>'}
       </header>
       <div class="memory-panel-search">
         <input type="search" class="memory-search-input" placeholder="搜索记忆" aria-label="搜索记忆">
@@ -58,6 +60,7 @@ class SessionMemoryPanel {
       </div>
       <div class="memory-list" aria-live="polite"></div>
       <form class="memory-add-section">
+        <p class="memory-context-note" hidden>开始或选择会话后，可添加会话记忆。</p>
         <textarea class="memory-add-input" placeholder="添加一条会话记忆" maxlength="2000" aria-label="记忆内容"></textarea>
         <div class="memory-add-controls">
           <select class="memory-add-category" aria-label="记忆分类">
@@ -83,9 +86,9 @@ class SessionMemoryPanel {
         if (node.hasAttribute(attribute)) node.setAttribute(attribute, tr(node.getAttribute(attribute)));
       }
     }
-    document.body.appendChild(panel);
+    (this.container || document.body).appendChild(panel);
     this.panelEl = panel;
-    panel.querySelector('.memory-close-btn').append(iconEl('close', { size: 14 }));
+    panel.querySelector('.memory-close-btn')?.append(iconEl('close', { size: 14 }));
 
     const form = panel.querySelector('.memory-add-section');
     form.addEventListener('submit', event => {
@@ -101,7 +104,7 @@ class SessionMemoryPanel {
         else this.writeProfile(failed.operation);
       } else this.retry(this.currentSid);
     });
-    panel.querySelector('.memory-close-btn').addEventListener('click', () => this.toggle(false));
+    panel.querySelector('.memory-close-btn')?.addEventListener('click', () => this.toggle(false));
     panel.querySelector('.memory-add-input').addEventListener('keydown', event => {
       if ((event.ctrlKey || event.metaKey) && event.key === 'Enter') {
         event.preventDefault();
@@ -113,7 +116,7 @@ class SessionMemoryPanel {
       }
     });
     panel.addEventListener('keydown', event => {
-      if (event.key === 'Escape') {
+      if (event.key === 'Escape' && !this.container) {
         event.preventDefault(); event.stopPropagation(); this.toggle(false);
       }
     });
@@ -125,6 +128,7 @@ class SessionMemoryPanel {
   }
 
   toggle(force) {
+    if (this.container) return;
     if (!this.panelEl || (this.currentSid === null && force !== false)) return;
     this.isOpen = typeof force === 'boolean' ? force : !this.isOpen;
     this.panelEl.classList.toggle('hidden', !this.isOpen);
@@ -181,13 +185,14 @@ class SessionMemoryPanel {
     category.hidden = source === 'profile';
     this.panelEl.querySelector('.memory-add-btn').textContent = tr('保存');
     this.panelEl.querySelector('.memory-cancel-btn').hidden = false;
+    this.renderSaveState();
     this.panelEl.querySelector('.memory-add-input').focus();
   }
 
   saveEdit(memId = this.editingId) {
     const input = this.panelEl.querySelector('.memory-add-input');
     const content = input.value.trim();
-    if (!content || this.currentSid === null || !memId) {
+    if (!content || (this.currentSid === null && this.editingSource !== 'profile') || !memId) {
       input.focus();
       return null;
     }
@@ -216,7 +221,8 @@ class SessionMemoryPanel {
   }
 
   deleteMemory(memId, source = 'session') {
-    if (this.profileWrite || this.currentSid === null || !window.confirm(tr('确定删除这条记忆吗？'))) return false;
+    if (this.profileWrite || (this.currentSid === null && source !== 'profile')
+      || !window.confirm(tr('确定删除这条记忆吗？'))) return false;
     if (source === 'profile') return this.writeProfile({ action: 'remove', id: memId });
     if (this.editingId === memId && this.editingSource === source) this.cancelEdit();
     return this.sessionMemory.removeMemory(this.currentSid, memId);
@@ -224,8 +230,7 @@ class SessionMemoryPanel {
 
   /** Project saved records into the panel; never copy profile records into a session. */
   visibleMemories() {
-    if (this.currentSid === null) return [];
-    const session = this.sessionMemory.getMemories(this.currentSid)
+    const session = (this.currentSid === null ? [] : this.sessionMemory.getMemories(this.currentSid))
       .map(memory => ({ ...memory, origin: 'session', scope: 'session' }));
     const profile = (this.profileStore?.data.items || [])
       .filter(item => item.memory?.scope !== 'paper' || (this.docId && item.source?.docId === this.docId))
@@ -236,7 +241,7 @@ class SessionMemoryPanel {
   }
 
   writeProfile(operation) {
-    if (!this.profileStore || this.currentSid === null || this.profileWrite) return this.profileWrite;
+    if (!this.profileStore || this.profileWrite) return this.profileWrite;
     const sid = this.currentSid;
     const docId = this.docId;
     this.profileStore.memoryEditRevision = (this.profileStore.memoryEditRevision || 0) + 1;
@@ -382,7 +387,12 @@ class SessionMemoryPanel {
       : status === 'error' ? tr('记忆尚未保存，请重试') : status === 'saved' ? tr('已保存') : '';
     this.panelEl.querySelector('.memory-retry-btn').hidden = status !== 'error';
     this.panelEl.querySelector('.memory-retry-btn').disabled = !!this.profileWrite;
-    this.panelEl.querySelector('.memory-add-btn').disabled = !!this.profileWrite;
+    const canWriteContent = this.currentSid !== null || (this.editingSource === 'profile' && !!this.editingId);
+    this.panelEl.querySelector('.memory-context-note').hidden = canWriteContent;
+    this.panelEl.querySelector('.memory-add-input').hidden = !canWriteContent;
+    this.panelEl.querySelector('.memory-add-input').disabled = !canWriteContent;
+    this.panelEl.querySelector('.memory-add-controls').hidden = !canWriteContent;
+    this.panelEl.querySelector('.memory-add-btn').disabled = !!this.profileWrite || !canWriteContent;
     this.panelEl.querySelector('.memory-cancel-btn').disabled = !!this.profileWrite;
     this.panelEl.querySelector('.memory-add-input').readOnly = !!this.profileWrite && this.editingSource === 'profile';
   }
