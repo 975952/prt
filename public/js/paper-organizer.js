@@ -256,7 +256,7 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     }
     page = 0;
     const key = planKey(), task = beginOperation(); render();
-    const accept = result => {
+    const accept = (result, { final = false } = {}) => {
       if (!isCurrent(task)) return;
       const byId = new Map(tasks.map(row => [row.from, row]));
       for (const row of tasks) clearSuggestion(row);
@@ -268,7 +268,11 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
       }
       for (const id of result.unknown) {
         const row = byId.get(id);
-        if (row) { row.aiState = 'review'; row.reason = tr('待确认'); row.order = order++; }
+        if (row) {
+          row.aiState = 'review';
+          row.reason = final ? (result.errors?.get(id) || tr('待确认')) : tr('将读取第一页…');
+          row.order = order++;
+        }
       }
       for (const id of result.keep || []) {
         const row = byId.get(id);
@@ -280,14 +284,15 @@ export function createPaperOrganizer({ getPapers = () => [], getFolders = () => 
     };
     try {
       const result = await groupCollection({ papers: tasks.map(row => ({ ...row.paper, id: row.from, path: row.from, name: fileName(row.from) })),
-        instructions: instructions.value.trim(), signal: task.controller.signal, onUpdate: accept,
+        instructions: instructions.value.trim(), signal: task.controller.signal,
+        onUpdate: partial => accept(partial, { final: false }),
         onProgress: progress => {
           if (!isCurrent(task)) return;
           status.textContent = progress.stage === 'group' ? tr('正在按主题分类…')
             : progress.stage === 'image' ? tr('正在查看第一页图片：{0}', progress.name) : tr('正在读取第一页：{0}', progress.name);
         } });
       if (!isCurrent(task)) return;
-      accept(result);
+      accept(result, { final: true });
       for (const row of tasks) if (!row.keep && !row.target && result.errors?.has(row.from)) row.reason = result.errors.get(row.from);
       const kept = tasks.filter(row => row.keep || row.target && row.target.toLocaleLowerCase() === parentFolder(row.from).toLocaleLowerCase()).length;
       status.textContent = tr('{0} 篇保持原样，{1} 篇需要移动，{2} 篇待确认。', kept, tasks.filter(movable).length, result.unknown.length);

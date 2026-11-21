@@ -16,7 +16,9 @@ const scratch = fs.mkdtempSync(path.join(SANDBOX, `library-folders-${desktop ? '
 const dataDir = assertIsolatedDataDir(path.join(scratch, 'data')), papersDir = path.join(scratch, 'papers');
 fs.mkdirSync(dataDir); fs.mkdirSync(papersDir);
 for (const relative of ['Study/Sub/active.pdf', 'Study/parked.pdf', 'Conflict/active.pdf', 'active.pdf',
-  'RemoveMe/unique.pdf', 'Partial/a-movable.pdf', 'Partial/active.pdf']) {
+  'RemoveMe/unique.pdf', 'Partial/a-movable.pdf', 'Partial/active.pdf',
+  'Parent/Wrapper/Sub/Deep/nested.pdf', 'Parent/Wrapper/direct.pdf',
+  'Flatten/Sub/flat.pdf', 'PreserveConflict/Sub/keep.pdf', 'Sub/existing.pdf']) {
   fs.mkdirSync(path.dirname(path.join(papersDir, relative)), { recursive: true });
   writeTitlePdf(path.join(papersDir, relative), { title: `Synthetic folder reading ${relative.replace(/\.pdf$/, '')}` });
 }
@@ -71,10 +73,10 @@ async function move(from, to) {
     const button = buttons.find(button => button.textContent === to); if (!button) throw new Error(`Missing destination ${to}`); button.click();
   }, to || '根目录');
 }
-async function remove(relative, confirm = true) {
+async function remove(relative, confirm = true, flatten = false) {
   await action(relative, '删除文件夹（保留论文）');
   await page.waitForSelector('.sess-confirm-mask:not(.hidden)');
-  await page.locator(`.sess-confirm-acts button:${confirm ? 'last' : 'first'}-child`).click();
+  await page.locator(flatten ? '.sess-confirm-acts button:nth-child(2)' : `.sess-confirm-acts button:${confirm ? 'last' : 'first'}-child`).click();
   await page.waitForSelector('.sess-confirm-mask.hidden');
   if (confirm) await page.waitForFunction(() => document.querySelector('#homeFolders').getAttribute('aria-busy') !== 'true');
 }
@@ -121,7 +123,7 @@ try {
   });
   await page.evaluateOnNewDocument(() => { localStorage.setItem('reader.locale', 'zh-CN'); localStorage.setItem('reader.session.scopeMode', 'paper'); localStorage.setItem('reader.session.onEnter', 'latest'); localStorage.setItem('reader.session.aiTitle', '0'); });
   await page.goto(`${base}/?topbar=static`, { waitUntil: 'domcontentloaded' });
-  await page.waitForFunction(() => window.__ctx && window.__state?.papers.length === 8);
+  await page.waitForFunction(() => window.__ctx && window.__state?.papers.length === 13);
   await page.locator('#homeNewFolder').click(); await commitName('Destination');
   await page.waitForSelector(folder('Destination'));
   await action('Destination', '新建子文件夹', true); await commitName('Existing');
@@ -174,6 +176,26 @@ try {
   assert.ok(fs.existsSync(path.join(papersDir, 'Partial/active.pdf')));
   assert.ok(fs.existsSync(path.join(papersDir, 'a-movable.pdf')) && !fs.existsSync(path.join(papersDir, 'Partial/a-movable.pdf')));
   pass('safe deletion moves the current paper to root, and a partial failure preserves moved files plus the remaining conflicting source');
+
+  await opened('Parent/Wrapper/Sub/Deep/nested.pdf'); await home();
+  await remove('Parent/Wrapper', false);
+  assert.ok(fs.existsSync(path.join(papersDir, 'Parent/Wrapper/Sub/Deep/nested.pdf')));
+  await remove('Parent/Wrapper');
+  assert.ok(fs.existsSync(path.join(papersDir, 'Parent/Sub/Deep/nested.pdf')));
+  assert.ok(fs.existsSync(path.join(papersDir, 'Parent/direct.pdf')));
+  assert.ok(!fs.existsSync(path.join(papersDir, 'Parent/Wrapper')));
+  assert.equal(await page.evaluate(() => window.__state.doc.path), 'Parent/Sub/Deep/nested.pdf');
+  await page.locator('#homeBtn').click();
+  await page.waitForFunction(() => document.body.classList.contains('reading') && window.__viewer?.pdf);
+  assert.match(await page.evaluate(() => window.__viewer.getPageText(1)), /Synthetic folder reading/);
+  await home(); await remove('Flatten', true, true);
+  assert.ok(fs.existsSync(path.join(papersDir, 'flat.pdf')));
+  assert.ok(!fs.existsSync(path.join(papersDir, 'Flatten')));
+  await remove('PreserveConflict');
+  assert.ok(fs.existsSync(path.join(papersDir, 'Sub (2)/keep.pdf')));
+  assert.ok(!fs.existsSync(path.join(papersDir, 'PreserveConflict')));
+  assert.ok(fs.existsSync(path.join(papersDir, 'Sub/existing.pdf')));
+  pass('nested deletion supports cancel, promotion preserving structure and active readers, flattening, and collision-safe folder renaming');
 
   await opened('Big/range.pdf');
   await page.evaluate(async () => { window.__folderPdf = window.__viewer.pdf;

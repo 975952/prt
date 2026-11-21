@@ -286,42 +286,62 @@ export async function groupPaperCollection({ papers, instructions = '', chat, si
   };
   if (!inputs.length) return { groups: [], unknown: [], errors };
   let result = await group(); onUpdate(result);
-  const unresolved = [...result.unknown];
-  for (let index = 0; index < unresolved.length && readFirstPage; index++) {
-    if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
-    const id = unresolved[index], original = papers.find(paper => paper.id === id);
-    onProgress({ stage: 'page', name: original.name, completed: index, total: unresolved.length });
-    try {
-      const page = await runWithDeadline(requestSignal => readFirstPage(original, { signal: requestSignal }), { signal, timeoutMs: 30000 });
-      let detail = '';
-      // Feed extracted text directly into the shared grouping request. Do not
-      // spend one extra model round-trip per ordinary text PDF.
-      if (String(page.text || '').replace(/\s/g, '').length >= 20) {
-        detail = text(page.text, 4000); textPages.set(id, page);
-      } else detail = await inspectImage(original, page);
-      if (detail) evidence.set(id, detail);
-      else errors.set(id, tr('第一页仍无法判断，请手动分类'));
-    } catch (error) {
-      if (signal?.aborted || error.name === 'AbortError') throw error;
-      errors.set(id, tr('第一页读取失败：{0}', error.message || String(error)));
+  const readAttempted = new Set(), imageAttempted = new Set();
+  while (readFirstPage) {
+    const unresolved = result.unknown.filter(id => !readAttempted.has(id));
+    if (unresolved.length) {
+      let addedEvidence = 0;
+      for (let index = 0; index < unresolved.length; index++) {
+        if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
+        const id = unresolved[index], original = papers.find(paper => paper.id === id);
+        readAttempted.add(id);
+        onProgress({ stage: 'page', name: original.name, completed: index, total: unresolved.length });
+        try {
+          const page = await runWithDeadline(requestSignal => readFirstPage(original, { signal: requestSignal }), { signal, timeoutMs: 30000 });
+          let detail = '';
+          // Feed extracted text directly into the shared grouping request. Do not
+          // spend one extra model round-trip per ordinary text PDF.
+          if (String(page.text || '').replace(/\s/g, '').length >= 20) {
+            detail = text(page.text, 4000); textPages.set(id, page);
+          } else {
+            imageAttempted.add(id);
+            detail = await inspectImage(original, page);
+          }
+          if (detail) { evidence.set(id, detail); addedEvidence++; }
+          else errors.set(id, tr('第一页仍无法判断，请手动分类'));
+        } catch (error) {
+          if (signal?.aborted || error.name === 'AbortError') throw error;
+          errors.set(id, tr('第一页读取失败：{0}', error.message || String(error)));
+        }
+      }
+      if (addedEvidence) { result = await group(); onUpdate(result); continue; }
     }
+    // A text layer can be present but garbled or merely a publisher's imprint.
+    // Only pages still unknown after the shared text pass need their image.
+    const needImage = result.unknown.filter(id => textPages.has(id) && !imageAttempted.has(id));
+    if (needImage.length) {
+      let imageUpdates = 0;
+      for (const id of needImage) {
+        if (signal?.aborted) throw new DOMException('Stopped', 'AbortError');
+        const original = papers.find(paper => paper.id === id);
+        imageAttempted.add(id);
+        try {
+          const detail = await inspectImage(original, textPages.get(id));
+          if (detail) { evidence.set(id, detail); imageUpdates++; }
+          else errors.set(id, tr('第一页仍无法判断，请手动分类'));
+        } catch (error) {
+          if (signal?.aborted || error.name === 'AbortError') throw error;
+          errors.set(id, tr('第一页读取失败：{0}', error.message || String(error)));
+        }
+      }
+      if (imageUpdates) { result = await group(); onUpdate(result); continue; }
+    }
+    break;
   }
-  if (evidence.size) { result = await group(); onUpdate(result); }
-  let imageUpdates = 0;
-  // A text layer can be present but garbled or merely a publisher's imprint.
-  // Only pages still unknown after the shared text pass need their image.
   for (const id of result.unknown) {
-    if (!textPages.has(id)) continue;
-    const original = papers.find(paper => paper.id === id);
-    try {
-      const detail = await inspectImage(original, textPages.get(id));
-      if (detail) { evidence.set(id, detail); imageUpdates++; }
-      else errors.set(id, tr('第一页仍无法判断，请手动分类'));
-    } catch (error) {
-      if (signal?.aborted || error.name === 'AbortError') throw error;
-      errors.set(id, tr('第一页读取失败：{0}', error.message || String(error)));
+    if (readAttempted.has(id) && !errors.has(id)) {
+      errors.set(id, tr('已读第一页，仍无法判断，请手动分类'));
     }
   }
-  if (imageUpdates) { result = await group(); onUpdate(result); }
   return { ...result, errors };
 }

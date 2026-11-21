@@ -903,7 +903,13 @@ export const en = {
   "打开 PDF，就能开始阅读、标注和整理思路。还没选好论文？也可以先和助手聊聊。": "Open a PDF to read, annotate and explore ideas. Still choosing a paper? Start a conversation with your assistant.",
   "打开第一份 PDF": "Open your first PDF",
   "直接与助手聊天": "Chat with your assistant",
-  "也可以把 PDF 拖到这里。阅读文件不需要 API Key。": "You can also drop a PDF here. Reading files does not require an API key."
+  "也可以把 PDF 拖到这里。阅读文件不需要 API Key。": "You can also drop a PDF here. Reading files does not require an API key.",
+  '已读第一页，仍无法判断，请手动分类': 'Page 1 was read, but the topic is still unclear; please classify manually',
+  '将读取第一页…': 'Reading page 1…',
+  '包含 {0} 个子文件夹与 {1} 篇论文。保留内部结构会把子文件夹和论文上移到「{2}」；打平会把全部论文移到根目录。同名子文件夹自动编号；论文冲突或其他文件会保留原文件夹。': 'Contains {0} subfolder(s) and {1} paper(s). Keeping internal structure moves subfolders and papers up to "{2}"; flattening moves all papers to the root folder. Subfolder name conflicts receive a number; conflicting papers or other files keep the original folder.',
+  '保留内部结构': 'Keep structure',
+  '打平到根目录': 'Flatten to root',
+  '已删除文件夹「{0}」，子文件夹与论文已保留结构并移至「{1}」': 'Deleted folder "{0}"; subfolders and papers kept their structure and moved to "{1}"',
 };
 
 // English singular forms are chosen only for known count labels.
@@ -916,4 +922,5 @@ export const enSingular = {
   '另外 {0} 篇': '{0} more paper', '已检查书架中的 {0} 篇论文': 'Checked the {0} paper in the library',
   '{0} 篇暂时无法读取': '{0} paper could not be read', '{0} 篇尚未检查': '{0} paper not yet checked',
   '{0} 篇含未能核实的内容': '{0} paper contains unverified content',
+
 };

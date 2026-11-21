@@ -2931,7 +2931,7 @@ body:not(.reading) #topbar :is(#opsBtn, #searchBtn, .topbar-side-controls) { dis
 }
 .sess-confirm-title { font-size: calc(var(--ui-fs) + 1px); font-weight: 600; color: var(--fg); }
 .sess-confirm-body { font-size: var(--ui-fs-xs); color: var(--fg-dim); line-height: 1.65; }
-.sess-confirm-acts { display: flex; justify-content: flex-end; gap: 8px; margin-top: 4px; }
+.sess-confirm-acts { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; margin-top: 4px; }
 .sess-confirm-btn {
   padding: 5px 12px;
   border: 1px solid var(--border); border-radius: 8px;

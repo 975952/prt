@@ -96,3 +96,27 @@ await check('already organized files stay put, including existing nested folders
   assert.throws(() => parsePaperGroups(answer({ groups: [], keep: [1, 2, 3, 5], unknown: [] }), papers));
   assert.throws(() => parsePaperGroups(answer({ groups: [], keep: 'all', unknown: [] }), papers));
 });
+await check('newly unknown paper after regrouping also reads page one, and persistent unknown records explicit reason', async () => {
+  const reads = [];
+  let pass = 0;
+  const result = await groupPaperCollection({
+    papers,
+    readFirstPage: async (paper) => {
+      reads.push(paper.id);
+      if (paper.id === '2') return { text: 'Detailed first-page abstract about LLM systems and KV cache' };
+      if (paper.id === '3') return { text: 'Detailed first-page abstract about diffusion generation' };
+      return { text: 'Opaque scanned cover text that still stays unclear', getImage: async () => ({ dataUrl: 'data:image/jpeg;base64,abc' }) };
+    },
+    chat: async ({ messages }) => {
+      const payload = input(messages);
+      if (payload.task === 'first-page') return answer({ evidence: 'Generic cover page with no clear topic' });
+      pass += 1;
+      if (pass === 1) return answer({ groups: [{ folder: 'LLM', papers: [1, 2, 4] }], unknown: [3] });
+      if (pass === 2) return answer({ groups: [{ folder: 'LLM', papers: [1, 3] }], unknown: [2, 4] });
+      return answer({ groups: [{ folder: 'LLM', papers: [1, 3] }, { folder: 'Diffusion', papers: [4] }], unknown: [2] });
+    },
+  });
+  assert.deepEqual(reads, ['2', '1', '3']);
+  assert.deepEqual(result.unknown, ['1']);
+  assert.ok(result.errors.has('1'), 'persistent unknown after page-1 read should have explicit reason');
+});

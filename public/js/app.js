@@ -1891,10 +1891,13 @@ function initTopbar() {
   };
   const home = $('#homeBtn');
   if (home) home.onclick = () => {
-    const intendedView = pendingMainView?.view || activeMainView;
-    const reading = intendedView ? intendedView !== 'library' : document.body.classList.contains('reading');
-    if (!reading) void returnToReader();
-    else showHome();
+    const intendedView = pendingMainView?.view || activeMainView
+      || (agentWorkspaceView === 'full' ? 'alina' : document.body.classList.contains('reading') ? 'reader' : 'library');
+    if (intendedView === 'library') {
+      if (readablePaper()) void returnToReader();
+      return;
+    }
+    void showHome();
   };
   // sessions.js owns the header menu; one click must open only one surface.
 }
@@ -2646,15 +2649,21 @@ function flushMainViewNavigation() {
   });
   return mainViewDrain;
 }
+function readablePaper() {
+  const loaded = viewer?.pdf && state.viewerDocId === state.doc?.docId
+    && (state.papers.find(paper => (paper.path || paper.name) === state.doc.path)
+      || (state.doc.url?.startsWith('blob:') ? state.doc : null));
+  const moved = organizerReadingPositions.has(state.doc?.path)
+    ? state.papers.find(paper => (paper.path || paper.name) === state.doc.path) : null;
+  return loaded || moved || recentDocs()[0] || null;
+}
 function returnToReader() { return requestMainView('reader'); }
 async function performReturnToReader() {
   if (agentNavigationBusy || conversationMoveBusy) return;
   const loaded = viewer?.pdf && state.viewerDocId === state.doc?.docId
     && (state.papers.find(paper => (paper.path || paper.name) === state.doc.path)
       || (state.doc.url?.startsWith('blob:') ? state.doc : null));
-  const moved = organizerReadingPositions.has(state.doc?.path)
-    ? state.papers.find(paper => (paper.path || paper.name) === state.doc.path) : null;
-  const paper = loaded || moved || recentDocs()[0];
+  const paper = readablePaper();
   if (!paper) { toast(tr("还没有阅读记录")); return; }
   const saved = homeReadingState?.path === paper.path ? homeReadingState : null;
   const fromAlina = agentWorkspaceView === 'full';
@@ -2670,8 +2679,7 @@ async function performReturnToReader() {
   };
   agentNavigationBusy = true;
   const surface = $('#rightSide');
-  const wasInert = surface.inert;
-  surface.inert = true;
+  if (surface) surface.inert = true;
   agentWorkspace?.setTransitioning(true);
   try {
     const parking = parkAgentConversation();
@@ -2701,9 +2709,10 @@ async function performReturnToReader() {
   } catch (error) {
     toast(tr("返回阅读失败：{0}", error.message), 'err', 5000);
   } finally {
-    surface.inert = wasInert;
+    if (surface) surface.inert = false;
     agentNavigationBusy = false;
     agentWorkspace?.setTransitioning(false);
+    void flushMainViewNavigation();
   }
 }
 
@@ -2831,7 +2840,7 @@ function initAgentWorkspace() {
   agentName = agentDisplayName(profile);
   agentWorkspace = createAgentWorkspace({
     onOpen: () => (pendingMainView?.view || activeMainView || (agentWorkspaceView === 'full' ? 'alina' : 'reader')) === 'alina'
-      ? returnToReader() : openAgentWorkspace(),
+      ? (readablePaper() ? returnToReader() : showHome()) : openAgentWorkspace(),
     onExpand: () => openAgentWorkspace({ landing: false }),
     onLanding: () => openAgentWorkspace({ landing: true }),
     onStartSearch: () => $('#chatInput').focus({ preventScroll: true }),
@@ -2894,8 +2903,7 @@ async function performOpenAgentWorkspace({ landing } = {}) {
   if (agentNavigationBusy) return;
   agentNavigationBusy = true;
   const surface = $('#rightSide');
-  const wasInert = surface.inert;
-  surface.inert = true;
+  if (surface) surface.inert = true;
   agentWorkspace?.setTransitioning(true);
   try {
     rememberReadingWorkspace();
@@ -2931,9 +2939,10 @@ async function performOpenAgentWorkspace({ landing } = {}) {
     if (from) await agentWorkspace.transitionLayout(update, { direction: 'expand', prepare });
     else { update(); await prepare(); }
   } finally {
-    surface.inert = wasInert;
+    if (surface) surface.inert = false;
     agentNavigationBusy = false;
     agentWorkspace?.setTransitioning(false);
+    void flushMainViewNavigation();
   }
 }
 async function openAgentPaper(paper, sourceElement = null) {
@@ -3031,6 +3040,10 @@ async function performShowHome() {
   hideOpsMenu();
   tabsStore.bar?.closeMenu();
   $('#citeBox')?.classList.add('hidden');
+  const surface = $('#rightSide');
+  if (surface) surface.inert = false;
+  agentWorkspace?.setTransitioning(false);
+  agentWorkspace?.closePapers?.();
   setView('home');
 }
 
@@ -4291,9 +4304,9 @@ function setFolderMutationBusy(busy) {
 
 /** Folder renames move every descendant at once, so retire range readers
  * before mutation and update all paths only after the server succeeds. */
-async function relocateLibraryFolder(from, request) {
-  if (folderMutationBusy) throw new Error(tr('正在处理文件夹，请稍后再试'));
-  setFolderMutationBusy(true);
+async function relocateLibraryFolder(from, request, { nested = false } = {}) {
+  if (!nested && folderMutationBusy) throw new Error(tr('正在处理文件夹，请稍后再试'));
+  if (!nested) setFolderMutationBusy(true);
   const wasReading = document.body.classList.contains('reading') && agentWorkspaceView !== 'full';
   try {
     const papers = state.papers.filter(paper => pathInFolder(paper.path || paper.name, from));
@@ -4393,8 +4406,10 @@ async function relocateLibraryFolder(from, request) {
     }
     return result;
   } finally {
-    setFolderMutationBusy(false);
-    if (wasReading && !viewer?.pdf && organizerReadingPositions.has(state.doc?.path)) await openDoc({ ...state.doc });
+    if (!nested) {
+      setFolderMutationBusy(false);
+      if (wasReading && !viewer?.pdf && organizerReadingPositions.has(state.doc?.path)) await openDoc({ ...state.doc });
+    }
   }
 }
 
@@ -4645,34 +4660,89 @@ function startInlineRename(folderPath, name) {
   input.addEventListener('blur', commit);
 }
 
+function directSubfoldersOf(folderPath) {
+  const prefix = `${folderPath}/`;
+  const children = new Set();
+  for (const folder of state.folders || []) {
+    const p = folder.path || '';
+    if (!p.startsWith(prefix)) continue;
+    const rest = p.slice(prefix.length);
+    if (rest) children.add(`${prefix}${rest.split('/')[0]}`);
+  }
+  for (const paper of state.papers || []) {
+    const p = folderOf(paper.path || paper.name);
+    if (!p.startsWith(prefix)) continue;
+    const rest = p.slice(prefix.length);
+    if (rest) children.add(`${prefix}${rest.split('/')[0]}`);
+  }
+  return [...children].sort();
+}
+
 async function deleteFolder(folderPath, name) {
   const count = state.papers.filter(paper => pathInFolder(paper.path || paper.name, folderPath)).length;
+  const subfolders = directSubfoldersOf(folderPath);
+  if (subfolders.length) {
+    const parent = folderOf(folderPath);
+    const parentLabel = parent ? parent.split('/').pop() : tr('根目录');
+    const choice = await sessionsConfirm({
+      title: tr('删除文件夹「{0}」？', name),
+      body: tr('包含 {0} 个子文件夹与 {1} 篇论文。保留内部结构会把子文件夹和论文上移到「{2}」；打平会把全部论文移到根目录。同名子文件夹自动编号；论文冲突或其他文件会保留原文件夹。',
+        subfolders.length, count, parentLabel),
+      okText: tr('保留内部结构'),
+      secondaryText: tr('打平到根目录'),
+      cancelText: tr('取消'),
+    });
+    if (choice === 'primary') await doDeleteFolder(folderPath, { preserveStructure: true });
+    else if (choice === 'secondary') await doDeleteFolder(folderPath, { preserveStructure: false });
+    return;
+  }
   const ok = await sessionsConfirm({ title: tr('删除文件夹「{0}」？', name),
     body: count ? tr('其中 {0} 篇论文将移到根目录；同名冲突或其他文件会保留原文件夹。', count)
       : tr('只删除空文件夹；其他文件会保留，取消不会删除任何内容。'), okText: tr('删除文件夹（保留论文）') });
-  if (ok) await doDeleteFolder(folderPath);
+  if (ok) await doDeleteFolder(folderPath, { preserveStructure: false });
 }
 
-async function doDeleteFolder(folderPath) {
+async function doDeleteFolder(folderPath, { preserveStructure = false } = {}) {
   if (folderMutationBusy) { toast(tr('正在处理文件夹，请稍后再试')); return; }
   const wasReading = document.body.classList.contains('reading') && agentWorkspaceView !== 'full';
   setFolderMutationBusy(true);
   try {
-    const papers = state.papers.filter(paper => pathInFolder(paper.path || paper.name, folderPath));
-    for (const paper of papers) await organizePaperMove({ from: paper.path || paper.name, to: '' });
+    const destParent = preserveStructure ? folderOf(folderPath) : '';
+    let movedPaperCount = 0;
+    if (preserveStructure) {
+      const subfolders = directSubfoldersOf(folderPath);
+      for (const sub of subfolders) {
+        await relocateLibraryFolder(sub, () => fetch('/api/move', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ from: sub, to: destParent }),
+        }), { nested: true });
+      }
+      const directPapers = state.papers.filter(paper => folderOf(paper.path || paper.name) === folderPath);
+      movedPaperCount = directPapers.length;
+      for (const paper of directPapers) await organizePaperMove({ from: paper.path || paper.name, to: destParent });
+    } else {
+      const papers = state.papers.filter(paper => pathInFolder(paper.path || paper.name, folderPath));
+      movedPaperCount = papers.length;
+      for (const paper of papers) await organizePaperMove({ from: paper.path || paper.name, to: '' });
+    }
     const r = await fetch(`/api/folders?path=${encodeURIComponent(folderPath)}&mode=empty`, { method: 'DELETE' });
     let j = {};
     try { j = await r.json(); } catch { /* 非 JSON */ }
     if (!r.ok) throw new Error(j?.error?.message || `HTTP ${r.status}`);
     const label = folderPath.split('/').pop();
-    toast(papers.length ? tr('已删除文件夹「{0}」，其中 {1} 篇 PDF 移到根目录', label, papers.length)
-      : tr('已删除文件夹「{0}」', label), 'ok', 3200);
+    if (preserveStructure) {
+      toast(tr('已删除文件夹「{0}」，子文件夹与论文已保留结构并移至「{1}」', label, destParent ? destParent.split('/').pop() : tr('根目录')), 'ok', 3200);
+    } else {
+      toast(movedPaperCount ? tr('已删除文件夹「{0}」，其中 {1} 篇 PDF 移到根目录', label, movedPaperCount)
+        : tr('已删除文件夹「{0}」', label), 'ok', 3200);
+    }
     state.folderOpen = new Set([...state.folderOpen].filter(path => !pathInFolder(path, folderPath)));
     saveFolderOpen();
     if (pathInFolder(currentFolderPath(), folderPath)) {
-      state.currentFolder = ''; persistCurrentFolder(); renderFolderSwitch();
+      state.currentFolder = destParent; persistCurrentFolder(); renderFolderSwitch();
     }
-    if (homeView.folder !== null && pathInFolder(homeView.folder, folderPath)) homeView.folder = '';
+    if (homeView.folder !== null && pathInFolder(homeView.folder, folderPath)) homeView.folder = destParent;
   } catch (e) {
     toast(tr("删除文件夹失败：{0}", e.message), 'err', 5000);
   } finally {

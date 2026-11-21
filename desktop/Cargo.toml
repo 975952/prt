@@ -1,6 +1,6 @@
 [package]
 name = "prt"
-version = "1.4.5"
+version = "1.4.6"
 edition = "2021"
 rust-version = "1.77"
 description = "prt —— 本地桌面壳（wry + tao + 内置 HTTP 服务，前端资源内嵌）"

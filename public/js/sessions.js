@@ -1296,37 +1296,46 @@ function ensureConfirm() {
   const title = el('div', { class: 'sess-confirm-title' });
   const body = el('div', { class: 'sess-confirm-body' });
   const ok = el('button', { type: 'button', class: 'sess-confirm-btn danger', text: tr("确定") });
+  const secondary = el('button', { type: 'button', class: 'sess-confirm-btn hidden', text: '' });
   const cancel = el('button', { type: 'button', class: 'sess-confirm-btn ghost', text: tr("取消") });
-  ok.addEventListener('click', () => resolveConfirm(true));
+  ok.addEventListener('click', () => resolveConfirm('primary'));
+  secondary.addEventListener('click', () => resolveConfirm('secondary'));
   cancel.addEventListener('click', () => resolveConfirm(false));
   mask.addEventListener('click', (e) => { if (e.target === mask) resolveConfirm(false); });
   const card = el('div', { class: 'sess-confirm', role: 'document' },
-    title, body, el('div', { class: 'sess-confirm-acts' }, cancel, ok));
+    title, body, el('div', { class: 'sess-confirm-acts' }, cancel, secondary, ok));
   mask.append(card);
   document.body.append(mask);
   st.ui.confirmMask = mask;
   st.ui.confirmTitle = title;
   st.ui.confirmBody = body;
   st.ui.confirmOk = ok;
+  st.ui.confirmSecondary = secondary;
   st.ui.confirmCancel = cancel;
 }
 
-function resolveConfirm(ok) {
+function resolveConfirm(value) {
   const mask = st.ui?.confirmMask;
   if (!mask) return;
   mask.classList.add('hidden');
   const fn = st.confirmResolve;
+  const multi = !!st.confirmMulti;
   st.confirmResolve = null;
-  if (fn) fn(!!ok);
+  st.confirmMulti = false;
+  if (fn) fn(multi ? value : !!value);
 }
 
-export function sessionsConfirm({ title = tr("确认"), body = '', okText = tr("确定"), cancelText = tr("取消"), danger = false } = {}) {
+export function sessionsConfirm({ title = tr("确认"), body = '', okText = tr("确定"), secondaryText = '', cancelText = tr("取消"), danger = false, secondaryDanger = false } = {}) {
   if (st.confirmResolve) resolveConfirm(false);
   ensureConfirm();
+  st.confirmMulti = !!secondaryText;
   st.ui.confirmTitle.textContent = title;
   st.ui.confirmBody.textContent = body;
   st.ui.confirmOk.textContent = okText;
   st.ui.confirmOk.classList.toggle('danger', !!danger);
+  st.ui.confirmSecondary.textContent = secondaryText || '';
+  st.ui.confirmSecondary.classList.toggle('hidden', !secondaryText);
+  st.ui.confirmSecondary.classList.toggle('danger', !!secondaryDanger);
   st.ui.confirmCancel.textContent = cancelText;
   st.ui.confirmMask.classList.remove('hidden');
   st.ui.confirmOk.focus();
