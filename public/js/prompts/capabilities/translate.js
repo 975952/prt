@@ -97,7 +97,7 @@ export function translateMessages(input = {}) {
  */
 export const translateScreenshot = definePrompt({
   id: 'translate.screenshot',
-  version: '1.1.0',
+  version: '1.1.1',
   kind: 'qa',
   identity: '你是一位严谨的学术论文翻译专家',
   system: [
@@ -105,7 +105,7 @@ export const translateScreenshot = definePrompt({
     { id: 'blank', text: '', raw: true },
     { id: 'requirements-heading', text: '要求：' },
     { id: 'visible-only', text: '翻译截图范围内可辨认的文字（正文、标题、图注、表头、坐标轴、图例、标签等），按实际阅读顺序组织；不补入画面之外的内容，截图边缘的半句保持为片段。' },
-    { id: 'unclear', fn: (ctx) => `看不清或无法辨认的文字在原位置用「${ctx.targetLang === 'English' ? '[illegible]' : '[文字无法辨认]'}」明确占位，不用省略号代替，不猜造字词或数字；表格中无法辨认的单元格也保留位置。无法可靠还原的行列关系应明确标出，不能伪装成准确表格。` },
+    { id: 'unclear', fn: (ctx) => `看不清或无法辨认的文字在原位置用「${({ English: '[illegible]', Deutsch: '[unleserlich]', Filipino: '[hindi mabasa]' })[ctx.targetLang] || '[文字无法辨认]'}」明确占位，不用省略号代替，不猜造字词或数字；表格中无法辨认的单元格也保留位置。无法可靠还原的行列关系应明确标出，不能伪装成准确表格。` },
     { id: 'no-interpretation', text: '只翻译图表、公式中的文字并保留原有结构；不自动附加图表说明、意义分析、结论或公式讲解。只有公式时忠实转写可辨认的原公式；没有可辨认文字或公式时简短说明无法辨认，不推测图意。' },
     ...commonRules(),
   ],

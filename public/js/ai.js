@@ -1,4 +1,5 @@
 import { t as tr, responseLanguageRule, localizedError } from './i18n.js';
+import { isSupportedLocale } from './languages.js';
 import { windowStorage as localStorage } from './window-storage.js';
 import { resolveReadingRequest, historyMessages, stripPageLabels } from './reading-context.js';
 import { nowContext, buildProfileBlock } from './profile.js';
@@ -118,7 +119,7 @@ export async function streamChat(opts) {
   // Read shared preferences on every request, including tool follow-ups. Keep
   // task-specific rules in their original system message and never mutate callers.
   const profilePrompt = useAgentProfile ? buildAgentProfilePrompt() : '';
-  const languageRule = responseLanguageRule(['en', 'zh-CN'].includes(outputLanguage) ? outputLanguage : undefined);
+  const languageRule = responseLanguageRule(isSupportedLocale(outputLanguage) ? outputLanguage : undefined);
   let hasSystem = false;
   const messages = originalMessages.map((message) => {
     if (message.role !== 'system') return message;

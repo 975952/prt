@@ -1,9 +1,8 @@
 /* Runs before styles/modules: no workspace is painted until boot completes. */
 (() => {
   const root = document.documentElement;
-  let english = true, finished = false, failed = false;
+  let finished = false, failed = false;
   try {
-    english = localStorage.getItem('reader.locale') !== 'zh-CN';
     const id = window.__PRT_WINDOW_ID || new URL(location.href).searchParams.get('readerWindow') || 'main';
     const key = id === 'main' ? 'reader.ui' : `reader.window.${id}.reader.ui`;
     const style = JSON.parse(localStorage.getItem(key) || '{}').style || {};
@@ -30,9 +29,8 @@
     const message = document.getElementById('startupMessage');
     const retry = document.getElementById('startupRetry');
     if (!message || !retry) return;
-    message.textContent = failed ? (english ? 'Could not finish opening.' : '暂时未能完成加载')
-      : (english ? 'Opening…' : '正在打开…');
-    retry.textContent = english ? 'Retry' : '重试';
+    message.textContent = window.__prtStartupText(failed ? 'failed' : 'opening');
+    retry.textContent = window.__prtStartupText('retry');
     retry.hidden = !failed;
     retry.onclick = () => location.reload();
   };

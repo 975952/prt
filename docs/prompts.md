@@ -53,7 +53,7 @@ Library 的 AI 分类使用 `organizer.group` 先按文件名一次生成单层�
 | `teach.walk` | 2.2.0 |
 | `teach.walk.continue` | 2.2.0 |
 | `teach.walk.reteach` | 2.2.0 |
-| `translate.screenshot` | 1.1.0 |
+| `translate.screenshot` | 1.1.1 |
 | `translate.selection` | 2.1.0 |
 
 分类优先保留已合理放置的文件，以 keep 编号列表明确返回且不补读第一页；只有待整理项产生新单层目标。全部编号在 groups、keep、unknown 中恰好出现一次。确认只移动变更项，清理仅限实际移出文件的旧空目录，不清理其他空目录。

@@ -26,6 +26,10 @@ try {
   let ready = false;
   for (let i=0; i<150&&!ready; i++) { try { ready=(await fetch(`${base}/api/health`)).ok; } catch {} if(!ready)await wait(100); }
   assert.ok(ready, 'isolated service starts');
+  for (const asset of ['js/i18n.js', 'js/languages.js', 'js/locales/de.js', 'js/locales/fil.js']) {
+    assert.equal(await fetch(`${base}/${asset}`).then(response => response.text()),
+      fs.readFileSync(path.join(ROOT, 'public', asset), 'utf8'), `current embedded asset: ${asset}`);
+  }
   const configured = await fetch(`${base}/api/config`, { method:'POST', headers:{'Content-Type':'application/json'},
     body:JSON.stringify({baseURL:'http://127.0.0.1:1/v1',model:'i18n-test-only',apiKey:'i18n-fixture-key'}) });
   assert.ok(configured.ok, 'isolated mock model configured');
@@ -55,7 +59,9 @@ try {
   await page.waitForFunction(() => window.__viewer?.numPages >= 2 && window.__state?.viewerDocId === window.__state.doc?.docId);
   assert.equal(await page.evaluate(() => document.documentElement.lang), 'en', 'fresh profile starts in English');
   assert.equal(await page.evaluate(() => localStorage.getItem('reader.locale')), null, 'fresh profile has no saved locale override');
-  await page.click('#settingsBtn'); await page.click('#settingsNavLanguage');
+  await page.waitForSelector('#agentWelcomeSkip', { visible: true });
+  await page.click('#agentWelcomeSkip');
+  await page.click('#settingsBtn'); await page.locator('#settingsNavLanguage').click();
   await page.select('#uiLanguage', 'zh-CN');
   await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#applyLanguage')]);
   await page.waitForFunction(() => window.__viewer?.numPages >= 2 && document.documentElement.lang === 'zh-CN'
@@ -77,7 +83,7 @@ try {
       targetLang:document.querySelector('#translateTargetLang').value };
   });
   await page.type('#chatInput', '设置 新会话 draft to keep');
-  await page.click('#settingsBtn'); await page.click('#settingsNavLanguage');
+  await page.click('#settingsBtn'); await page.locator('#settingsNavLanguage').click();
   assert.equal(await page.$eval('#uiLanguage', n=>n.value), 'zh-CN');
   await page.select('#uiLanguage', 'en');
   await page.evaluate(() => { document.querySelector('#cfgLongTermMemory').value = 'unsaved memory'; });
@@ -144,8 +150,53 @@ try {
   assert.equal(await second.$eval('#settingsBtn',n=>n.title),'Settings','new window inherits global preference');
   console.log('Second window ready');
   await page.bringToFront();
-  await page.click('#settingsBtn'); await page.click('#settingsNavLanguage');
+  await page.click('#settingsBtn'); await page.locator('#settingsNavLanguage').click();
   console.log('Changing answer language');
+  for (const [id, label, language, target] of [
+    ['de', 'Einstellungen', 'German', 'Deutsch'], ['fil', 'Mga setting', 'Filipino', 'Filipino'],
+  ]) {
+    await page.select('#answerLanguage', 'auto');
+    await page.select('#translateTargetLang', target);
+    await page.select('#uiLanguage', id);
+    await Promise.all([page.waitForNavigation({ waitUntil: 'domcontentloaded' }), page.click('#applyLanguage')]);
+    await page.waitForFunction(id => document.documentElement.lang === id && window.__ctx?.activeSession
+      && window.__state.viewerDocId === window.__state.doc?.docId
+      && document.querySelector('.settings-box').dataset.settingsPane === 'language', {}, id);
+    assert.equal(await page.$eval('#settingsBtn', node => node.title), label);
+    assert.equal(await page.$eval('#chatInput', node => node.value), '设置 新会话 draft to keep');
+    assert.equal(await page.evaluate(() => __ctx.activeSession), prior.sid);
+    assert.equal(await page.$eval('#translateTargetLang', node => node.value), target);
+    assert.ok(await page.$eval('#aiArea', node => node.textContent.includes('原文内容不应改变。')));
+    for (const pane of ['Language', 'Model', 'Appearance', 'Behavior', 'Session', 'Memory']) {
+      await page.click(`#settingsNav${pane}`);
+      assert.deepEqual((await scan()).filter(text => !allow.has(text)), [], `${id} ${pane} translated`);
+      assert.ok(await page.$eval('.settings-panes', node => node.scrollWidth <= node.clientWidth + 1), `${id} ${pane} fits`);
+    }
+    await page.click('#settingsNavLanguage');
+    await page.screenshot({ path: path.join(scratch, `${id}-language.png`) });
+    const cardPrompt = await page.evaluate(async () => (await import('/js/agent-card.js')).cardGenerationMessages([], { name: 'Test' }));
+    assert.ok(cardPrompt[0].content.includes(`Character card language: ${language}`));
+    assert.ok(cardPrompt.at(-1).content.includes(`in ${language}`));
+    await page.evaluate(async () => {
+      await (await import('/js/ai.js')).streamChat({ messages: [{ role: 'user', content: 'LANGUAGE_TEST' }], stream: true });
+    });
+    assert.ok(modelRequests.at(-1).messages.some(message => message.content.includes(`Response language: ${language}`)));
+    await page.click('#closeSettings');
+    await page.click('.aibar-btn[data-block="translate"]');
+    await page.$eval('#chatInput', (node, value) => { node.value = value; node.dispatchEvent(new Event('input', { bubbles: true })); }, `TRANSLATION_${id}`);
+    await page.click('#sendBtn');
+    await page.waitForFunction(text => __state.sessionEntries.some(row => row.retry?.text === text && row.status === 'complete'), {}, `TRANSLATION_${id}`);
+    assert.ok(modelRequests.some(request => request.messages.some(message => typeof message.content === 'string' && message.content.includes(`翻译成${target}`))), `${id} target reaches request`);
+    await page.evaluate(async () => { await __ctx.flushComposerDrafts(); await __ctx.saveSessionNow(); });
+    await page.reload({ waitUntil: 'domcontentloaded' });
+    await page.waitForFunction(text => window.__state?.sessionEntries.some(row => row.retry?.text === text && row.status === 'complete'), {}, `TRANSLATION_${id}`);
+    assert.equal(await page.evaluate(text => __state.sessionEntries.find(row => row.retry?.text === text).retry.targetLang, `TRANSLATION_${id}`), target, 'saved translation keeps target after reload');
+    assert.equal(await page.$eval('#translationCardLanguage', node => node.value), target, 'floating card supports the target');
+    await page.click('.aibar-btn[data-block="chat"]');
+    assert.equal(await page.$eval('#chatInput', node => node.value), '设置 新会话 draft to keep');
+    await page.click('#settingsBtn'); await page.locator('#settingsNavLanguage').click();
+    console.log(`Verified ${language}: settings, drafts, character card, answer rule, translation request and restored target`);
+  }
   await page.select('#answerLanguage','zh-CN');
   await second.waitForFunction(()=>document.querySelector('#answerLanguage').value==='zh-CN', { polling:100 });
   console.log('Answer preference synchronized');

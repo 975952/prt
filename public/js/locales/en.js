@@ -924,3 +924,10 @@ export const enSingular = {
   '{0} 篇含未能核实的内容': '{0} paper contains unverified content',
 
 };
+
+Object.assign(en, {
+  '语言 / Language': '语言 / Language',
+  '在书架里找到了，点击论文卡片即可打开。': 'Found in your library. Click a paper card to open it.',
+  '找到了这些论文来源。': 'Here are the matching paper sources.',
+  '这次的查找结果如下。': 'Here is the result of this search.',
+});

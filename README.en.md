@@ -41,7 +41,7 @@ When a paper or slide is hard to follow, you often copy text or take a screensho
 | **Paper and reference lookup** | Find local papers by title, research topic, or a description; search online, browse references, and manually import online results that have an available PDF link |
 | **Notes and conversations** | Highlight, take notes, save translations per document, and resume the same conversation from the reader or Alina |
 | **A personal AI assistant** | Chat with Alina outside the reader, use learning memory to adapt explanations, and optionally customize the assistant's name, personality, and communication style |
-| **Reading comfort** | Continuous reading, two-page Book view, and single-page landscape slides; Glass, Rice paper, and Dark themes, Chinese/English UI, and separate answer and translation languages |
+| **Reading comfort** | Continuous reading, two-page Book view, and single-page landscape slides; Glass, Rice paper, and Dark themes; Chinese, English, Filipino and German UI, with separate answer and translation languages |
 
 PPT/PPTX import requires **Microsoft PowerPoint installed locally on Windows** to convert slides to PDF for reading; it does not provide native slide editing. AI features use your configured model service. Figures, screenshots, and scanned-page questions require a vision-capable model.
 
@@ -66,7 +66,7 @@ Browse **All papers, Recent, Unread, or folders** from the sidebar. Search by fi
 1. Download **prt-setup.exe** from [Releases](https://github.com/975952/prt/releases/latest) and install it for your Windows account. Administrator privileges are not required.
 2. Open **prt** from the Start menu or desktop shortcut and import PDF or PowerPoint files, or drag in an entire folder. Reading, search, and notes work without an AI service.
 3. For AI features, enter an OpenAI-compatible service URL, model name, and API key in Settings. Image questions require a vision-capable model.
-4. The interface starts in **English**. Use **Settings → Language / 语言** to switch between English and Simplified Chinese. The answer language and translation target can be set separately.
+4. The interface starts in **English**. Use **Settings → Language / 语言** to choose English, Simplified Chinese, Filipino or Deutsch (German). The answer language and translation target can be set separately.
 
 Windows 10/11 x64 and [WebView2 Runtime](https://developer.microsoft.com/microsoft-edge/webview2/) are required; the installer checks for the runtime. Node.js is not needed. For an app that runs without installation, download **prt.exe** into a writable folder. You supply your own model service; provider charges may apply.
 

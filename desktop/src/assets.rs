@@ -31,6 +31,9 @@ mod tests {
         assert!(contains("js/glass-material.js"));
         assert!(contains("js/i18n.js"));
         assert!(contains("js/locales/en.js"));
+        assert!(contains("js/locales/de.js"));
+        assert!(contains("js/locales/fil.js"));
+        assert!(contains("js/languages.js"));
         assert!(contains("vendor/pdf.min.mjs"));
         assert!(count() > 100);
     }

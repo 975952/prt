@@ -20,6 +20,24 @@
   #startupWindowBar button:hover { background: color-mix(in srgb, currentColor 12%, transparent); }
   #startupWindowBar button[data-startup-control="close"]:hover { background: #c42b1c; color: #fff; }
 </style>
+<script>
+  // Keep startup and recovery controls usable even if the language modules fail.
+  window.__prtStartupText = key => {
+    const messages = {
+      'zh-CN': { opening: '正在打开…', failed: '暂时未能完成加载', retry: '重试', close: '关闭', minimize: '最小化' },
+      en: { opening: 'Opening…', failed: 'Could not finish opening.', retry: 'Retry', close: 'Close', minimize: 'Minimize' },
+      fil: { opening: 'Binubuksan…', failed: 'Hindi matapos ang pagbukas.', retry: 'Subukan muli', close: 'Isara', minimize: 'I-minimize' },
+      de: { opening: 'Öffnen…', failed: 'Öffnen konnte nicht abgeschlossen werden.', retry: 'Erneut versuchen', close: 'Schließen', minimize: 'Minimieren' },
+    };
+    let language = 'en';
+    try {
+      const saved = localStorage.getItem('reader.locale');
+      if (Object.hasOwn(messages, saved)) language = saved;
+    } catch {}
+    document.documentElement.lang = language;
+    return messages[language][key];
+  };
+</script>
 <script src="/js/startup.js"></script>
 <script>
   // A missing bootstrap asset must still leave a usable retry and allow a
@@ -34,11 +52,9 @@
       fail() {
         if (!document.documentElement.hasAttribute('data-startup')) return;
         document.documentElement.dataset.startup = 'error';
-        let english = true;
-        try { english = localStorage.getItem('reader.locale') !== 'zh-CN'; } catch {}
-        document.getElementById('startupMessage').textContent = english ? 'Could not finish opening.' : '暂时未能完成加载';
+        document.getElementById('startupMessage').textContent = window.__prtStartupText('failed');
         const retry = document.getElementById('startupRetry');
-        retry.textContent = english ? 'Retry' : '重试'; retry.hidden = false; retry.onclick = () => location.reload();
+        retry.textContent = window.__prtStartupText('retry'); retry.hidden = false; retry.onclick = () => location.reload();
       },
     };
     document.addEventListener('DOMContentLoaded', () => window.__prtStartup.fail(), { once: true });
@@ -56,11 +72,9 @@
       const bar = document.getElementById('startupWindowBar');
       if (!bar) return;
       bar.hidden = false;
-      let english = true;
-      try { english = localStorage.getItem('reader.locale') !== 'zh-CN'; } catch {}
       for (const button of bar.querySelectorAll('[data-startup-control]')) {
         const type = button.dataset.startupControl;
-        const label = type === 'close' ? (english ? 'Close' : '关闭') : (english ? 'Minimize' : '最小化');
+        const label = window.__prtStartupText(type);
         button.title = label; button.setAttribute('aria-label', label);
         button.onclick = () => post(type);
       }
@@ -349,6 +363,8 @@
         <select id="translateTargetLang" class="translate-target" aria-label="翻译目标语言">
           <option value="中文">中文</option>
           <option value="English">English</option>
+          <option value="Filipino">Filipino</option>
+          <option value="Deutsch">Deutsch</option>
         </select>
         <svg class="translate-target-chevron" viewBox="0 0 16 16" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m4 6 4 4 4-4"/></svg>
       </label>
@@ -544,10 +560,10 @@
         </section>
         <section class="settings-pane hidden" id="settingsPaneLanguage" data-pane="language" role="tabpanel" aria-labelledby="settingsNavLanguage">
           <div class="settings-pane-title">语言 / Language</div>
-          <label class="field"><span>界面语言</span><select id="uiLanguage"><option value="zh-CN">简体中文</option><option value="en">English</option></select></label>
+          <label class="field"><span>界面语言</span><select id="uiLanguage"><option value="zh-CN">简体中文</option><option value="en">English</option><option value="fil">Filipino</option><option value="de">Deutsch</option></select></label>
           <button type="button" class="model-profile-button" id="applyLanguage">应用语言</button>
           <div class="modal-note">保存阅读位置与草稿后刷新界面。</div>
-          <label class="field"><span>回答语言</span><select id="answerLanguage"><option value="auto">跟随界面</option><option value="zh-CN">简体中文</option><option value="en">English</option></select></label>
+          <label class="field"><span>回答语言</span><select id="answerLanguage"><option value="auto">跟随界面</option><option value="zh-CN">简体中文</option><option value="en">English</option><option value="fil">Filipino</option><option value="de">Deutsch</option></select></label>
         </section>
         <section class="settings-pane" id="settingsPaneModel" data-pane="model" role="tabpanel" aria-labelledby="settingsNavModel">
           <div class="settings-pane-title">模型连接</div>

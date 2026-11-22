@@ -2,6 +2,7 @@ import { el, escapeHtml } from './util.js';
 import { iconEl } from './icons.js';
 import { translationGeometry } from './translation-alignment.js';
 import { t as tr } from './i18n.js';
+import { LANGUAGES, translationTarget } from './languages.js';
 
 const ORIGINAL_OPEN_KEY = 'reader.translationOriginalOpen.v1';
 export const TRANSLATION_ORIGINAL_OPEN_EVENT = 'prt:translation-original-open';
@@ -49,7 +50,7 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
   });
   head.insertBefore(historyButton, close);
   const language = el('select', { id: 'translationCardLanguage', title: tr('翻译目标语言'), 'aria-label': tr('翻译目标语言') },
-    el('option', { value: '中文', text: tr('中文') }), el('option', { value: 'English', text: 'English' }));
+    ...LANGUAGES.map(({ target }) => el('option', { value: target, text: tr(target) })));
   language.addEventListener('change', () => void perform(onTargetLanguageChange, language.value));
   const capture = button('translationCardCapture', tr('截图翻译'), 'screenshot', () => perform(onCapture));
   language.hidden = !onTargetLanguageChange; capture.hidden = !onCapture;
@@ -307,7 +308,7 @@ export function createTranslationCard({ getRecords = () => [], beforeSelect,
     syncDraft();
     const list = records(), record = current();
     const targetLanguage = getTargetLanguage();
-    language.value = targetLanguage === 'English' ? 'English' : '中文';
+    language.value = translationTarget(targetLanguage, '中文');
     language.disabled = busy; capture.disabled = busy;
     if (record?.id === historySelectionId && String(record.text || '') !== historySelectionText) {
       historySelectionText = String(record.text || '');

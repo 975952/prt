@@ -1,4 +1,5 @@
-import { t as tr, locale, localizeStaticDocument, localizedError, LOCALE_KEY, RESPONSE_LANGUAGE_KEY, storedLocale, responseLanguage } from './i18n.js';
+import { t as tr, locale, localizeStaticDocument, localizedError, LOCALE_KEY, RESPONSE_LANGUAGE_KEY, storedLocale, responseLanguage, translateForLocale } from './i18n.js';
+import { isSupportedLocale, languageInfo, translationTarget } from './languages.js';
 import { windowStorage as localStorage, storageKey, windowId, startWindows, finishWindowBoot, windowReady, openReaderWindow, canWrite, allowEdit, isWindowClosed, releaseDocument, notifySessionSaved } from './windows.js';
 import { $, $$, el, appendAll, toast, toastAction, cleanText, renderMarkdown, escapeHtml, debounce, throttle, clamp, fmtSize } from './util.js';
 import { iconEl, iconHTML, hasIcon } from './icons.js';
@@ -7079,16 +7080,14 @@ function changeDraftAttachments(owner, change) {
   }
 }
 
-/** 「译成」选择的目标语言（中文 / English）。划词、文本、截图翻译共用这一份选择，默认中文。 */
+/** 划词、文本、截图翻译共用这一份目标语言；旧记录默认中文。 */
 function selectedTranslateTarget() {
   const v = $('#translateTargetLang')?.value;
-  return v === 'English' ? 'English' : '中文';
+  return translationTarget(v, '中文');
 }
 /** 显式传了就用显式的（重试/恢复要用当时的目标语言），否则跟随当前「译成」选择。 */
 function resolveTranslateTarget(pref) {
-  if (pref === 'English') return 'English';
-  if (pref === '中文') return '中文';
-  return selectedTranslateTarget();
+  return translationTarget(pref, selectedTranslateTarget());
 }
 function syncComposerMode(id = rightPanelInCol(1)) {
   const translating = id === 'translate';
@@ -7112,8 +7111,7 @@ function syncComposerMode(id = rightPanelInCol(1)) {
   if (target && !target.dataset.ready) {
     try {
       const saved = localStorage.getItem('reader.translate.targetLang');
-      if (saved === '中文' || saved === 'English') target.value = saved;
-      else target.value = locale === 'en' ? 'English' : '中文';
+      target.value = translationTarget(saved, languageInfo(locale).target);
       if (!saved) localStorage.setItem('reader.translate.targetLang', target.value);
     } catch { /* 忽略 */ }
     target.addEventListener('change', () => { try { localStorage.setItem('reader.translate.targetLang', target.value); } catch { /* 忽略 */ } });
@@ -7574,7 +7572,7 @@ function serialiseRetryPayload(raw) {
   if (kind === 'translate' || kind === 'explain') {
     return { kind, docId: String(raw.docId || '').slice(0, 240), text: String(raw.text || '').slice(0, 6000), page: raw.page || null,
       ...(kind === 'translate' ? { ...translationGeometry(raw), ...(raw.segments?.length ? { segments: snapshotTranslationSegments(raw.segments) } : {}) } : {}),
-      targetLang: raw.targetLang === 'English' ? 'English' : (raw.targetLang === '中文' ? '中文' : ''),
+      targetLang: translationTarget(raw.targetLang),
       source: raw.source === 'right' ? 'right' : '' };
   }
   if (kind === 'translate-shot') {
@@ -7582,7 +7580,7 @@ function serialiseRetryPayload(raw) {
     return {
       kind, docId: String(raw.docId || '').slice(0, 240), sid: String(raw.sid || '').slice(0, 40),
       page: raw.page || null, label: String(raw.label || tr("截图")).slice(0, 120),
-      targetLang: raw.targetLang === 'English' ? 'English' : (raw.targetLang === '中文' ? '中文' : ''),
+      targetLang: translationTarget(raw.targetLang),
       refId: validAttachmentId(raw.refId) ? raw.refId : '',
     };
   }
@@ -7591,7 +7589,7 @@ function serialiseRetryPayload(raw) {
     return {
       kind, docId: String(raw.docId || '').slice(0, 240),
       text: String(raw.text || '').slice(0, 20000),
-      targetLang: raw.targetLang === 'English' ? 'English' : '中文',
+      targetLang: translationTarget(raw.targetLang, '中文'),
       segments: snapshotTranslationSegments(raw.segments),
     };
   }
@@ -7601,7 +7599,7 @@ function serialiseRetryPayload(raw) {
   if (kind === 'teaching') {
     return {
       kind, docId: String(raw.docId || '').slice(0, 240), opId: String(raw.opId || '').slice(0, 120),
-      responseLanguage: raw.responseLanguage === 'en' ? 'en' : 'zh-CN',
+      responseLanguage: isSupportedLocale(raw.responseLanguage) ? raw.responseLanguage : 'zh-CN',
       block: String(raw.block || 'chat').slice(0, 40),
       ask: String(raw.ask || '').slice(0, 500),
       extraUser: String(raw.extraUser || '').slice(0, 4000),
@@ -8575,7 +8573,7 @@ function restoreRetryCallback(row, entry, priorUser) {
     }
     if (payload.kind === 'translate-text') {
       // 文本输入翻译：原文存在 payload 里，直接原样再翻一次
-      doTranslateText({ text: payload.text || '', targetLang: payload.targetLang === 'English' ? 'English' : '中文',
+      doTranslateText({ text: payload.text || '', targetLang: translationTarget(payload.targetLang, '中文'),
         segments: payload.segments || [], force: true, inCard: !$('#translationCard').classList.contains('hidden') });
       return;
     }
@@ -12673,7 +12671,7 @@ function translateShotRetryPayload({ docId, sid, page, label, refId = '', target
     sid: String(sid || '').slice(0, 40),
     page: page || null,
     label: String(label || tr("截图")).slice(0, 120),
-    targetLang: targetLang === 'English' ? 'English' : (targetLang === '中文' ? '中文' : ''),
+    targetLang: translationTarget(targetLang),
     refId: validAttachmentId(refId) ? refId : '',
   };
 }
@@ -13728,11 +13726,12 @@ async function fallbackPaperDiscovery(pending, signal) {
 function paperNavigationReply(results, question) {
   const local = results.reduce((sum, result) => sum + result.local.matches.length, 0);
   const online = results.reduce((sum, result) => sum + result.online.results.length, 0);
-  const english = /(?:用|以)\s*中文|in\s+Chinese/i.test(question) ? false
-    : /(?:用|以)\s*英文|in\s+English/i.test(question) ? true : responseLanguage() === 'en';
-  if (local) return english ? 'Found in your library. Click a paper card to open it.' : '在书架里找到了，点击论文卡片即可打开。';
-  if (online) return english ? 'Here are the matching paper sources.' : '找到了这些论文来源。';
-  return english ? 'Here is the result of this search.' : '这次的查找结果如下。';
+  const language = /(?:用|以)\s*中文|in\s+Chinese/i.test(question) ? 'zh-CN'
+    : /(?:用|以)\s*英文|in\s+English/i.test(question) ? 'en'
+      : /(?:用|以)\s*德语|in\s+German|auf\s+Deutsch/i.test(question) ? 'de'
+        : /(?:用|以)\s*菲律宾语|(?:in|sa)\s+(?:Filipino|Tagalog)/i.test(question) ? 'fil' : responseLanguage();
+  return translateForLocale(language, local ? '在书架里找到了，点击论文卡片即可打开。'
+    : online ? '找到了这些论文来源。' : '这次的查找结果如下。');
 }
 
 /** 联网搜索（服务端带 5 分钟缓存，多引擎兜底） */
@@ -15601,7 +15600,7 @@ function closeSettings() {
 }
 
 async function changeInterfaceLanguage(next) {
-  if (!['zh-CN', 'en'].includes(next) || next === locale) return;
+  if (!isSupportedLocale(next) || next === locale) return;
   if (state.busy || settingsOperation || remoteSessionApplying) {
     toast(tr('请先停止生成，再切换界面语言。'), 'err');
     return;
